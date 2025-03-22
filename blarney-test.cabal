@@ -1,0 +1,51 @@
+cabal-version: 2.4
+name: blarney-test
+version: 0.1.0.0
+
+flag enable-namer-plugin
+  description: Enable namer plugin
+  manual: True
+  default: False
+
+executable blarney-test
+  main-is: Main.hs
+  other-modules:
+    Ehr,
+    TileLink,
+    Decode,
+    AXI4,
+    Utils,
+    Alu,
+    Control
+  hs-source-dirs: src
+  build-depends:
+      base
+    , blarney
+    , containers
+    , array
+  default-language: GHC2021
+  default-extensions:
+    BlockArguments
+    DatatypeContexts
+    DataKinds
+    DeriveAnyClass
+    DerivingStrategies
+    DuplicateRecordFields
+    MultiWayIf
+    NoImplicitPrelude
+    NoStarIsType
+    OverloadedRecordDot
+    OverloadedLabels
+    PartialTypeSignatures
+    RebindableSyntax
+    RecursiveDo
+    TypeFamilies
+  ghc-options:
+    -fno-cse
+    -fno-full-laziness
+    -Wno-partial-type-signatures
+  if flag(enable-namer-plugin)
+    build-depends:
+      blarney-plugins-namer
+    ghc-options:
+      -fplugin BlarneyPlugins.Namer
