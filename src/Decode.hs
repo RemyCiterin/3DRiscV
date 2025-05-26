@@ -305,16 +305,17 @@ decodeRtype instr =
     (f7 === 0b0000000 .&&. f3 === 0b101, some (enum SRL)),
     (f7 === 0b0100000 .&&. f3 === 0b101, some (enum SRA)),
     (f7 === 0b0000000 .&&. f3 === 0b110, some (enum OR)),
-    (f7 === 0b0000000 .&&. f3 === 0b111, some (enum AND)),
+    (f7 === 0b0000000 .&&. f3 === 0b111, some (enum AND))
 
-    (f7 === 0b0000001 .&&. f3 === 0b000, some (enum MUL)),
-    (f7 === 0b0000001 .&&. f3 === 0b001, some (enum MULH)),
-    (f7 === 0b0000001 .&&. f3 === 0b010, some (enum MULHSU)),
-    (f7 === 0b0000001 .&&. f3 === 0b011, some (enum MULHU)),
-    (f7 === 0b0000001 .&&. f3 === 0b100, some (enum DIV)),
-    (f7 === 0b0000001 .&&. f3 === 0b101, some (enum DIVU)),
-    (f7 === 0b0000001 .&&. f3 === 0b110, some (enum REM)),
-    (f7 === 0b0000001 .&&. f3 === 0b111, some (enum REMU))
+    -- M extension is not supported now
+    --(f7 === 0b0000001 .&&. f3 === 0b000, some (enum MUL)),
+    --(f7 === 0b0000001 .&&. f3 === 0b001, some (enum MULH)),
+    --(f7 === 0b0000001 .&&. f3 === 0b010, some (enum MULHSU)),
+    --(f7 === 0b0000001 .&&. f3 === 0b011, some (enum MULHU)),
+    --(f7 === 0b0000001 .&&. f3 === 0b100, some (enum DIV)),
+    --(f7 === 0b0000001 .&&. f3 === 0b101, some (enum DIVU)),
+    --(f7 === 0b0000001 .&&. f3 === 0b110, some (enum REM)),
+    --(f7 === 0b0000001 .&&. f3 === 0b111, some (enum REMU))
   ]
   where
     f7 = function7 instr

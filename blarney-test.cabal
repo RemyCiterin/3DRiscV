@@ -1,4 +1,4 @@
-cabal-version: 2.4
+cabal-version: 3.0
 name: blarney-test
 version: 0.1.0.0
 
@@ -16,11 +16,17 @@ executable blarney-test
     AXI4,
     Utils,
     Alu,
-    Control
+    Control,
+    Arbiter,
+    Cache,
+    CPU,
+    Instr,
+    Uart
   hs-source-dirs: src
   build-depends:
       base
     , blarney
+    , blarney-five
     , containers
     , array
   default-language: GHC2021
