@@ -27,9 +27,9 @@ makeRxUart timePerBit rx = do
 
     if (busy.val) then do
       if (valid.val === ones) then do
-        --when (at @0 buf.val === 0 .&&. at @9 buf.val === 1) do
-        bufCopy <== slice @8 @1 buf.val
-        validCopy <== true
+        when (at @0 buf.val === 0 .&&. at @9 buf.val === 1) do
+          bufCopy <== slice @8 @1 buf.val
+          validCopy <== true
 
         valid <== 0
         zeroCount <== 0
