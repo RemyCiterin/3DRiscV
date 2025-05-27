@@ -8,7 +8,7 @@ import Blarney.Queue
 
 makeRxUart :: Integer -> Bit 1 -> Module (Stream (Bit 8))
 makeRxUart timePerBit rx = do
-  -- number of positive measures received
+  -- number of positive measures
   nbPositive :: Reg (Bit 32) <- makeReg 0
 
   count :: Reg (Bit 32) <- makeReg 0
@@ -24,7 +24,6 @@ makeRxUart timePerBit rx = do
   zeroCount :: Reg (Bit 32) <- makeReg 0
 
   always do
-
     if (busy.val) then do
       if (valid.val === ones) then do
         when (at @0 buf.val === 0 .&&. at @9 buf.val === 1) do
@@ -63,7 +62,6 @@ makeRxUart timePerBit rx = do
         valid <== 0
       else do
         zeroCount <== rx === 0 ? (zeroCount.val+1, 0)
-
 
   return Source {
     consume = do validCopy <== false,

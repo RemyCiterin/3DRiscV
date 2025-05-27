@@ -16,6 +16,7 @@ import CPU
 import qualified Instr
 
 import qualified Uart
+import qualified Cache
 
 type Byte i = Bit (8*i)
 
@@ -29,6 +30,8 @@ top = do
   ram :: RAM (Bit 32) (Bit 32) <- makeDualRAMForwardInit "Mem.hex"
 
   arbiter :: [ArbiterClient] <- makeFairArbiter 16
+
+  rf :: RegFile (Bit 10) (Bit 10) <- makeRegFile
 
   let instr = decodeInstr ram.out
   let instr2 = Instr.decodeInstr ram.out
@@ -65,10 +68,12 @@ main :: IO ()
 main = do
   args <- getArgs
   if | "--simulate" `elem` args -> do
-        simulate top
-        simulate CPU.makeCPU
-        simulate Uart.testUart2
+        --simulate top
+        --simulate CPU.makeCPU
+        --simulate Uart.testUart2
+        simulate Cache.testCache
      | otherwise -> do
+        writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogTop top "Main" "Verilog/"
         writeVerilogTop CPU.makeCPU "CPU" "Verilog/"
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
