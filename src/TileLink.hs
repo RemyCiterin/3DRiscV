@@ -7,36 +7,35 @@ import Blarney.Vector
 
 import Data.Proxy
 
-data TileLinkParamsKind =
-  TileLinkParams
+data TLParamsKind =
+  TLParams
     Nat -- size width (in bits)
     Nat -- addr width (in bits)
-    Nat -- beat width (in bytes)
+    Nat -- lane width (in bytes)
     Nat -- source id
     Nat -- sink id
 
 type family AddrWidth params where
-  AddrWidth (TileLinkParams z a w o i) = a
+  AddrWidth (TLParams z a w o i) = a
 
-type family BeatWidth params where
-  BeatWidth (TileLinkParams z a w o i) = w
+type family LaneWidth params where
+  LaneWidth (TLParams z a w o i) = w
 
 type family SizeWidth params where
-  SizeWidth (TileLinkParams z a w o i) = z
+  SizeWidth (TLParams z a w o i) = z
 
 type family SourceWidth params where
-  SourceWidth (TileLinkParams z a w o i) = o
+  SourceWidth (TLParams z a w o i) = o
 
 type family SinkWidth params where
-  SinkWidth (TileLinkParams z a w o i) = i
+  SinkWidth (TLParams z a w o i) = i
 
-type KnownNatTileLinkParams (p :: TileLinkParamsKind) =
+type KnownNatTLParams (p :: TLParamsKind) =
   ( KnownNat (AddrWidth p)
-  , KnownNat (BeatWidth p)
+  , KnownNat (LaneWidth p)
   , KnownNat (SizeWidth p)
   , KnownNat (SourceWidth p)
   , KnownNat (SinkWidth p))
-
 
 
 newtype AParam = AParam (Bit 3)
@@ -80,6 +79,4 @@ newtype DOpcode = DOpcode (Bit 3)
   deriving stock Generic
   deriving newtype Interface
   deriving anyclass (Cmp, Bits, FShow)
-
-
 

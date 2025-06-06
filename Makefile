@@ -28,3 +28,7 @@ ecppack:
 
 prog:
 	sudo fujprog build/mkTop.bit -t
+
+simulate:
+	iverilog -s top_sim src/SimTop.v Verilog/*.v -o Verilog/SimTop.vvp
+	vvp Verilog/SimTop.vvp

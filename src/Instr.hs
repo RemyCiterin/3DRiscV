@@ -6,6 +6,8 @@ import Blarney
 import Blarney.BitScan
 import Blarney.Option
 
+import Utils
+
 type RegId = Bit 5
 
 fshowRegId :: RegId -> Format
@@ -80,10 +82,13 @@ type MaxMnemonics = 64
 -- | Bit vector indentifying one or more active mnemonics
 type MnemonicVec = Bit MaxMnemonics
 
--- Checking if any of the given mnemonics are active
-infix 8 `is`
-is :: MnemonicVec -> [Mnemonic] -> Bit 1
-is vec ms = orList [unsafeAt (fromEnum m) vec | m <- ms]
+--  -- Checking if any of the given mnemonics are active
+--  infix 8 `is`
+--  is :: MnemonicVec -> [Mnemonic] -> Bit 1
+--  is vec ms = orList [unsafeAt (fromEnum m) vec | m <- ms]
+
+instance HasIs MnemonicVec [Mnemonic] where
+  is vec ms = orList [unsafeAt (fromEnum m) vec | m <- ms]
 
 -- RV32I instruction decode table
 -- ==============================

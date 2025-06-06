@@ -261,7 +261,7 @@ makeCache inputs = do
       tagMem.load index
 
     -- matching stage
-    when (busy.read 0 .&&. inv acquire.val .&&. inv release.val) do
+    when (busy.read 0 .&&. inv acquire.val .&&. inv release.val .&&. outputs.notFull) do
       let key :: Key = slice @31 @12 request.val.addr
       let index :: Index = slice @11 @6 request.val.addr
       let offset :: Offset = slice @5 @2 request.val.addr

@@ -6,7 +6,6 @@ import System.Environment
 import Ehr
 
 import Utils
-import Decode
 
 import Arbiter
 
@@ -19,6 +18,42 @@ import qualified Uart
 import qualified Cache
 
 type Byte i = Bit (8*i)
+
+testRegFile :: Module ()
+testRegFile = do
+  rf :: RegFile (Bit 10) (Bit 32) <- makeRegFile
+
+  r :: Reg (Bit 32) <- makeRegU
+
+  always do
+    rf.update 0 r.val
+    rf.update 1 r.val
+    r <== rf.index 32
+    r <== rf.index 33
+
+  return ()
+
+testRAM :: Module ()
+testRAM = do
+  ram :: RAM (Bit 10) (Bit 32) <- makeDualRAM
+
+  counter :: Reg (Bit 32) <- makeReg 0
+
+  always do
+    when (counter.val === 1) do
+      display "load at counter: " counter.val
+      ram.load 0
+
+    when (counter.val === 2) do
+      display "store at counter: " counter.val
+      ram.store 0 42
+
+    if (counter.val .<=. 10) then do
+      display "counter: " counter.val " out: " ram.out
+    else do
+      finish
+
+    counter <== counter.val + 1
 
 top :: Module ()
 top = do
@@ -33,17 +68,13 @@ top = do
 
   rf :: RegFile (Bit 10) (Bit 10) <- makeRegFile
 
-  let instr = decodeInstr ram.out
+  let instr = Instr.decodeInstr ram.out
   let instr2 = Instr.decodeInstr ram.out
   let pc = (counter.read 0 .<<. (2 :: Bit 5)) + 0x80000000
 
   always do
     when fifo.canDeq do
-      if instr.valid then
-        display "pc: " (formatHex 0 pc) " " (fshowInstr instr.val)
-      else
-        display "pc: " (formatHex 10 $ counter.read 0) " Invalid"
-      display instr2
+      display "pc: " (formatHex 0 pc) " " (fshow instr)
       counter.write 0 (counter.read 0 + 1)
       fifo.deq
 
@@ -71,9 +102,12 @@ main = do
         --simulate top
         --simulate CPU.makeCPU
         --simulate Uart.testUart2
+        simulate testRAM
         simulate Cache.testCache
      | otherwise -> do
         writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogTop top "Main" "Verilog/"
         writeVerilogTop CPU.makeCPU "CPU" "Verilog/"
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
+        writeVerilogTop testRegFile "Rf" "Verilog/"
+        writeVerilogTop testRAM "TestRam" "Verilog/"

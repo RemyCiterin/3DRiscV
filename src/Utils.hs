@@ -18,20 +18,36 @@ import Data.Proxy
 --   TagName name -> u
 -- enum t = tag t 0
 
-class (Enum a) => Represent a where
-  type EnumW a :: Nat
-class (Represent a, KnownNat (EnumW a)) => KnownRepresent a where
-instance (Represent a, KnownNat (EnumW a)) => KnownRepresent a where
+--  class (Enum a) => Represent a n | a -> n where
+--  class (Represent a n, KnownNat n) => KnownRepresent a n where
+--  instance (Represent a n, KnownNat n) => KnownRepresent a n where
+--
+--  class (Represent a n) => RepresentBuild a n where
+--    type EnumW (n :: Nat) :: Nat
+--
+--  instance forall a n. (Represent a n) => RepresentBuild a n where
+--    type EnumW n = n
+--
+--  --type EnumBit n = Bit (EnumW n)
+--
+--  newtype KnownRepresent a n => EnumBit a n = Bit n
+--
+--  enum :: forall t n. (KnownRepresent t n) => t -> Bit n
+--  enum a = constant (toInteger (fromEnum a))
 
-
-type EnumBit a = Bit (EnumW a)
-
--- infix 7 `is`
--- is :: forall t. (KnownRepresent t) => Bit (EnumW t) -> t -> Bit 1
--- is bit value = bit === enum value
-
-enum :: forall t. (KnownRepresent t) => t -> Bit (EnumW t)
+enum :: forall t n. (Enum t, KnownNat n) => t -> Bit n
 enum a = constant (toInteger (fromEnum a))
+
+infix 8 `is`
+class HasIs a b where
+  is :: a -> b -> Bit 1
+
+--instance forall t n. (KnownRepresent t n) => HasIs (Bit n) t where
+--  is bit value = bit === enum value
+
+--infix 7 `is`
+--is :: forall t. (KnownRepresent t) => Bit (EnumW t) -> t -> Bit 1
+--is bit value = bit === enum value
 
 -- like select but with a default value
 selectDefault :: (Bits a) => a -> [(Bit 1, a)] -> a
