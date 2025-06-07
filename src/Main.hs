@@ -16,6 +16,7 @@ import qualified Instr
 
 import qualified Uart
 import qualified Cache
+import qualified Core
 
 type Byte i = Bit (8*i)
 
@@ -102,8 +103,9 @@ main = do
         --simulate top
         --simulate CPU.makeCPU
         --simulate Uart.testUart2
-        simulate testRAM
-        simulate Cache.testCache
+        --simulate testRAM
+        --simulate Cache.testCache
+        simulate Core.makeTestCore
      | otherwise -> do
         writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogTop top "Main" "Verilog/"
@@ -111,3 +113,4 @@ main = do
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
         writeVerilogTop testRegFile "Rf" "Verilog/"
         writeVerilogTop testRAM "TestRam" "Verilog/"
+        writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"

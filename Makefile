@@ -10,7 +10,7 @@ compile:
 	cabal run
 
 test:
-	riscv32-none-elf-objcopy -O ihex ../DOoOM/soft/zig-out/bin/zig-unix.elf Mem.ihex
+	riscv32-none-elf-objcopy -O ihex ../Superscalar/rust/target/riscv32i-unknown-none-elf/release/SuperOS Mem.ihex
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 400000 1 > Mem.hex
 
 yosys:
@@ -29,6 +29,6 @@ ecppack:
 prog:
 	sudo fujprog build/mkTop.bit -t
 
-simulate:
-	iverilog -s top_sim src/SimTop.v Verilog/*.v -o Verilog/SimTop.vvp
-	vvp Verilog/SimTop.vvp
+verilator: compile
+	make -C simulation all
+	./sim

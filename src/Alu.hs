@@ -7,37 +7,16 @@ import Instr
 import Utils
 import Ehr
 
-data AluRequest = AluRequest {
-    -- Decoded instruction
-    instr :: Instr,
-
-    -- First operand
-    rs1 :: Bit 32,
-
-    -- Second operand
-    rs2 :: Bit 32,
-
-    -- Program counter
-    pc  :: Bit 32
-  } deriving(Generic, Bits)
-
-data AluResponse = AluResponse {
-    exception :: Bit 1,
-    cause :: Bit 4,
-    tval :: Bit 32,
-    rd :: Bit 32,
-    pc :: Bit 32
-  }
-
-alu :: AluRequest -> AluResponse
+alu :: ExecInput -> ExecOutput
 alu query =
-  AluResponse {rd, exception, cause, pc= newPc, tval= newPc}
+  ExecOutput {rd, exception, cause, pc= newPc, tval= newPc}
   where
     rs1 = query.rs1
     rs2 = query.rs2
     op2 = query.instr.rs2.valid ? (rs2,imm)
     opcode = query.instr.opcode
     imm = query.instr.imm.val
+    off = query.instr.off
     pc = query.pc
 
     cause = 1
@@ -54,7 +33,7 @@ alu query =
       ]
 
     newPc = selectDefault (pc + 4) [
-        opcode `is` [BEQ,BNE,BLTU,BGEU,BLT,BGE] --> taken ? (pc+imm,pc+4),
+        opcode `is` [BEQ,BNE,BLTU,BGEU,BLT,BGE] --> taken ? (pc+signExtend off,pc+4),
         opcode `is` [JALR] --> (rs1 + imm) .&. inv 1,
         opcode `is` [JAL]  --> pc + imm
       ]

@@ -211,6 +211,12 @@ instance FShow Instr where
         formatCond (imm .>=. zero) (formatDec 0 instr.imm.val) <>
         formatCond (imm .<. zero) (fshow "-" <> formatDec 0 (-instr.imm.val))
 
+      off = toSigned instr.off
+      offHex = fshow "0x" <> formatHex 0 instr.off
+      offDec =
+        formatCond (off .>=. zero) (formatDec 0 instr.off) <>
+        formatCond (off .<. zero) (fshow "-" <> formatDec 0 (-instr.off))
+
       rs1 = fshowRegId instr.rs1.val
       rs2 = fshowRegId instr.rs2.val
       rd  = fshowRegId instr.rd.val
@@ -232,7 +238,7 @@ instance FShow Instr where
         formatCond (instr.accessWidth === 0b10) (fshow "sw")
       formatItype opcode = formatOp opcode <> fshow " " <> rd <> fshow ", " <> rs1 <> fshow ", " <> immDec
       formatRtype opcode = formatOp opcode <> fshow " " <> rd <> fshow ", " <> rs1 <> fshow ", " <> rs2
-      formatBtype opcode = formatOp opcode <> fshow " " <> rs1 <> fshow ", " <> rs2 <> fshow ", " <> immDec
+      formatBtype opcode = formatOp opcode <> fshow " " <> rs1 <> fshow ", " <> rs2 <> fshow ", " <> offDec
       formatJtype opcode = formatOp opcode <> immHex
       formatUtype opcode = formatOp opcode <> fshow " " <> rd <> fshow ", " <> immHex
       formatCSRRW opcode = formatOp opcode <> fshow " " <> rd <> fshow ", " <> rs1 <> fshow ", " <> csr
@@ -240,3 +246,19 @@ instance FShow Instr where
       formatCSRRS opcode = formatOp opcode <> fshow " " <> rd <> fshow ", " <> rs1 <> fshow ", " <> csr
       formatStype = formatStore  <> fshow " " <> rs2 <> fshow ", " <> immDec <> fshow "(" <> rs1 <> fshow ")"
       formatLtype = formatLoad <> fshow " " <> rd <> fshow ", " <> immDec <> fshow "(" <> rs1 <> fshow ")"
+
+
+data ExecInput = ExecInput
+  { instr :: Instr
+  , rs1 :: Bit 32
+  , rs2 :: Bit 32
+  , pc  :: Bit 32}
+  deriving(Bits, Generic, FShow)
+
+data ExecOutput = ExecOutput
+  { exception :: Bit 1
+  , cause :: Bit 4
+  , tval :: Bit 32
+  , rd :: Bit 32
+  , pc :: Bit 32}
+  deriving(Bits, Generic, FShow)

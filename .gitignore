@@ -1,3 +1,5 @@
 dist-newstyle/
 Verilog/
 build/
+simulation/sim
+sim

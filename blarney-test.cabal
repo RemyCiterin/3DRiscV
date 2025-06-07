@@ -15,12 +15,12 @@ executable blarney-test
     AXI4,
     Utils,
     Alu,
-    Control,
     Arbiter,
     Cache,
     CPU,
     Instr,
-    Uart
+    Uart,
+    Core
   hs-source-dirs: src
   build-depends:
       base
