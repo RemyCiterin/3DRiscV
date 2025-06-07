@@ -12,7 +12,7 @@ import Alu
 import Ehr
 
 displayAscii :: Bit 8 -> Action ()
-displayAscii term = display_ $ go term $ 10 : 13 : [33..126]
+displayAscii term = display_ $ go term $ 10 : 13 : [32..126]
   where
     ascii :: [String] = [[toEnum i] | i <- [0..255]]
 
@@ -117,7 +117,7 @@ makeLoadStoreUnit input commit response = do
         ]
 
   always do
-    when (state.val === 0 .&&. opcode `is` [STORE] .&&. outputQ.notFull) do
+    when (state.val === 0 .&&. input.canPeek .&&. opcode `is` [STORE] .&&. outputQ.notFull) do
       outputQ.enq ExecOutput{
         exception= inv aligned,
         pc= req.pc + 4,
@@ -153,7 +153,7 @@ makeLoadStoreUnit input commit response = do
       input.consume
       state <== 0
 
-    when (state.val === 0 .&&. requestQ.notFull .&&. opcode `is` [LOAD]) do
+    when (state.val === 0 .&&. input.canPeek .&&. requestQ.notFull .&&. opcode `is` [LOAD]) do
       requestQ.enq CpuRequest{read= true, addr, mask= dontCare, beat= dontCare}
       state <== 1
 
@@ -175,6 +175,15 @@ makeLoadStoreUnit input commit response = do
       state <== 2
 
     when (state.val === 2 .&&. commit.canPeek) do
+      commit.consume
+      input.consume
+      state <== 0
+
+    when (state.val === 0 .&&. input.canPeek .&&. opcode `is` [FENCE] .&&. outputQ.notFull) do
+      outputQ.enq ExecOutput{pc=req.pc+4, exception=false, cause= dontCare, tval= dontCare, rd= 0}
+      state <== 5
+
+    when (state.val === 5 .&&. commit.canPeek) do
       commit.consume
       input.consume
       state <== 0
@@ -216,7 +225,12 @@ makeCore iresponse dresponse = do
 
   let ready x = (((1 :: Bit 32) .<<. x) .&. scoreboard.read 0) === 0
 
+  cycle :: Reg (Bit 32) <- makeReg 0
+  instret :: Reg (Bit 32) <- makeReg 0
+
   always do
+    cycle <== cycle.val + 1
+
     when (decode.canPeek .&&. window.notFull) do
       let instr :: Instr = decode.peek.instr
       let rs1 :: RegId = instr.rs1.valid ? (instr.rs1.val, 0)
@@ -241,14 +255,12 @@ makeCore iresponse dresponse = do
         decode.consume
         window.enq decode.peek
         when (rd =!= 0) do
-          scoreboard.write 0 (scoreboard.read 0 .|. (1 .<<. rd))
+          scoreboard.write 0 (scoreboard.read 0 .|. ((1 :: Bit 32) .<<. rd))
 
         --display "enter pc: " (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
 
     when (window.canDeq .&&. redirectQ.notFull .&&. commitQ.notFull) do
       let instr :: Instr = window.first.instr
-      let rs1 :: RegId = instr.rs1.valid ? (instr.rs1.val, 0)
-      let rs2 :: RegId = instr.rs2.valid ? (instr.rs2.val, 0)
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
       let rdy = instr.isMemAccess ? (lsu.canPeek, alu.canPeek)
 
@@ -256,7 +268,7 @@ makeCore iresponse dresponse = do
 
       when rdy do
         window.deq
-        scoreboard.write 1 (scoreboard.read 0 .&. inv (1 .<<. rd))
+        scoreboard.write 1 (scoreboard.read 1 .&. inv (1 .<<. rd))
 
         if instr.isMemAccess then do
           commitQ.enq (window.first.epoch === epoch.val)
@@ -265,7 +277,14 @@ makeCore iresponse dresponse = do
           alu.consume
 
         when (window.first.epoch === epoch.val) do
-          --display "retire pc: " (formatHex 8 window.first.pc) " instr: " (fshow instr)
+          when (instr.opcode `is` [FENCE]) do
+            display "fence at: " cycle.val " instret: " instret.val
+
+          instret <== instret.val + 1
+
+          --display
+          --  "[" (formatDec 0 cycle.val) "] retire pc: "
+          --  (formatHex 8 window.first.pc) " instr: " (fshow instr)
 
           when (rd =!= 0) do
             --display "    " (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
@@ -275,6 +294,11 @@ makeCore iresponse dresponse = do
             --display "redirect to pc := 0x" (formatHex 8 resp.pc)
             redirectQ.enq Redirection{pc= resp.pc, epoch= epoch.val+1}
             epoch <== epoch.val + 1
+
+        --when (window.first.epoch =!= epoch.val) do
+        --  display
+        --    "[" (formatDec 0 cycle.val) "] discard pc: "
+        --    (formatHex 8 window.first.pc) " instr: " (fshow instr)
 
   return (irequest, drequest)
 
@@ -287,7 +311,8 @@ makeMem stream = do
   always do
     when (stream.canPeek .&&. responseQ.notFull) do
 
-      let (msb, lsb) = split (slice @31 @2 stream.peek.addr)
+      let (msb, lsb) = split (slice @31 @2 (stream.peek.addr - 0x80000000))
+
       if stream.peek.read then do
         ram.loadBE lsb
         read <== true
