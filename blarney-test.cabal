@@ -20,7 +20,8 @@ executable blarney-test
     CPU,
     Instr,
     Uart,
-    Core
+    Core,
+    Prediction
   hs-source-dirs: src
   build-depends:
       base

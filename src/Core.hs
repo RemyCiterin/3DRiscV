@@ -5,6 +5,7 @@ import Blarney.Queue
 import Blarney.Option
 import Blarney.Stream
 
+import Prediction
 import Cache
 import Utils
 import Instr
@@ -12,7 +13,8 @@ import Alu
 import Ehr
 
 displayAscii :: Bit 8 -> Action ()
-displayAscii term = display_ $ go term $ 10 : 13 : [32..126]
+displayAscii term =
+  display_ $ go term $ 10 : 13 : [32..126]
   where
     ascii :: [String] = [[toEnum i] | i <- [0..255]]
 
@@ -22,15 +24,23 @@ displayAscii term = display_ $ go term $ 10 : 13 : [32..126]
       formatCond (fromInteger i === x) (fshow (ascii!i)) <>
       go x is
 
-type Epoch = Bit 8
+type EpochWidth = 8
+type Epoch = Bit EpochWidth
+
+type RasSize = 4
+type HistSize = 10
 
 data FetchOutput = FetchOutput {
+    bstate :: BPredState HistSize RasSize,
+    prediction :: Bit 32,
     instr :: Bit 32,
     epoch :: Epoch,
     pc :: Bit 32
   } deriving(Bits, Generic)
 
 data DecodeOutput = DecodeOutput {
+    bstate :: BPredState HistSize RasSize,
+    prediction :: Bit 32,
     instr :: Instr,
     epoch :: Epoch,
     pc :: Bit 32
@@ -41,16 +51,22 @@ data Redirection = Redirection {
     pc :: Bit 32
   } deriving(Bits, Generic)
 
+type Training = BPredState HistSize RasSize -> Bit 32 -> Bit 32 -> Option Instr -> Action ()
+
 makeFetch ::
   Stream CpuResponse ->
   Stream Redirection ->
-  Module (Stream CpuRequest, Stream FetchOutput)
+  Module (Stream CpuRequest, Stream FetchOutput, Training, Training)
 makeFetch response redirection = do
-  pc :: Reg (Bit 32) <- makeReg 0x80000000
-  epoch :: Reg Epoch <- makeReg 0
+  bpred :: BranchPredictor HistSize RasSize EpochWidth <- makeBranchPredictor 10
+
+  pc :: Ehr (Bit 32) <- makeEhr 2 0x80000000
+  epoch :: Ehr Epoch <- makeEhr 2 0
+
+  queue :: Queue () <- makePipelineQueue 1
 
   responseQ :: Queue (Bit (32)) <- makeSizedQueue 4
-  fetchQ :: Queue (Bit (32), Epoch) <- makeSizedQueue 4
+  fetchQ :: Queue (Option (Bit 32, Bit 32, BPredState HistSize RasSize, Epoch)) <- makeSizedQueue 4
 
   requestQ :: Queue CpuRequest <- makeBypassQueue
   outputQ :: Queue FetchOutput <- makeQueue
@@ -60,23 +76,43 @@ makeFetch response redirection = do
       responseQ.enq response.peek.beat
       response.consume
 
-    when redirection.canPeek do
-      pc <== redirection.peek.pc
-      epoch <== redirection.peek.epoch
-      redirection.consume
+    when (requestQ.notFull .&&. queue.notFull) do
+      requestQ.enq CpuRequest{read= true, addr= pc.read 1, beat= dontCare, mask= dontCare}
+      bpred.start (pc.read 1) (epoch.read 1)
+      queue.enq ()
+
+    when (queue.canDeq .&&. fetchQ.notFull .&&. inv redirection.canPeek) do
+      if epoch.read 0 === bpred.request.snd then do
+        (predPc, state) <- bpred.predict
+
+        fetchQ.enq $ some (pc.read 0, predPc, state, epoch.read 0)
+        pc.write 0 predPc
+      else do
+        fetchQ.enq none
+
+      queue.deq
 
     when (fetchQ.canDeq .&&. responseQ.canDeq .&&. outputQ.notFull) do
-      let (outPc, outEpoch) = fetchQ.first
-      outputQ.enq FetchOutput{instr= responseQ.first, pc= outPc, epoch= outEpoch}
+      when fetchQ.first.valid do
+        let (outPc, outPred, outState, outEpoch) = fetchQ.first.val
+
+        outputQ.enq FetchOutput{
+          instr= responseQ.first,
+          prediction= outPred,
+          bstate= outState,
+          epoch= outEpoch,
+          pc= outPc
+        }
+
       responseQ.deq
       fetchQ.deq
 
-    when (requestQ.notFull .&&. fetchQ.notFull .&&. inv redirection.canPeek) do
-      requestQ.enq CpuRequest{read= true, addr= pc.val, beat= dontCare, mask= dontCare}
-      fetchQ.enq (pc.val, epoch.val)
-      pc <== pc.val + 4
+    when redirection.canPeek do
+      pc.write 0 redirection.peek.pc
+      epoch.write 0 redirection.peek.epoch
+      redirection.consume
 
-  return (toStream requestQ, toStream outputQ)
+  return (toStream requestQ, toStream outputQ, bpred.trainHit, bpred.trainMis)
 
 makeDecode :: Stream FetchOutput -> Module (Stream DecodeOutput)
 makeDecode stream = do
@@ -85,7 +121,12 @@ makeDecode stream = do
   always do
     when (stream.canPeek .&&. outputQ.notFull) do
       let req = stream.peek
-      outputQ.enq DecodeOutput{pc=req.pc, epoch= req.epoch, instr= decodeInstr req.instr}
+      outputQ.enq DecodeOutput{
+        instr= decodeInstr req.instr,
+        prediction= req.prediction,
+        bstate= req.bstate,
+        epoch= req.epoch,
+        pc=req.pc}
       stream.consume
 
   return (toStream outputQ)
@@ -198,7 +239,6 @@ makeAlu input = do
     peek= alu input.peek
   }
 
-
 makeCore ::
   Stream CpuResponse ->
   Stream CpuResponse ->
@@ -210,20 +250,29 @@ makeCore iresponse dresponse = do
 
   redirectQ :: Queue Redirection <- makeBypassQueue
 
-  window :: Queue DecodeOutput <- makeSizedQueue 8
+  window :: Queue DecodeOutput <- makeQueue
 
-  (irequest, fetch) <- makeFetch iresponse (toStream redirectQ)
+  (irequest, fetch, trainHit, trainMis) <- makeFetch iresponse (toStream redirectQ)
   decode <- makeDecode fetch
 
   alu <- makeAlu (toStream aluQ)
   (drequest, lsu) <- makeLoadStoreUnit (toStream lsuQ) (toStream commitQ) dresponse
 
   scoreboard :: Ehr (Bit 32) <- makeEhr 2 0
-  registers :: [Reg (Bit 32)] <- replicateM 32 (makeReg 0)
+  registers :: RegFile RegId (Bit 32) <- makeRegFile
 
-  epoch :: Reg Epoch <- makeReg 0
+  regUpdate :: Wire (RegId,Bit 32) <- makeWire dontCare
+  let forward r =
+        (regUpdate.active .&&. regUpdate.val.fst === r) ? (regUpdate.val.snd, registers!r)
 
-  let ready x = (((1 :: Bit 32) .<<. x) .&. scoreboard.read 0) === 0
+  always do
+    when (regUpdate.active) do
+      let (reg, val) = regUpdate.val
+      registers.update reg val
+
+  epoch :: Ehr Epoch <- makeEhr 2 0
+
+  let ready x = (((1 :: Bit 32) .<<. x) .&. scoreboard.read 1) === 0
 
   cycle :: Reg (Bit 32) <- makeReg 0
   instret :: Reg (Bit 32) <- makeReg 0
@@ -241,12 +290,15 @@ makeCore iresponse dresponse = do
             ready rs1 .&&. ready rs2 .&&. ready rd .&&.
               (instr.isMemAccess ? (lsuQ.notFull, aluQ.notFull))
 
-      let op1 = (registers!rs1).val
-      let op2 = (registers!rs2).val
+      let op1 = forward rs1
+      let op2 = forward rs2
 
       let input = ExecInput{pc=decode.peek.pc, rs1= op1, rs2= op2, instr}
 
-      when rdy do
+      when (decode.peek.epoch =!= epoch.read 1) do
+        decode.consume
+
+      when (rdy .&&. decode.peek.epoch === epoch.read 1) do
         if instr.isMemAccess then do
           lsuQ.enq input
         else do
@@ -255,12 +307,15 @@ makeCore iresponse dresponse = do
         decode.consume
         window.enq decode.peek
         when (rd =!= 0) do
-          scoreboard.write 0 (scoreboard.read 0 .|. ((1 :: Bit 32) .<<. rd))
+          scoreboard.write 1 (scoreboard.read 1 .|. ((1 :: Bit 32) .<<. rd))
 
-        --display "enter pc: " (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
+        --display
+        --  "\t[" cycle.val "] enter pc: 0x"
+        --  (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
 
     when (window.canDeq .&&. redirectQ.notFull .&&. commitQ.notFull) do
-      let instr :: Instr = window.first.instr
+      let req :: DecodeOutput = window.first
+      let instr :: Instr = req.instr
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
       let rdy = instr.isMemAccess ? (lsu.canPeek, alu.canPeek)
 
@@ -268,62 +323,64 @@ makeCore iresponse dresponse = do
 
       when rdy do
         window.deq
-        scoreboard.write 1 (scoreboard.read 1 .&. inv (1 .<<. rd))
+        scoreboard.write 0 (scoreboard.read 0 .&. inv (1 .<<. rd))
 
         if instr.isMemAccess then do
-          commitQ.enq (window.first.epoch === epoch.val)
+          commitQ.enq (req.epoch === epoch.read 0)
           lsu.consume
         else do
           alu.consume
 
-        when (window.first.epoch === epoch.val) do
+        when (req.epoch === epoch.read 0) do
           when (instr.opcode `is` [FENCE]) do
             display "fence at: " cycle.val " instret: " instret.val
 
           instret <== instret.val + 1
 
           --display
-          --  "[" (formatDec 0 cycle.val) "] retire pc: "
-          --  (formatHex 8 window.first.pc) " instr: " (fshow instr)
+          --  "\t[" cycle.val "] retire pc: "
+          --  (formatHex 8 req.pc) " instr: " (fshow instr)
 
           when (rd =!= 0) do
             --display "    " (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
-            (registers!rd) <== resp.rd
+            --registers.update rd resp.rd
+            regUpdate <== (rd,resp.rd)
 
-          when (resp.pc =!= window.first.pc + 4) do
+          if (resp.pc =!= req.prediction) then do
             --display "redirect to pc := 0x" (formatHex 8 resp.pc)
-            redirectQ.enq Redirection{pc= resp.pc, epoch= epoch.val+1}
-            epoch <== epoch.val + 1
-
-        --when (window.first.epoch =!= epoch.val) do
-        --  display
-        --    "[" (formatDec 0 cycle.val) "] discard pc: "
-        --    (formatHex 8 window.first.pc) " instr: " (fshow instr)
+            redirectQ.enq Redirection{pc= resp.pc, epoch= epoch.read 0 + 1}
+            trainMis req.bstate req.pc resp.pc (some instr)
+            epoch.write 0 (epoch.read 0 + 1)
+          else do
+            trainHit req.bstate req.pc resp.pc (some instr)
 
   return (irequest, drequest)
 
 makeMem :: Stream CpuRequest -> Module (Stream CpuResponse)
 makeMem stream = do
-  responseQ :: Queue CpuResponse <- makeSizedQueue 4
-  ram :: RAMBE 28 4 <- makeDualRAMForwardInitBE "Mem.hex"
-  read :: Reg (Bit 1) <- makeDReg false
+  ram :: RAMBE 16 4 <- makeDualRAMForwardInitBE "Mem.hex"
+  responseQ :: Queue CpuResponse <- makeQueue
+  queue :: Queue () <- makePipelineQueue 1
+
+  cycle :: Reg (Bit 32) <- makeReg 0
 
   always do
-    when (stream.canPeek .&&. responseQ.notFull) do
+    cycle <== cycle.val + 1
 
+    when (stream.canPeek .&&. queue.notFull) do
       let (msb, lsb) = split (slice @31 @2 (stream.peek.addr - 0x80000000))
 
       if stream.peek.read then do
         ram.loadBE lsb
-        read <== true
       else do
         when (msb === 0) do
           ram.storeBE lsb stream.peek.mask stream.peek.beat
-        read <== true
       stream.consume
+      queue.enq ()
 
-    when read.val do
+    when (queue.canDeq .&&. responseQ.notFull) do
       responseQ.enq CpuResponse{beat= ram.outBE}
+      queue.deq
 
   return (toStream responseQ)
 

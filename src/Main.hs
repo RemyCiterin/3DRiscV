@@ -113,4 +113,4 @@ main = do
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
         writeVerilogTop testRegFile "Rf" "Verilog/"
         writeVerilogTop testRAM "TestRam" "Verilog/"
-        writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"
+        writeVerilogModule Core.makeFakeTestCore "TestCore" "Verilog/"

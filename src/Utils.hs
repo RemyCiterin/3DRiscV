@@ -8,6 +8,7 @@ import Blarney.Option
 import Blarney.Core.BV
 
 import Data.Proxy
+import Blarney.TaggedUnion
 
 -- -- like `whenTagged` but just lok at the tag
 -- whenEnum :: (IsTaggedUnion u, KnownSymbol name, m ~ GetMemberType u name, Bits m) =>
@@ -37,6 +38,11 @@ import Data.Proxy
 
 enum :: forall t n. (Enum t, KnownNat n) => t -> Bit n
 enum a = constant (toInteger (fromEnum a))
+
+item :: forall name u.
+       (IsTaggedUnion u, KnownSymbol name, () ~ GetMemberType u name)
+    => TagName name -> u
+item x = tag x ()
 
 infix 8 `is`
 class HasIs a b where

@@ -11,7 +11,7 @@ compile:
 
 test:
 	riscv32-none-elf-objcopy -O ihex ../Superscalar/rust/target/riscv32i-unknown-none-elf/release/SuperOS Mem.ihex
-	./ihex-to-img.py Mem.ihex hex 2147483648 4 400000 1 > Mem.hex
+	./ihex-to-img.py Mem.ihex hex 2147483648 4 100000 1 > Mem.hex
 
 yosys:
 	yosys \
