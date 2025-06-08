@@ -3,3 +3,5 @@ Verilog/
 build/
 simulation/sim
 sim
+Mem.hex
+Mem.ihex
