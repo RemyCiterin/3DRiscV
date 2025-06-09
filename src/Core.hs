@@ -239,6 +239,44 @@ makeAlu input = do
     peek= alu input.peek
   }
 
+data RegisterFile =
+  RegisterFile
+    { setReady :: RegId -> Action ()
+    , setBusy :: RegId -> Action ()
+    , ready :: RegId -> Bit 1
+    , read :: RegId -> Bit 32
+    , write :: RegId -> Bit 32 -> Action ()}
+
+makeRegisterFile :: Module RegisterFile
+makeRegisterFile = do
+  scoreboard :: Reg (Bit 32) <- makeReg 0
+  registers :: RegFile RegId (Bit 32) <- makeRegFile
+
+  readyUpdate :: Wire RegId <- makeWire dontCare
+  busyUpdate :: Wire RegId <- makeWire dontCare
+
+  regUpdate :: Wire (RegId,Bit 32) <- makeWire dontCare
+
+  always do
+    when (regUpdate.active) do
+      let (reg, val) = regUpdate.val
+      registers.update reg val
+
+    let ready = zeroExtend readyUpdate.active .<<. readyUpdate.val
+    let busy = zeroExtend busyUpdate.active .<<. busyUpdate.val
+    scoreboard <== (scoreboard.val .&. inv ready) .|. busy
+
+  return
+    RegisterFile
+      { setBusy= \ x -> busyUpdate <== x
+      , setReady= \ x -> readyUpdate <== x
+      , write= \ x v -> regUpdate <== (x,v)
+      , ready= \ x ->
+          (((1 :: Bit 32) .<<. x) .&. scoreboard.val) === 0 .||.
+          (readyUpdate.val === x .&&. readyUpdate.active)
+      , read= \ x ->
+          (regUpdate.active .&&. regUpdate.val.fst === x) ? (regUpdate.val.snd, registers!x)}
+
 makeCore ::
   Stream CpuResponse ->
   Stream CpuResponse ->
@@ -258,21 +296,9 @@ makeCore iresponse dresponse = do
   alu <- makeAlu (toStream aluQ)
   (drequest, lsu) <- makeLoadStoreUnit (toStream lsuQ) (toStream commitQ) dresponse
 
-  scoreboard :: Ehr (Bit 32) <- makeEhr 2 0
-  registers :: RegFile RegId (Bit 32) <- makeRegFile
-
-  regUpdate :: Wire (RegId,Bit 32) <- makeWire dontCare
-  let forward r =
-        (regUpdate.active .&&. regUpdate.val.fst === r) ? (regUpdate.val.snd, registers!r)
-
-  always do
-    when (regUpdate.active) do
-      let (reg, val) = regUpdate.val
-      registers.update reg val
+  registers <- makeRegisterFile
 
   epoch :: Ehr Epoch <- makeEhr 2 0
-
-  let ready x = (((1 :: Bit 32) .<<. x) .&. scoreboard.read 1) === 0
 
   cycle :: Reg (Bit 32) <- makeReg 0
   instret :: Reg (Bit 32) <- makeReg 0
@@ -287,11 +313,11 @@ makeCore iresponse dresponse = do
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
 
       let rdy =
-            ready rs1 .&&. ready rs2 .&&. ready rd .&&.
-              (instr.isMemAccess ? (lsuQ.notFull, aluQ.notFull))
+            registers.ready rs1 .&&. registers.ready rs2 .&&. registers.ready rd .&&.
+            (instr.isMemAccess ? (lsuQ.notFull, aluQ.notFull))
 
-      let op1 = forward rs1
-      let op2 = forward rs2
+      let op1 = registers.read rs1
+      let op2 = registers.read rs2
 
       let input = ExecInput{pc=decode.peek.pc, rs1= op1, rs2= op2, instr}
 
@@ -307,7 +333,7 @@ makeCore iresponse dresponse = do
         decode.consume
         window.enq decode.peek
         when (rd =!= 0) do
-          scoreboard.write 1 (scoreboard.read 1 .|. ((1 :: Bit 32) .<<. rd))
+          registers.setBusy rd
 
         --display
         --  "\t[" cycle.val "] enter pc: 0x"
@@ -323,7 +349,7 @@ makeCore iresponse dresponse = do
 
       when rdy do
         window.deq
-        scoreboard.write 0 (scoreboard.read 0 .&. inv (1 .<<. rd))
+        registers.setReady rd
 
         if instr.isMemAccess then do
           commitQ.enq (req.epoch === epoch.read 0)
@@ -344,7 +370,7 @@ makeCore iresponse dresponse = do
           when (rd =!= 0) do
             --display "    " (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
             --registers.update rd resp.rd
-            regUpdate <== (rd,resp.rd)
+            registers.write rd resp.rd
 
           if (resp.pc =!= req.prediction) then do
             --display "redirect to pc := 0x" (formatHex 8 resp.pc)
