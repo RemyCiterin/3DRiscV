@@ -7,7 +7,7 @@ LIB = \
 			Verilog/*.v
 
 compile:
-	cabal run
+	cabal run blarney-test -- --enable-name-prop
 
 test:
 	riscv32-none-elf-objcopy -O ihex ../Superscalar/rust/target/riscv32i-unknown-none-elf/release/SuperOS Mem.ihex
