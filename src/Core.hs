@@ -58,7 +58,7 @@ makeFetch ::
   Stream Redirection ->
   Module (Stream CpuRequest, Stream FetchOutput, Training, Training)
 makeFetch response redirection = do
-  bpred :: BranchPredictor HistSize RasSize EpochWidth <- makeBranchPredictor 10
+  bpred :: BranchPredictor HistSize RasSize EpochWidth <- withName "bpred" $ makeBranchPredictor 10
 
   pc :: Ehr (Bit 32) <- makeEhr 2 0x80000000
   epoch :: Ehr Epoch <- makeEhr 2 0
@@ -282,21 +282,21 @@ makeCore ::
   Stream CpuResponse ->
   Module (Stream CpuRequest, Stream CpuRequest)
 makeCore iresponse dresponse = do
-  commitQ :: Queue (Bit 1) <- makeQueue
-  aluQ :: Queue ExecInput <- makeQueue
-  lsuQ :: Queue ExecInput <- makeQueue
+  commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
+  aluQ :: Queue ExecInput <- withName "alu" $ makeQueue
+  lsuQ :: Queue ExecInput <- withName "lsu" $ makeQueue
 
-  redirectQ :: Queue Redirection <- makeBypassQueue
+  redirectQ :: Queue Redirection <- withName "fetch" $ makeBypassQueue
 
   window :: Queue DecodeOutput <- makeQueue
 
-  (irequest, fetch, trainHit, trainMis) <- makeFetch iresponse (toStream redirectQ)
-  decode <- makeDecode fetch
+  (irequest, fetch, trainHit, trainMis) <- withName "fetch" $ makeFetch iresponse (toStream redirectQ)
+  decode <- withName "decode" $ makeDecode fetch
 
-  alu <- makeAlu (toStream aluQ)
-  (drequest, lsu) <- makeLoadStoreUnit (toStream lsuQ) (toStream commitQ) dresponse
+  alu <- withName "alu" $ makeAlu (toStream aluQ)
+  (drequest, lsu) <- withName "lsu" $ makeLoadStoreUnit (toStream lsuQ) (toStream commitQ) dresponse
 
-  registers <- makeRegisterFile
+  registers <- withName "registers" $ makeRegisterFile
 
   epoch :: Ehr Epoch <- makeEhr 2 0
 
@@ -316,10 +316,8 @@ makeCore iresponse dresponse = do
             registers.ready rs1 .&&. registers.ready rs2 .&&. registers.ready rd .&&.
             (instr.isMemAccess ? (lsuQ.notFull, aluQ.notFull))
 
-      let op1 = registers.read rs1
-      let op2 = registers.read rs2
-
-      let input = ExecInput{pc=decode.peek.pc, rs1= op1, rs2= op2, instr}
+      let input =
+            ExecInput{pc=decode.peek.pc, rs1= registers.read rs1, rs2= registers.read rs2, instr}
 
       when (decode.peek.epoch =!= epoch.read 1) do
         decode.consume
@@ -419,7 +417,7 @@ makeTestCore = mdo
 
 makeFakeTestCore :: Bit 1 -> Module (Bit 1)
 makeFakeTestCore _ = mdo
-  iresponse <- makeMem irequest
-  dresponse <- makeMem drequest
-  (irequest, drequest) <- makeCore iresponse dresponse
+  iresponse <- withName "imem" $ makeMem irequest
+  dresponse <- withName "dmem" $ makeMem drequest
+  (irequest, drequest) <- withName "core" $ makeCore iresponse dresponse
   return drequest.canPeek

@@ -6,6 +6,7 @@ module TileLink where
 import Blarney hiding(Vercor)
 import Blarney.SourceSink
 import Blarney.Connectable
+import Blarney.Queue
 
 import Blarney.TaggedUnion
 import Arbiter
@@ -148,20 +149,19 @@ type KnownNat_ChannelC aw dw sw ow =
 
 instance KnownNat_ChannelC aw dw sw ow => Bits (ChannelC_Flit aw dw sw ow)
 
-data ChannelD_Flit aw dw sw ow iw =
+data ChannelD_Flit dw sw ow iw =
   ChannelD
     { opcode :: OpcodeD
     , size :: Bit sw
     , source :: Bit ow
     , sink :: Bit iw
-    , address :: Bit aw
     , lane :: Bit (8*dw)}
     deriving(Generic)
 
-type KnownNat_ChannelD aw dw sw ow iw =
-  (KnownNat aw, KnownNat (8*dw), KnownNat sw, KnownNat ow, KnownNat iw)
+type KnownNat_ChannelD dw sw ow iw =
+  (KnownNat (8*dw), KnownNat sw, KnownNat ow, KnownNat iw)
 
-instance KnownNat_ChannelD aw dw sw ow iw => Bits (ChannelD_Flit aw dw sw ow iw)
+instance KnownNat_ChannelD dw sw ow iw => Bits (ChannelD_Flit dw sw ow iw)
 
 data ChannelE_Flit iw =
   ChannelE
@@ -179,7 +179,7 @@ type ChannelC (p :: TLParamsKind) =
   ChannelC_Flit (AddrWidth p) (LaneWidth p) (SizeWidth p) (SourceWidth p)
 
 type ChannelD (p :: TLParamsKind) =
-  ChannelD_Flit (AddrWidth p) (LaneWidth p) (SizeWidth p) (SourceWidth p) (SinkWidth p)
+  ChannelD_Flit (LaneWidth p) (SizeWidth p) (SourceWidth p) (SinkWidth p)
 
 type ChannelE (p :: TLParamsKind) =
   ChannelE_Flit (SinkWidth p)
@@ -426,7 +426,7 @@ makePutMaster ::
     -> TLSlave p
     -> Module (PutMaster iw p)
 makePutMaster source arbiter ram slave = do
-  let laneSize = toInteger $ log2 $ valueOf @(LaneWidth p)
+  let laneSize :: TLSize = constant $ toInteger $ valueOf @(LaneWidth p)
   metaD <- makeMetaSourceD @p slave.channelD
   let channelD = metaD.source
 
@@ -455,8 +455,9 @@ makePutMaster source arbiter ram slave = do
       let msg = (message.val { lane= buffer.read 1 } :: ChannelA p)
       slave.channelA.put msg
 
+      let newSize = size.read 0 .>=. laneSize ? (size.read 0 - laneSize,0)
       index.write 0 (index.read 0 + 1)
-      size.write 0 (size.read 0 - fromInteger laneSize)
+      size.write 0 newSize
 
   let init idx addr logSize = do
         message <==
@@ -485,6 +486,69 @@ makePutMaster source arbiter ram slave = do
     , address= request.val.snd
     , index= request.val.fst}
 
+-- Generate a RAM controller using a lower bound and a file name
+makeTLRAM :: forall iw p.
+  (KnownNat iw, KnownTLParams p, iw <= AddrWidth p)
+    => Bit (AddrWidth p) -> Maybe String -> Bit (SinkWidth p) -> Module (TLSlave p)
+makeTLRAM lo file sink = do
+  let laneSize :: TLSize = constant $ toInteger $ valueOf @(LaneWidth p)
+  let laneLogSize :: TLSize = constant $ toInteger $ log2 $ valueOf @(LaneWidth p)
+  ram :: RAMBE iw (LaneWidth p) <-
+    case file of
+      Nothing -> makeDualRAMBE
+      Just name -> makeDualRAMInitBE name
+
+  -- Queue between the stages 1 and 2
+  queue :: Queue (ChannelD p) <- makePipelineQueue 1
+  queueA :: Queue (ChannelA p) <- makeQueue
+  queueD :: Queue (ChannelD p) <- makeQueue
+
+  let channelD = toSink queueD
+  let channelA = toSource queueA
+  size :: Reg TLSize <- makeReg 0
+  index :: Reg (Bit iw) <- makeReg dontCare
+
+  always do
+    when (channelA.canPeek .&&. queue.notFull) do
+      dynamicAssert
+        (channelA.peek.opcode `is` #PutData .||. channelA.peek.opcode `is` #Get)
+        "makeTLRAM only allow PutData and Get requests"
+      let isPut = channelA.peek.opcode `is` #PutData
+
+      let addr = (channelA.peek.address - lo) .>>. laneLogSize
+      let sz = size.val === 0 ? (1 .<<. channelA.peek.size, size.val)
+      let idx = size.val === 0 ? (truncate addr, index.val)
+
+      queue.enq
+        ChannelD
+          { opcode= isPut ? (tag #AccessAck (), tag #AccessAckData ())
+          , source= channelA.peek.source
+          , size= channelA.peek.size
+          , lane= dontCare
+          , sink= sink }
+
+      if isPut then do
+        ram.storeBE idx channelA.peek.mask channelA.peek.lane
+      else do
+        ram.loadBE idx
+
+      size <== sz .>. laneSize ? (sz - laneSize, 0)
+      index <== idx + 1
+
+      when (inv isPut .||. size.val === 0) do
+        channelA.consume
+
+    when (queue.canDeq .&&. channelD.canPut) do
+      channelD.put (queue.first{lane= ram.outBE} :: ChannelD p)
+      queue.deq
+
+  return
+    TLSlave
+      { channelA= toSink queueA
+      , channelB= nullSource
+      , channelC= nullSink
+      , channelD= toSource queueD
+      , channelE= nullSink }
 
 data AcquireMaster iw (p :: TLParamsKind) =
   AcquireMaster
