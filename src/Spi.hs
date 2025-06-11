@@ -82,7 +82,8 @@ data Printer =
     { canDisplay :: Bit 1
     , displayLower :: Bit 5 -> Action ()
     , displayUpper :: Bit 5 -> Action ()
-    , displayHexa :: Bit 4 -> Action ()}
+    , displayHexa :: Bit 4 -> Action ()
+    , displayReturn :: Action ()}
 
 makePrinter :: Module (Printer, Stream (Bit 8))
 makePrinter = do
@@ -96,6 +97,7 @@ makePrinter = do
             queue.enq (zeroExtend alpha + fromAscii 'a')
         , displayUpper= \ alpha -> do
             queue.enq (zeroExtend alpha + fromAscii 'A')
+        , displayReturn= queue.enq 10
         , displayHexa= \ hexa -> do
             if (hexa .<. 10) then do
               queue.enq (zeroExtend hexa + fromAscii '0')
@@ -132,6 +134,88 @@ makeTestSpi = do
         action do spi.setCS 0
         send 0xFF
 
+  let displayResult :: Stmt () = do
+        wait printer.canDisplay
+        action do printer.displayHexa (truncateLSB response.peek)
+        wait printer.canDisplay
+        action do printer.displayHexa (truncate response.peek)
+
+  let displayReturn :: Stmt () = do
+        wait printer.canDisplay
+        action do printer.displayReturn
+
+  let sendCmd :: Bit 8 -> Bit 32 -> Bit 8 -> Stmt () = \ cmd arg crc -> do
+        send 0xFF
+        send (cmd .|. 0x40)
+        send (slice @31 @24 arg)
+        send (slice @23 @16 arg)
+        send (slice @15 @8 arg)
+        send (slice @7 @0 arg)
+        send (crc .|. 0x01)
+        while (response.peek === 0xFF) do
+          send 0xFF
+
+  let sendCmd0 :: Stmt () = do
+        enable
+        sendCmd 0 0 0x95
+        displayResult
+        displayReturn
+        disable
+
+  let sendCmd8 :: Stmt () = do
+        enable
+        sendCmd 8 0x01AA 0x87
+        displayResult
+        action do counter <== 8
+        while (counter.val =!= 0) do
+          action do counter <== counter.val - 1
+          send 0xFF
+          displayResult
+        displayReturn
+        disable
+
+  let sendCmd41 :: Stmt () = do
+        enable
+        while (response.peek =!= 0) do
+          sendCmd 55 0 0
+          displayResult
+          sendCmd 41 0x40000000 0
+          displayResult
+          displayReturn
+        disable
+
+  let sendCmd58 :: Stmt () = do
+        enable
+        sendCmd 58 0 0
+        displayResult
+        action do counter <== 8
+        while (counter.val =!= 0) do
+          action do counter <== counter.val - 1
+          send 0xFF
+          displayResult
+        displayReturn
+        disable
+
+  let sendCmd16 :: Stmt () = do
+        enable
+        sendCmd 16 512 0
+        displayResult
+        displayReturn
+        disable
+
+  let readBlock :: Bit 32 -> Stmt () = \ id -> do
+        enable
+        sendCmd 17 id 0
+        displayReturn
+        action do counter <== 600
+        while (counter.val =!= 0) do
+          action do counter <== counter.val - 1
+          send 0xFF
+          displayResult
+        displayReturn
+        disable
+
+
   runStmt do
     action do
       spi.setDivider 32
@@ -150,24 +234,16 @@ makeTestSpi = do
       action do counter <== counter.val - 1
       send 0xFF
 
-    send 0x40
-    send 0
-    send 0
-    send 0
-    send 0
-    send 0x95
+    sendCmd0
+    sendCmd8
+    sendCmd41
 
-    action do counter <== 160
+    action do spi.setDivider 0
 
-    while (counter.val =!= 0) do
-      action do counter <== counter.val - 1
-      send 0xFF
-      wait printer.canDisplay
-      action do printer.displayHexa (truncateLSB response.peek)
-      wait printer.canDisplay
-      action do printer.displayHexa (truncate response.peek)
+    sendCmd58
+    sendCmd16
 
-
+    readBlock 0
 
   return (tx, spi.fabric)
 
