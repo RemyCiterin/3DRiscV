@@ -21,7 +21,8 @@ executable blarney-test
     Instr,
     Uart,
     Core,
-    Prediction
+    Prediction,
+    Spi
   hs-source-dirs: src
   build-depends:
       base
@@ -50,6 +51,7 @@ executable blarney-test
     -fno-cse
     -fno-full-laziness
     -Wno-partial-type-signatures
+    -Wno-ambiguous-fields
   if flag(enable-namer-plugin)
     build-depends:
       blarney-plugins-namer

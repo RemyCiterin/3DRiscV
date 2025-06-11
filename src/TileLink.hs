@@ -3,37 +3,38 @@
 
 module TileLink where
 
-import Blarney
+import Blarney hiding(Vercor)
 import Blarney.SourceSink
 import Blarney.Connectable
-import Blarney.Vector
 
 import Blarney.TaggedUnion
+import Arbiter
+import Ehr
 
 import Data.Proxy
 
 data TLParamsKind =
   TLParams
-    Nat -- size width (in bits)
     Nat -- addr width (in bits)
     Nat -- lane width (in bytes)
+    Nat -- size width (in bits)
     Nat -- source id
     Nat -- sink id
 
 type family AddrWidth params where
-  AddrWidth (TLParams z a w o i) = a
+  AddrWidth (TLParams a w z o i) = a
 
 type family LaneWidth params where
-  LaneWidth (TLParams z a w o i) = w
+  LaneWidth (TLParams a w z o i) = w
 
 type family SizeWidth params where
-  SizeWidth (TLParams z a w o i) = z
+  SizeWidth (TLParams a w z o i) = z
 
 type family SourceWidth params where
-  SourceWidth (TLParams z a w o i) = o
+  SourceWidth (TLParams a w z o i) = o
 
 type family SinkWidth params where
-  SinkWidth (TLParams z a w o i) = i
+  SinkWidth (TLParams a w z o i) = i
 
 type KnownTLParams (p :: TLParamsKind) =
   ( KnownNat (AddrWidth p)
@@ -225,10 +226,13 @@ hasDataD opcode =
   opcode `is` #GrantData .||. opcode `is` #AccessAckData
 
 -- A source with meta informations about the size of the remaining lanes,
--- and tell if the message is the last one of the burst
+-- and tell if the message is the last one of the burst. The offset is the
+-- difference between the base address of the burst and the address of the
+-- current lane of data
 data MetaSource c =
   MetaSource
     { source :: Source c
+    , offset :: TLSize
     , size :: TLSize
     , last :: Bit 1
     , first :: Bit 1 }
@@ -257,6 +261,7 @@ makeMetaSource getSize hasData source laneSize = do
                 sizeReg <== size - fromInteger laneSize
                 first <== last
             }
+      , offset= size - (1 .<<. getSize msg)
       , first= first.val
       , size
       , last }
@@ -267,10 +272,38 @@ makeMetaSourceA source = do
   let laneSize :: Integer = toInteger (valueOf @(LaneWidth p))
   makeMetaSource (\ msg -> msg.size) (\ msg -> hasDataA msg.opcode) source laneSize
 
-splitSinkChannelA ::
-  forall p. KnownTLParams p => Int -> Sink (ChannelA p) -> Module [Sink (ChannelA p)]
-splitSinkChannelA size sink = do
-  doPut :: [Wire (Bit 1)] <- Blarney.replicateM size (makeWire false)
+makeMetaSourceB :: forall p.
+  KnownTLParams p => Source (ChannelB p) -> Module (MetaSource (ChannelB p))
+makeMetaSourceB source = do
+  let laneSize :: Integer = toInteger (valueOf @(LaneWidth p))
+  makeMetaSource (\ msg -> msg.size) (\ msg -> hasDataB msg.opcode) source laneSize
+
+makeMetaSourceC :: forall p.
+  KnownTLParams p => Source (ChannelC p) -> Module (MetaSource (ChannelC p))
+makeMetaSourceC source = do
+  let laneSize :: Integer = toInteger (valueOf @(LaneWidth p))
+  makeMetaSource (\ msg -> msg.size) (\ msg -> hasDataC msg.opcode) source laneSize
+
+makeMetaSourceD :: forall p.
+  KnownTLParams p => Source (ChannelD p) -> Module (MetaSource (ChannelD p))
+makeMetaSourceD source = do
+  let laneSize :: Integer = toInteger (valueOf @(LaneWidth p))
+  makeMetaSource (\ msg -> msg.size) (\ msg -> hasDataD msg.opcode) source laneSize
+
+getLaneMask :: forall p. (KnownTLParams p) => Bit (AddrWidth p) -> Bit (SizeWidth p) -> Bit (LaneWidth p)
+getLaneMask address logSize =
+  liftNat (log2 (valueOf @(LaneWidth p))) $ \ (_ :: Proxy sz) ->
+    let offset :: Bit sz = truncateCast address in
+    let size :: TLSize = 1 .<<. logSize in
+    ((1 .<<. size) - 1) .<<. offset
+
+
+-- Transform a sink into multiple shared sink, with a synchronisation such that
+-- only one actor can put into the sink per cycle
+makeSharedSink ::
+  Int -> Sink t -> Module [Sink t]
+makeSharedSink size sink = do
+  doPut :: [Wire (Bit 1)] <- replicateM size (makeWire false)
 
   let canPut i =
         if i == 0
@@ -285,3 +318,363 @@ splitSinkChannelA size sink = do
             (doPut!i) <== true
             sink.put x }
     | i <- [0..size-1]]
+
+-- Transform a source into multiple shared sourecs, with a synchronisation such that
+-- only one actor can consume from this source per cycle
+makeSharedSource ::
+  Int -> Source t -> Module [Source t]
+makeSharedSource size source = do
+  doPeek :: [Wire (Bit 1)] <- replicateM size (makeWire false)
+
+  let canPeek i =
+        if i == 0
+           then source.canPeek
+           else inv (doPeek!(i-1)).val .&&. canPeek (i-1)
+
+  return
+    [
+      Source
+        { canPeek= canPeek i
+        , peek= source.peek
+        , consume= do
+            source.consume
+            (doPeek!i) <== true}
+    | i <- [0..size-1]]
+
+data GetMaster iw (p :: TLParamsKind) =
+  GetMaster
+    { canGet :: Bit 1
+    , get :: Bit iw -> Bit (AddrWidth p) -> Bit (SizeWidth p) -> Action ()
+    , canGetAck :: Bit 1
+    , getAck :: Action ()
+    , active :: Bit 1
+    , address :: Bit (AddrWidth p)
+    , index :: Bit iw }
+
+makeGetMaster ::
+  forall iw p. (KnownNat iw, KnownTLParams p)
+    => Bit (SourceWidth p)
+    -> ArbiterClient
+    -> RAMBE iw (LaneWidth p)
+    -> TLSlave p
+    -> Module (GetMaster iw p)
+makeGetMaster source arbiter ram slave = do
+  metaD <- makeMetaSourceD @p slave.channelD
+  let channelD = metaD.source
+
+  mask :: Reg (Bit (LaneWidth p)) <- makeReg dontCare
+  index :: Reg (Bit iw) <- makeReg dontCare
+  valid :: Reg (Bit 1) <- makeReg false
+  last :: Reg (Bit 1) <- makeReg false
+
+  request :: Reg (Bit iw, Bit (AddrWidth p)) <- makeReg dontCare
+
+  always do
+    when (channelD.canPeek) do
+      let msg = channelD.peek
+      when (msg.opcode `is` #AccessAckData .&&. msg.source === source) do
+        arbiter.request
+
+      when (arbiter.grant) do
+        channelD.consume
+
+        ram.storeBE index.val mask.val msg.lane
+        index <== index.val + 1
+        last <== metaD.last
+
+  let init opcode idx addr size = do
+        slave.channelA.put
+          ChannelA
+            { opcode= opcode
+            , lane= dontCare
+            , mask= getLaneMask @p addr size
+            , address= addr
+            , size= size
+            , source= source}
+        mask <== getLaneMask @p addr size
+        request <== (idx,addr)
+        valid <== true
+        index <== idx
+
+  return GetMaster
+    { get= \ idx addr size -> do
+        init (tag #Get ()) idx addr size
+    , getAck= do
+        valid <== false
+        last <== false
+    , canGet= slave.channelA.canPut .&&. inv valid.val
+    , canGetAck= last.val
+    , active= valid.val
+    , address= request.val.snd
+    , index= request.val.fst}
+
+data PutMaster iw (p :: TLParamsKind) =
+  PutMaster
+    { canPut :: Bit 1
+    , put :: Bit iw -> Bit (AddrWidth p) -> Bit (SizeWidth p) -> Action ()
+    , canPutAck :: Bit 1
+    , putAck :: Action ()
+    , active :: Bit 1
+    , address :: Bit (AddrWidth p)
+    , index :: Bit iw }
+
+makePutMaster ::
+  forall iw p. (KnownNat iw, KnownTLParams p)
+    => Bit (SourceWidth p)
+    -> ArbiterClient
+    -> RAMBE iw (LaneWidth p)
+    -> TLSlave p
+    -> Module (PutMaster iw p)
+makePutMaster source arbiter ram slave = do
+  let laneSize = toInteger $ log2 $ valueOf @(LaneWidth p)
+  metaD <- makeMetaSourceD @p slave.channelD
+  let channelD = metaD.source
+
+  buffer :: Ehr (Bit (8 * LaneWidth p)) <- makeEhr 2 dontCare
+  updBuf :: Reg (Bit 1) <- makeDReg false
+
+  message :: Reg (ChannelA p) <- makeReg dontCare
+  valid :: Reg (Bit 1) <- makeReg false
+
+  size :: Ehr TLSize <- makeEhr 2 0
+  index :: Ehr (Bit iw) <- makeEhr 2 dontCare
+
+  request :: Reg (Bit iw, Bit (AddrWidth p)) <- makeReg dontCare
+
+  always do
+    when (size.read 1 =!= 0) do
+      arbiter.request
+    when (arbiter.grant) do
+      ram.loadBE (index.read 1)
+      updBuf <== true
+
+    when (updBuf.val) do
+      buffer.write 0 ram.outBE
+
+    when (size.read 0 =!= 0 .&&. slave.channelA.canPut) do
+      let msg = (message.val { lane= buffer.read 1 } :: ChannelA p)
+      slave.channelA.put msg
+
+      index.write 0 (index.read 0 + 1)
+      size.write 0 (size.read 0 - fromInteger laneSize)
+
+  let init idx addr logSize = do
+        message <==
+          ChannelA
+            { opcode= tag #PutData ()
+            , lane= dontCare
+            , mask= getLaneMask @p addr logSize
+            , address= addr
+            , source= source
+            , size= logSize}
+        size.write 0 (1 .<<. logSize)
+        request <== (idx,addr)
+        index.write 0 idx
+        valid <== true
+
+  return PutMaster
+    { put= init
+    , putAck= do
+        channelD.consume
+        valid <== false
+    , canPut= inv valid.val
+    , canPutAck=
+        channelD.canPeek .&&. channelD.peek.opcode `is` #AccessAck .&&.
+        channelD.peek.source === source .&&. size.read 0 === 0
+    , active= valid.val
+    , address= request.val.snd
+    , index= request.val.fst}
+
+
+data AcquireMaster iw (p :: TLParamsKind) =
+  AcquireMaster
+    { canAcquire :: Bit 1
+    , acquireBlock :: Grow -> Bit iw -> Bit (AddrWidth p) -> Action ()
+    , acquirePerms :: Grow -> Bit (AddrWidth p) -> Action ()
+    , acquireAck :: Action TLPerm
+    , canAcquireAck :: Bit 1
+    , active :: Bit 1
+    , address :: Bit (AddrWidth p)
+    , index :: Bit iw}
+
+makeAcquireMaster ::
+  forall iw p. (KnownNat iw, KnownTLParams p)
+    => Bit (SourceWidth p)
+    -> Bit (SizeWidth p)
+    -> ArbiterClient
+    -> RAM (Bit iw) (Bit (8*(LaneWidth p)))
+    -> TLSlave p
+    -> Module (AcquireMaster iw p)
+makeAcquireMaster source logSize arbiter ram slave = do
+  metaD <- makeMetaSourceD @p slave.channelD
+  let channelD = metaD.source
+
+  index :: Reg (Bit iw) <- makeReg dontCare
+  valid :: Reg (Bit 1) <- makeReg false
+  last :: Reg (Bit 1) <- makeReg false
+
+  sink :: Reg (Bit (SinkWidth p)) <- makeReg dontCare
+
+  perm :: Reg TLPerm <- makeReg dontCare
+
+  request :: Reg (Bit iw, Bit (AddrWidth p)) <- makeReg dontCare
+
+  always do
+    when (channelD.canPeek) do
+      let msg = channelD.peek
+      when (msg.opcode `is` #GrantData .&&. msg.source === source) do
+        arbiter.request
+
+      when (arbiter.grant) do
+        let p = untag #GrantData msg.opcode
+        channelD.consume
+
+        perm <==
+          select [
+            p `is` #N --> tag #Nothing (),
+            p `is` #B --> tag #Branch (),
+            p `is` #T --> tag #Trunk ()
+          ]
+
+        ram.store index.val msg.lane
+        index <== index.val + 1
+        last <== metaD.last
+        sink <== msg.sink
+
+      when (msg.opcode `is` #Grant .&&. msg.source === source) do
+        let p = untag #Grant msg.opcode
+        channelD.consume
+
+        perm <==
+          select [
+            p `is` #N --> tag #Nothing (),
+            p `is` #B --> tag #Branch (),
+            p `is` #T --> tag #Trunk ()
+          ]
+
+        last <== metaD.last
+        sink <== msg.sink
+
+  let init g idx addr opcode = do
+        slave.channelA.put
+          ChannelA
+            { opcode= opcode
+            , lane= dontCare
+            , mask= ones
+            , address= addr
+            , size= logSize
+            , source= source}
+        request <== (idx,addr)
+        valid <== true
+        index <== idx
+
+  return AcquireMaster
+    { acquireBlock= \ g idx addr -> do
+        init g idx addr (tag #AcquireBlock g)
+    , acquirePerms= \ g addr -> do
+        init g dontCare addr (tag #AcquireBlock g)
+    , acquireAck= do
+        slave.channelE.put ChannelE{sink= sink.val}
+        valid <== false
+        last <== false
+        return perm.val
+    , canAcquire= slave.channelA.canPut .&&. inv valid.val
+    , canAcquireAck= last.val
+    , active= valid.val
+    , address= request.val.snd
+    , index= request.val.fst}
+
+data MshrMaster token iw (p :: TLParamsKind) =
+  MshrMaster
+    { canAcquire :: Bit 1
+    , acquireBlock :: Grow -> Bit iw -> Bit (AddrWidth p) -> Action token
+    , acquirePerms :: Grow -> Bit (AddrWidth p) -> Action token
+    , canAcquireAck :: Bit 1
+    , acquireAck :: Action (token, TLPerm)
+    , searchAddress :: Bit (AddrWidth p) -> Bit 1
+    , searchIndex :: Bit iw -> Bit 1 }
+
+makeMshrMaster ::
+  forall iw p token logMshr.
+    (KnownNat logMshr, KnownNat (2^logMshr), KnownNat iw, KnownTLParams p, token ~ Bit logMshr)
+      => [Bit (SourceWidth p)]
+      -> Bit (SizeWidth p)
+      -> ArbiterClient
+      -> RAM (Bit iw) (Bit (8*(LaneWidth p)))
+      -> TLSlave p
+      -> Module (MshrMaster token iw p)
+makeMshrMaster sources logSize arbiter ram slave = do
+  let mshr = 2 ^ valueOf @logMshr
+  acquireM :: [AcquireMaster iw p] <-
+    sequence [makeAcquireMaster (sources!i) logSize arbiter ram slave | i <- [0..mshr-1]]
+
+  acquire_block_w :: Wire (Grow, Bit iw, Bit (AddrWidth p)) <- makeWire dontCare
+  acquire_perms_w :: Wire (Grow, Bit (AddrWidth p)) <- makeWire dontCare
+  free_w :: Wire () <- makeWire ()
+
+  let searchAddress address =
+        orList [acq.active .&&. acq.address === address | acq <- acquireM]
+
+  let searchIndex index =
+        orList [acq.active .&&. acq.index === index | acq <- acquireM]
+
+  let newHot :: Bit (2^logMshr) =
+        firstHot (fromBitList [acq.active | acq <- acquireM])
+  let newToken :: Bit logMshr =
+        select [unsafeAt i newHot --> fromInteger (toInteger i) | i <- [0..mshr-1]]
+
+  let freeHot :: Bit (2^logMshr) =
+        firstHot (fromBitList [acq.canAcquireAck | acq <- acquireM])
+  let freeToken :: Bit logMshr =
+        select [unsafeAt i freeHot --> fromInteger (toInteger i) | i <- [0..mshr-1]]
+
+  perms_w :: Wire TLPerm <- makeWire dontCare
+
+  always do
+    when acquire_perms_w.active do
+      let (grant, addr) = acquire_perms_w.val
+      sequence_
+        [when (unsafeAt i newHot) do
+          (acquireM!i).acquirePerms grant addr
+        | i <- [0..mshr-1]]
+
+    when acquire_block_w.active do
+      let (grant, index, addr) = acquire_block_w.val
+      sequence_
+        [when (unsafeAt i newHot) do
+          (acquireM!i).acquireBlock grant index addr
+        | i <- [0..mshr-1]]
+
+    when free_w.active do
+      sequence_
+        [when (unsafeAt i freeHot) do
+          perm <- (acquireM!i).acquireAck
+          perms_w <== perm
+        | i <- [0..mshr-1]]
+
+  return MshrMaster
+    { canAcquire= orList [acq.canAcquire | acq <- acquireM] .&&. slave.channelA.canPut
+    , acquireBlock= \ grow idx addr -> do
+        acquire_block_w <== (grow, idx, addr)
+        return newToken
+    , acquirePerms= \ grow addr -> do
+        acquire_perms_w <== (grow, addr)
+        return newToken
+    , canAcquireAck= orList [acq.canAcquireAck | acq <- acquireM] .&&. slave.channelE.canPut
+    , acquireAck= do
+        free_w <== ()
+        return (freeToken, perms_w.val)
+    , searchAddress
+    , searchIndex }
+
+
+data ProbeFSM iw (p :: TLParamsKind) =
+  ProbeFSM
+    { canStart :: Bit 1
+    , start :: Bit iw -> OpcodeB -> Bit (AddrWidth p) -> Bit (SourceWidth p) -> Action ()
+    , canWrite :: Bit 1
+    , write :: Action (Bit iw, Bit (LaneWidth p), Bit 1)
+    , exclusive :: Bit 1
+    , hasData :: Bit 1
+    , canAck :: Bit 1
+    , ack :: Action ()}

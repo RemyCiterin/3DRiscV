@@ -2,6 +2,7 @@ dist-newstyle/
 Verilog/
 build/
 simulation/sim
+simulation/obj_dir
 sim
 Mem.hex
 Mem.ihex

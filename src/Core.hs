@@ -27,8 +27,8 @@ displayAscii term =
 type EpochWidth = 8
 type Epoch = Bit EpochWidth
 
-type RasSize = 4
-type HistSize = 10
+type RasSize = 3
+type HistSize = 8
 
 data FetchOutput = FetchOutput {
     bstate :: BPredState HistSize RasSize,

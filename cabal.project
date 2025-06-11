@@ -11,3 +11,9 @@ source-repository-package
   location: https://github.com/blarney-lang/five.git
   tag: main
   subdir: .
+
+source-repository-package
+  type: git
+  location: https://github.com/blarney-lang/axi4.git
+  tag: main
+  subdir: .

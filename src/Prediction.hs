@@ -251,4 +251,3 @@ makeBranchPredictor logBtbSize = do
           ras.backtrack state.top state.kind
           hist.write 2 state.hist
     }
-

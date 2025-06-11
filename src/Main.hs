@@ -12,6 +12,7 @@ import Arbiter
 import TileLink
 
 import CPU
+import qualified Spi
 import qualified Instr
 
 import qualified Uart
@@ -114,3 +115,4 @@ main = do
         writeVerilogTop testRegFile "Rf" "Verilog/"
         writeVerilogTop testRAM "TestRam" "Verilog/"
         writeVerilogModule Core.makeFakeTestCore "TestCore" "Verilog/"
+        writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"
