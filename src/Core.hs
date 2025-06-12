@@ -4,8 +4,12 @@ import Blarney
 import Blarney.Queue
 import Blarney.Option
 import Blarney.Stream
+import Blarney.SourceSink
+import Blarney.TaggedUnion hiding(is)
+import Blarney.Connectable
 
 import Prediction
+import TileLink
 import Cache
 import Utils
 import Instr
@@ -53,31 +57,48 @@ data Redirection = Redirection {
 
 type Training = BPredState HistSize RasSize -> Bit 32 -> Bit 32 -> Option Instr -> Action ()
 
+-- 32 bit of address
+-- 4 bytes of data
+-- 4 bits of size configuration
+-- 8 bits of source identifier
+-- 8 ibts of sink identifier
+type TLConfig = TLParams 32 4 4 8 8
+
 makeFetch ::
-  Stream CpuResponse ->
   Stream Redirection ->
-  Module (Stream CpuRequest, Stream FetchOutput, Training, Training)
-makeFetch response redirection = do
+  Module (TLMaster TLConfig, Stream FetchOutput, Training, Training)
+makeFetch redirection = do
   bpred :: BranchPredictor HistSize RasSize EpochWidth <- withName "bpred" $ makeBranchPredictor 10
+
+  channelA :: Queue (ChannelA TLConfig) <- makeBypassQueue
+  channelD :: Queue (ChannelD TLConfig) <- makeSizedQueue 4
+  let master =
+        TLMaster
+          { channelA=toSource channelA
+          , channelB=nullSink
+          , channelC=nullSource
+          , channelD=toSink channelD
+          , channelE=nullSource }
 
   pc :: Ehr (Bit 32) <- makeEhr 2 0x80000000
   epoch :: Ehr Epoch <- makeEhr 2 0
 
   queue :: Queue () <- makePipelineQueue 1
 
-  responseQ :: Queue (Bit (32)) <- makeSizedQueue 4
   fetchQ :: Queue (Option (Bit 32, Bit 32, BPredState HistSize RasSize, Epoch)) <- makeSizedQueue 4
 
-  requestQ :: Queue CpuRequest <- makeBypassQueue
   outputQ :: Queue FetchOutput <- makeQueue
 
   always do
-    when (responseQ.notFull .&&. response.canPeek) do
-      responseQ.enq response.peek.beat
-      response.consume
-
-    when (requestQ.notFull .&&. queue.notFull) do
-      requestQ.enq CpuRequest{read= true, addr= pc.read 1, beat= dontCare, mask= dontCare}
+    when (channelA.notFull .&&. queue.notFull) do
+      channelA.enq
+        ChannelA
+          { opcode= tag #Get ()
+          , address= pc.read 1
+          , lane= dontCare
+          , mask= ones
+          , size= 2
+          , source= 0}
       bpred.start (pc.read 1) (epoch.read 1)
       queue.enq ()
 
@@ -92,19 +113,19 @@ makeFetch response redirection = do
 
       queue.deq
 
-    when (fetchQ.canDeq .&&. responseQ.canDeq .&&. outputQ.notFull) do
+    when (fetchQ.canDeq .&&. channelD.canDeq .&&. outputQ.notFull) do
       when fetchQ.first.valid do
         let (outPc, outPred, outState, outEpoch) = fetchQ.first.val
 
         outputQ.enq FetchOutput{
-          instr= responseQ.first,
+          instr= channelD.first.lane,
           prediction= outPred,
           bstate= outState,
           epoch= outEpoch,
           pc= outPc
         }
 
-      responseQ.deq
+      channelD.deq
       fetchQ.deq
 
     when redirection.canPeek do
@@ -112,7 +133,7 @@ makeFetch response redirection = do
       epoch.write 0 redirection.peek.epoch
       redirection.consume
 
-  return (toStream requestQ, toStream outputQ, bpred.trainHit, bpred.trainMis)
+  return (master, toStream outputQ, bpred.trainHit, bpred.trainMis)
 
 makeDecode :: Stream FetchOutput -> Module (Stream DecodeOutput)
 makeDecode stream = do
@@ -134,11 +155,19 @@ makeDecode stream = do
 makeLoadStoreUnit ::
   Stream ExecInput ->
   Stream (Bit 1) ->
-  Stream CpuResponse ->
-  Module (Stream CpuRequest, Stream ExecOutput)
-makeLoadStoreUnit input commit response = do
+  Module (TLMaster TLConfig, Stream ExecOutput)
+makeLoadStoreUnit input commit = do
   outputQ :: Queue ExecOutput <- makeQueue
-  requestQ :: Queue CpuRequest <- makeQueue
+
+  channelA :: Queue (ChannelA TLConfig) <- makeBypassQueue
+  channelD :: Queue (ChannelD TLConfig) <- makeQueue
+  let master =
+        TLMaster
+          { channelA=toSource channelA
+          , channelB=nullSink
+          , channelC=nullSource
+          , channelD=toSink channelD
+          , channelE=nullSource }
 
   state :: Reg (Bit 3) <- makeReg 0
 
@@ -169,7 +198,7 @@ makeLoadStoreUnit input commit response = do
 
       state <== 3
 
-    when (state.val === 3 .&&. requestQ.notFull .&&. commit.canPeek) do
+    when (state.val === 3 .&&. channelA.notFull .&&. commit.canPeek) do
       commit.consume
 
       let beat = req.rs2 .<<. ((slice @1 @0 addr) # (0b000 :: Bit 3))
@@ -183,25 +212,39 @@ makeLoadStoreUnit input commit response = do
       if (commit.peek) then do
         when (addr === 0x10000000) do displayAscii (slice @7 @0 beat)
 
-        requestQ.enq CpuRequest{read= false, mask, addr, beat}
+        channelA.enq
+            ChannelA
+              { opcode= tag #PutData ()
+              , address= addr .&. inv 0b11
+              , size= 2
+              , source= 1
+              , lane= beat
+              , mask }
         state <== 4
       else do
         input.consume
         state <== 0
 
-    when (state.val === 4 .&&. response.canPeek) do
-      response.consume
+    when (state.val === 4 .&&. channelD.canDeq) do
       input.consume
+      channelD.deq
       state <== 0
 
-    when (state.val === 0 .&&. input.canPeek .&&. requestQ.notFull .&&. opcode `is` [LOAD]) do
-      requestQ.enq CpuRequest{read= true, addr, mask= dontCare, beat= dontCare}
+    when (state.val === 0 .&&. input.canPeek .&&. channelA.notFull .&&. opcode `is` [LOAD]) do
+      channelA.enq
+          ChannelA
+            { opcode= tag #Get ()
+            , address= addr .&. inv 0b11
+            , size= 2
+            , lane= dontCare
+            , source= 1
+            , mask= ones}
       state <== 1
 
-    when (state.val === 1 .&&. response.canPeek .&&. outputQ.notFull) do
-      response.consume
+    when (state.val === 1 .&&. channelD.canDeq .&&. outputQ.notFull) do
+      channelD.deq
 
-      let beat :: Bit 32 = response.peek.beat .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
+      let beat :: Bit 32 = channelD.first.lane .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
       let out :: Bit 32 =
             select [
               isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
@@ -229,7 +272,7 @@ makeLoadStoreUnit input commit response = do
       input.consume
       state <== 0
 
-  return (toStream requestQ, toStream outputQ)
+  return (master, toStream outputQ)
 
 makeAlu :: Stream ExecInput -> Module (Stream ExecOutput)
 makeAlu input = do
@@ -278,10 +321,8 @@ makeRegisterFile = do
           (regUpdate.active .&&. regUpdate.val.fst === x) ? (regUpdate.val.snd, registers!x)}
 
 makeCore ::
-  Stream CpuResponse ->
-  Stream CpuResponse ->
-  Module (Stream CpuRequest, Stream CpuRequest)
-makeCore iresponse dresponse = do
+  Module (TLMaster TLConfig, TLMaster TLConfig)
+makeCore = do
   commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
   aluQ :: Queue ExecInput <- withName "alu" $ makeQueue
   lsuQ :: Queue ExecInput <- withName "lsu" $ makeQueue
@@ -290,11 +331,11 @@ makeCore iresponse dresponse = do
 
   window :: Queue DecodeOutput <- makeQueue
 
-  (irequest, fetch, trainHit, trainMis) <- withName "fetch" $ makeFetch iresponse (toStream redirectQ)
+  (imaster, fetch, trainHit, trainMis) <- withName "fetch" $ makeFetch (toStream redirectQ)
   decode <- withName "decode" $ makeDecode fetch
 
   alu <- withName "alu" $ makeAlu (toStream aluQ)
-  (drequest, lsu) <- withName "lsu" $ makeLoadStoreUnit (toStream lsuQ) (toStream commitQ) dresponse
+  (dmaster, lsu) <- withName "lsu" $ makeLoadStoreUnit (toStream lsuQ) (toStream commitQ)
 
   registers <- withName "registers" $ makeRegisterFile
 
@@ -357,7 +398,7 @@ makeCore iresponse dresponse = do
 
         when (req.epoch === epoch.read 0) do
           when (instr.opcode `is` [FENCE]) do
-            display "fence at: " cycle.val " instret: " instret.val
+            display "fence at cycle: " cycle.val " instret: " instret.val
 
           instret <== instret.val + 1
 
@@ -378,7 +419,7 @@ makeCore iresponse dresponse = do
           else do
             trainHit req.bstate req.pc resp.pc (some instr)
 
-  return (irequest, drequest)
+  return (imaster, dmaster)
 
 makeMem :: Stream CpuRequest -> Module (Stream CpuResponse)
 makeMem stream = do
@@ -410,14 +451,32 @@ makeMem stream = do
 
 makeTestCore :: Module ()
 makeTestCore = mdo
-  iresponse <- makeMem irequest
-  dresponse <- makeMem drequest
-  (irequest, drequest) <- makeCore iresponse dresponse
+  let config =
+        TLRAMConfig
+          { fileName= Just "Mem.hex"
+          , lowerBound= 0x80000000
+          , bypassChannelA= True
+          , bypassChannelD= True
+          , sink= 0 }
+  islave <- makeTLRAM @16 @TLConfig config
+  dslave <- makeTLRAM @16 @TLConfig config
+  makeConnection imaster islave
+  makeConnection dmaster dslave
+  (imaster, dmaster) <- makeCore
   return ()
 
 makeFakeTestCore :: Bit 1 -> Module (Bit 1)
 makeFakeTestCore _ = mdo
-  iresponse <- withName "imem" $ makeMem irequest
-  dresponse <- withName "dmem" $ makeMem drequest
-  (irequest, drequest) <- withName "core" $ makeCore iresponse dresponse
-  return drequest.canPeek
+  let config =
+        TLRAMConfig
+          { fileName= Just "Mem.hex"
+          , lowerBound= 0x80000000
+          , bypassChannelA= True
+          , bypassChannelD= True
+          , sink= 0 }
+  islave <- withName "imem" $ makeTLRAM @16 @TLConfig config
+  dslave <- withName "dmem" $ makeTLRAM @16 @TLConfig config
+  withName "imem" $ makeConnection imaster islave
+  withName "dmem" $ makeConnection dmaster dslave
+  (imaster, dmaster) <- withName "core" makeCore
+  return imaster.channelA.canPeek

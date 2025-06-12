@@ -486,22 +486,30 @@ makePutMaster source arbiter ram slave = do
     , address= request.val.snd
     , index= request.val.fst}
 
+data TLRAMConfig p =
+  TLRAMConfig
+    { lowerBound :: Bit (AddrWidth p)
+    , fileName :: Maybe String
+    , sink :: Bit (SinkWidth p)
+    , bypassChannelA :: Bool
+    , bypassChannelD :: Bool }
+
 -- Generate a RAM controller using a lower bound and a file name
 makeTLRAM :: forall iw p.
-  (KnownNat iw, KnownTLParams p, iw <= AddrWidth p)
-    => Bit (AddrWidth p) -> Maybe String -> Bit (SinkWidth p) -> Module (TLSlave p)
-makeTLRAM lo file sink = do
+  (KnownNat iw, KnownTLParams p, KnownNat (AddrWidth p - iw), iw <= AddrWidth p)
+    => TLRAMConfig p -> Module (TLSlave p)
+makeTLRAM config = do
   let laneSize :: TLSize = constant $ toInteger $ valueOf @(LaneWidth p)
   let laneLogSize :: TLSize = constant $ toInteger $ log2 $ valueOf @(LaneWidth p)
   ram :: RAMBE iw (LaneWidth p) <-
-    case file of
+    case config.fileName of
       Nothing -> makeDualRAMBE
       Just name -> makeDualRAMInitBE name
 
   -- Queue between the stages 1 and 2
   queue :: Queue (ChannelD p) <- makePipelineQueue 1
-  queueA :: Queue (ChannelA p) <- makeQueue
-  queueD :: Queue (ChannelD p) <- makeQueue
+  queueA :: Queue (ChannelA p) <- if config.bypassChannelA then makeBypassQueue else makeQueue
+  queueD :: Queue (ChannelD p) <- if config.bypassChannelD then makeBypassQueue else makeQueue
 
   let channelD = toSink queueD
   let channelA = toSource queueA
@@ -515,9 +523,10 @@ makeTLRAM lo file sink = do
         "makeTLRAM only allow PutData and Get requests"
       let isPut = channelA.peek.opcode `is` #PutData
 
-      let addr = (channelA.peek.address - lo) .>>. laneLogSize
+      let addr = (channelA.peek.address - config.lowerBound) .>>. laneLogSize
       let sz = size.val === 0 ? (1 .<<. channelA.peek.size, size.val)
       let idx = size.val === 0 ? (truncate addr, index.val)
+      let msb :: Bit (AddrWidth p - iw) = truncateLSBCast addr
 
       queue.enq
         ChannelD
@@ -525,17 +534,18 @@ makeTLRAM lo file sink = do
           , source= channelA.peek.source
           , size= channelA.peek.size
           , lane= dontCare
-          , sink= sink }
+          , sink= config.sink }
 
       if isPut then do
-        ram.storeBE idx channelA.peek.mask channelA.peek.lane
+        when (msb === 0) do
+          ram.storeBE idx channelA.peek.mask channelA.peek.lane
       else do
         ram.loadBE idx
 
       size <== sz .>. laneSize ? (sz - laneSize, 0)
       index <== idx + 1
 
-      when (inv isPut .||. size.val === 0) do
+      when (inv isPut .||. sz .<=. laneSize) do
         channelA.consume
 
     when (queue.canDeq .&&. channelD.canPut) do
