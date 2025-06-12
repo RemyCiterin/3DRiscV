@@ -26,8 +26,8 @@ makeTLRAM config = do
   let laneLogSize :: TLSize = constant $ toInteger $ log2 $ valueOf @(LaneWidth p)
   ram :: RAMBE iw (LaneWidth p) <-
     case config.fileName of
-      Nothing -> makeDualRAMBE
-      Just name -> makeDualRAMInitBE name
+      Nothing -> makeRAMBE
+      Just name -> makeRAMInitBE name
 
   -- Queue between the stages 1 and 2
   queue :: Queue (ChannelD p) <- makePipelineQueue 1
