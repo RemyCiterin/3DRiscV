@@ -10,10 +10,12 @@ flag enable-namer-plugin
 executable blarney-test
   main-is: Main.hs
   other-modules:
+    Blarney.Sharing,
     Blarney.Arbiter,
     Blarney.Ehr,
     TileLink.Types,
     TileLink.Utils,
+    TileLink.GetPut,
     TileLink.RAM
     TileLink,
     AXI4,

@@ -54,12 +54,25 @@ type TLPerm =
     "Branch" ::: ()
   ]
 
+formatTLPerm :: TLPerm -> Format
+formatTLPerm perm =
+  formatCond (perm `is` #Nothing) (fshow "Nothing") <>
+  formatCond (perm `is` #Branch) (fshow "Branch") <>
+  formatCond (perm `is` #Trunk) (fshow "Trunk") <>
+  formatCond (perm `is` #Dirty) (fshow "Dirty")
+
 type Grow =
   TaggedUnion [
     "NtoB" ::: (),
     "NtoT" ::: (),
     "BtoT" ::: ()
   ]
+
+formatGrow :: Grow -> Format
+formatGrow perm =
+  formatCond (perm `is` #NtoB) (fshow "NtoB") <>
+  formatCond (perm `is` #NtoT) (fshow "NtoT") <>
+  formatCond (perm `is` #BtoT) (fshow "BtoT")
 
 type Reduce =
   TaggedUnion [
@@ -71,12 +84,27 @@ type Reduce =
     "NtoN" ::: ()
   ]
 
+formatReduce :: Reduce -> Format
+formatReduce perm =
+  formatCond (perm `is` #TtoB) (fshow "TtoB") <>
+  formatCond (perm `is` #TtoN) (fshow "TtoN") <>
+  formatCond (perm `is` #BtoB) (fshow "BtoB") <>
+  formatCond (perm `is` #TtoT) (fshow "TtoT") <>
+  formatCond (perm `is` #BtoN) (fshow "BtoN") <>
+  formatCond (perm `is` #NtoN) (fshow "NtoN")
+
 type Cap =
   TaggedUnion [
     "T" ::: (),
     "B" ::: (),
     "N" ::: ()
   ]
+
+formatCap :: Cap -> Format
+formatCap perm =
+  formatCond (perm `is` #T) (fshow "T") <>
+  formatCond (perm `is` #B) (fshow "B") <>
+  formatCond (perm `is` #N) (fshow "N")
 
 type OpcodeA =
   TaggedUnion [
@@ -86,11 +114,32 @@ type OpcodeA =
     "Get" ::: ()
   ]
 
+formatOpcodeA :: OpcodeA -> Format
+formatOpcodeA opcode =
+  formatCond (opcode `is` #Get) (fshow "Get") <>
+  formatCond (opcode `is` #PutData) (fshow "PutData") <>
+  formatCond
+    (opcode `is` #AcquireBlock)
+    (fshow "AcquireBlock<" <> formatGrow (untag #AcquireBlock opcode) <> fshow ">") <>
+  formatCond
+    (opcode `is` #AcquirePerms)
+    (fshow "AcquirePerms<" <> formatGrow (untag #AcquirePerms opcode) <> fshow ">")
+
 type OpcodeB =
   TaggedUnion [
     "ProbePerms" ::: Cap,
     "ProbeBlock" ::: Cap
   ]
+
+
+formatOpcodeB :: OpcodeB -> Format
+formatOpcodeB opcode =
+  formatCond
+    (opcode `is` #ProbePerms)
+    (fshow "ProbePerms<" <> formatCap (untag #ProbePerms opcode) <> fshow ">") <>
+  formatCond
+    (opcode `is` #ProbeBlock)
+    (fshow "ProbeBlock<" <> formatCap (untag #ProbeBlock opcode) <> fshow ">")
 
 type OpcodeC =
   TaggedUnion [
@@ -100,6 +149,21 @@ type OpcodeC =
     "ReleaseData" ::: Reduce
   ]
 
+formatOpcodeC :: OpcodeC -> Format
+formatOpcodeC opcode =
+  formatCond
+    (opcode `is` #ProbeAck)
+    (fshow "ProbeAck<" <> formatReduce (untag #ProbeAck opcode) <> fshow ">") <>
+  formatCond
+    (opcode `is` #ProbeAckData)
+    (fshow "ProbeAckData<" <> formatReduce (untag #ProbeAckData opcode) <> fshow ">") <>
+  formatCond
+    (opcode `is` #Release)
+    (fshow "Release<" <> formatReduce (untag #Release opcode) <> fshow ">") <>
+  formatCond
+    (opcode `is` #ReleaseData)
+    (fshow "ReleaseData<" <> formatReduce (untag #ReleaseData opcode) <> fshow ">")
+
 type OpcodeD =
   TaggedUnion [
     "Grant" ::: Cap,
@@ -108,6 +172,18 @@ type OpcodeD =
     "AccessAckData" ::: (),
     "AccessAck" ::: ()
   ]
+
+formatOpcodeD :: OpcodeD -> Format
+formatOpcodeD opcode =
+  formatCond (opcode `is` #ReleaseAck) (fshow "ReleaseAck") <>
+  formatCond (opcode `is` #AccessAck) (fshow "AccessAck") <>
+  formatCond (opcode `is` #AccessAckData) (fshow "AccessAckData") <>
+  formatCond
+    (opcode `is` #Grant)
+    (fshow "Grant<" <> formatCap (untag #Grant opcode) <> fshow ">") <>
+  formatCond
+    (opcode `is` #GrantData)
+    (fshow "GrantData<" <> formatCap (untag #GrantData opcode) <> fshow ">")
 
 data ChannelA_Flit aw dw sw ow =
   ChannelA
@@ -121,6 +197,7 @@ data ChannelA_Flit aw dw sw ow =
 
 type KnownNat_ChannelA aw dw sw ow =
   (KnownNat aw, KnownNat dw, KnownNat (8*dw), KnownNat sw, KnownNat ow)
+
 
 instance KnownNat_ChannelA aw dw sw ow => Bits (ChannelA_Flit aw dw sw ow)
 
@@ -163,7 +240,7 @@ instance KnownNat_ChannelD dw sw ow iw => Bits (ChannelD_Flit dw sw ow iw)
 data ChannelE_Flit iw =
   ChannelE
     { sink :: Bit iw }
-    deriving(Generic, Bits)
+    deriving(Generic, Bits, FShow)
 
 
 type ChannelA (p :: TLParamsKind) =

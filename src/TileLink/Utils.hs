@@ -20,7 +20,7 @@ instance Connectable (TLMaster p) (TLSlave p) where
 
 hasDataA :: OpcodeA -> Bit 1
 hasDataA opcode =
-  opcode `is` #Put
+  opcode `is` #PutData
 
 hasDataB :: OpcodeB -> Bit 1
 hasDataB opcode = false
@@ -32,6 +32,82 @@ hasDataC opcode =
 hasDataD :: OpcodeD -> Bit 1
 hasDataD opcode =
   opcode `is` #GrantData .||. opcode `is` #AccessAckData
+
+instance KnownNat_ChannelA aw dw sw ow => FShow (ChannelA_Flit aw dw sw ow) where
+  fshow msg =
+      formatOpcodeA msg.opcode <> fshow "{" <>
+      formatCond (hasDataA msg.opcode) formatData <>
+      formatCond (inv (hasDataA msg.opcode)) formatNoData <>
+      fshow " }"
+    where
+      address = fshow " address= 0x" <> formatHex 0 msg.address
+      source = fshow " source= " <> formatDec 0 msg.source
+      size = fshow " size= " <> formatDec 0 ((1 :: TLSize) .<<. msg.size)
+
+      lane = [(unsafeSlice (i*8+7,i*8) msg.lane,unsafeAt i msg.mask) | i <- [0..valueOf @dw - 1]]
+
+      formatLane :: [(Bit 8,Bit 1)] -> Format
+      formatLane ((byte,en) : xs) =
+        formatLane xs <> formatCond en (formatHex 2 byte) <> formatCond (inv en) (fshow "XX")
+      formatLane [] = fshow " lane= 0x"
+
+      sep :: Format
+      sep = fshow ","
+
+      formatData = source <> sep <> size <> address <> sep <> formatLane lane
+      formatNoData = source <> sep <> size <> address
+
+instance (KnownNat aw, KnownNat sw, KnownNat ow) => FShow (ChannelB_Flit aw sw ow) where
+  fshow msg =
+      formatOpcodeB msg.opcode <> fshow "{" <>
+      formatContent <>
+      fshow " }"
+    where
+      address = fshow " address= 0x" <> formatHex 0 msg.address
+      source = fshow " source= " <> formatDec 0 msg.source
+      size = fshow " size= " <> formatDec 0 ((1 :: TLSize) .<<. msg.size)
+
+      sep :: Format
+      sep = fshow ","
+
+      formatContent = source <> sep <> size <> address
+
+instance KnownNat_ChannelC aw dw sw ow => FShow (ChannelC_Flit aw dw sw ow) where
+  fshow msg =
+      formatOpcodeC msg.opcode <> fshow "{" <>
+      formatCond (hasDataC msg.opcode) formatData <>
+      formatCond (inv (hasDataC msg.opcode)) formatNoData <>
+      fshow " }"
+    where
+      address = fshow " address= 0x" <> formatHex 0 msg.address
+      source = fshow " source= " <> formatDec 0 msg.source
+      size = fshow " size= " <> formatDec 0 ((1 :: TLSize) .<<. msg.size)
+      lane = fshow " lane= 0x" <> formatHex 0 msg.lane
+
+      sep :: Format
+      sep = fshow ","
+
+      formatData = source <> sep <> size <> address <> sep <> lane
+      formatNoData = source <> sep <> size <> address
+
+
+instance KnownNat_ChannelD dw sw ow iw => FShow (ChannelD_Flit dw sw ow iw) where
+  fshow msg =
+      formatOpcodeD msg.opcode <> fshow "{" <>
+      formatCond (hasDataD msg.opcode) formatData <>
+      formatCond (inv (hasDataD msg.opcode)) formatNoData <>
+      fshow " }"
+    where
+      size = fshow " size= " <> formatDec 0 ((1 :: TLSize) .<<. msg.size)
+      source = fshow " source= " <> formatDec 0 msg.source
+      lane = fshow " lane= 0x" <> formatHex 0 msg.lane
+      sink = fshow " sink= " <> formatDec 0 msg.sink
+
+      sep :: Format
+      sep = fshow ","
+
+      formatData = source <> sep <> sink <> sep <> size <> sep <> lane
+      formatNoData = source <> sep <> sink <> sep <> size
 
 -- A source with meta informations about the size of the remaining lanes,
 -- and tell if the message is the last one of the burst. The offset is the
@@ -108,47 +184,3 @@ getLaneMask address logSize =
     let offset :: Bit sz = truncateCast address in
     let size :: TLSize = 1 .<<. logSize in
     ((1 .<<. size) - 1) .<<. offset
-
-
--- Transform a sink into multiple shared sink, with a synchronisation such that
--- only one actor can put into the sink per cycle
-makeSharedSink ::
-  Int -> Sink t -> Module [Sink t]
-makeSharedSink size sink = do
-  doPut :: [Wire (Bit 1)] <- replicateM size (makeWire false)
-
-  let canPut i =
-        if i == 0
-           then sink.canPut
-           else inv (doPut!(i-1)).val .&&. canPut (i-1)
-
-  return
-    [
-      Sink
-        { canPut= canPut i
-        , put= \x -> do
-            (doPut!i) <== true
-            sink.put x }
-    | i <- [0..size-1]]
-
--- Transform a source into multiple shared sourecs, with a synchronisation such that
--- only one actor can consume from this source per cycle
-makeSharedSource ::
-  Int -> Source t -> Module [Source t]
-makeSharedSource size source = do
-  doPeek :: [Wire (Bit 1)] <- replicateM size (makeWire false)
-
-  let canPeek i =
-        if i == 0
-           then source.canPeek
-           else inv (doPeek!(i-1)).val .&&. canPeek (i-1)
-
-  return
-    [
-      Source
-        { canPeek= canPeek i
-        , peek= source.peek
-        , consume= do
-            source.consume
-            (doPeek!i) <== true}
-    | i <- [0..size-1]]

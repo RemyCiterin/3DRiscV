@@ -3,7 +3,7 @@
 
 module TileLink where
 
-import Blarney hiding(Vercor)
+import Blarney
 import Blarney.SourceSink
 import Blarney.Connectable
 import Blarney.Queue
@@ -12,155 +12,9 @@ import Blarney.Ehr
 import Blarney.TaggedUnion
 import Blarney.Arbiter
 
-import Data.Proxy
 
 import TileLink.Utils
 import TileLink.Types
-
-data GetMaster iw (p :: TLParamsKind) =
-  GetMaster
-    { canGet :: Bit 1
-    , get :: Bit iw -> Bit (AddrWidth p) -> Bit (SizeWidth p) -> Action ()
-    , canGetAck :: Bit 1
-    , getAck :: Action ()
-    , active :: Bit 1
-    , address :: Bit (AddrWidth p)
-    , index :: Bit iw }
-
-makeGetMaster ::
-  forall iw p. (KnownNat iw, KnownTLParams p)
-    => Bit (SourceWidth p)
-    -> ArbiterClient
-    -> RAMBE iw (LaneWidth p)
-    -> TLSlave p
-    -> Module (GetMaster iw p)
-makeGetMaster source arbiter ram slave = do
-  metaD <- makeMetaSourceD @p slave.channelD
-  let channelD = metaD.source
-
-  mask :: Reg (Bit (LaneWidth p)) <- makeReg dontCare
-  index :: Reg (Bit iw) <- makeReg dontCare
-  valid :: Reg (Bit 1) <- makeReg false
-  last :: Reg (Bit 1) <- makeReg false
-
-  request :: Reg (Bit iw, Bit (AddrWidth p)) <- makeReg dontCare
-
-  always do
-    when (channelD.canPeek) do
-      let msg = channelD.peek
-      when (msg.opcode `is` #AccessAckData .&&. msg.source === source) do
-        arbiter.request
-
-      when (arbiter.grant) do
-        channelD.consume
-
-        ram.storeBE index.val mask.val msg.lane
-        index <== index.val + 1
-        last <== metaD.last
-
-  let init opcode idx addr size = do
-        slave.channelA.put
-          ChannelA
-            { opcode= opcode
-            , lane= dontCare
-            , mask= getLaneMask @p addr size
-            , address= addr
-            , size= size
-            , source= source}
-        mask <== getLaneMask @p addr size
-        request <== (idx,addr)
-        valid <== true
-        index <== idx
-
-  return GetMaster
-    { get= \ idx addr size -> do
-        init (tag #Get ()) idx addr size
-    , getAck= do
-        valid <== false
-        last <== false
-    , canGet= slave.channelA.canPut .&&. inv valid.val
-    , canGetAck= last.val
-    , active= valid.val
-    , address= request.val.snd
-    , index= request.val.fst}
-
-data PutMaster iw (p :: TLParamsKind) =
-  PutMaster
-    { canPut :: Bit 1
-    , put :: Bit iw -> Bit (AddrWidth p) -> Bit (SizeWidth p) -> Action ()
-    , canPutAck :: Bit 1
-    , putAck :: Action ()
-    , active :: Bit 1
-    , address :: Bit (AddrWidth p)
-    , index :: Bit iw }
-
-makePutMaster ::
-  forall iw p. (KnownNat iw, KnownTLParams p)
-    => Bit (SourceWidth p)
-    -> ArbiterClient
-    -> RAMBE iw (LaneWidth p)
-    -> TLSlave p
-    -> Module (PutMaster iw p)
-makePutMaster source arbiter ram slave = do
-  let laneSize :: TLSize = constant $ toInteger $ valueOf @(LaneWidth p)
-  metaD <- makeMetaSourceD @p slave.channelD
-  let channelD = metaD.source
-
-  buffer :: Ehr (Bit (8 * LaneWidth p)) <- makeEhr 2 dontCare
-  updBuf :: Reg (Bit 1) <- makeDReg false
-
-  message :: Reg (ChannelA p) <- makeReg dontCare
-  valid :: Reg (Bit 1) <- makeReg false
-
-  size :: Ehr TLSize <- makeEhr 2 0
-  index :: Ehr (Bit iw) <- makeEhr 2 dontCare
-
-  request :: Reg (Bit iw, Bit (AddrWidth p)) <- makeReg dontCare
-
-  always do
-    when (size.read 1 =!= 0) do
-      arbiter.request
-    when (arbiter.grant) do
-      ram.loadBE (index.read 1)
-      updBuf <== true
-
-    when (updBuf.val) do
-      buffer.write 0 ram.outBE
-
-    when (size.read 0 =!= 0 .&&. slave.channelA.canPut) do
-      let msg = (message.val { lane= buffer.read 1 } :: ChannelA p)
-      slave.channelA.put msg
-
-      let newSize = size.read 0 .>=. laneSize ? (size.read 0 - laneSize,0)
-      index.write 0 (index.read 0 + 1)
-      size.write 0 newSize
-
-  let init idx addr logSize = do
-        message <==
-          ChannelA
-            { opcode= tag #PutData ()
-            , lane= dontCare
-            , mask= getLaneMask @p addr logSize
-            , address= addr
-            , source= source
-            , size= logSize}
-        size.write 0 (1 .<<. logSize)
-        request <== (idx,addr)
-        index.write 0 idx
-        valid <== true
-
-  return PutMaster
-    { put= init
-    , putAck= do
-        channelD.consume
-        valid <== false
-    , canPut= inv valid.val
-    , canPutAck=
-        channelD.canPeek .&&. channelD.peek.opcode `is` #AccessAck .&&.
-        channelD.peek.source === source .&&. size.read 0 === 0
-    , active= valid.val
-    , address= request.val.snd
-    , index= request.val.fst}
 
 
 data AcquireMaster iw (p :: TLParamsKind) =
@@ -345,44 +199,79 @@ makeMshrMaster sources logSize arbiter ram slave = do
     , searchIndex }
 
 
--- data BurstFSM iw (p :: TLParamsKind) =
---   BurstFSM
---     { canStart :: Bit 1
---     , start :: OpcodeC -> Bit iw -> Bit (AddrWidth p) -> Action ()
---     , canStop :: Bit 1
---     , stop :: Action () }
---
--- makeBurstFSM :: forall iw p.
---   (KnownNat iw, KnownTLParams p)
---     => Bit (SourceWidth p)
---     -> TLSlave p
---     -> ArbiterClient
---     -> RAMBE iw (LaneWidth p)
---     -> Module (BurstFSM iw p)
--- makeBurstFSM slave arbiter ram = do
---   msg :: Reg (ChannelC p) <- makeReg dontCare
---   let opcode :: OpcodeC = msg.val.opcode
---
---   metaD <- makeMetaSourceD slave.channelD
---   let channelD = metaD.source
---
---   let isRelease =
---         opcode `is` #ReleaseData .||. opcode `is` #Release
---
---   let releaseAck =
---         channelD.canPeek
---         .&&. channelD.peek.opcode `is` #ReleaseAck
---         .&&. channelD.peek.source === source
---
---   -- queue between stage 1 and 2
---   queue :: Queue () <- makePipelineQueue 1
---
---   always do
---     when (queue.notFull .&&. opcode `is` #ReleaseData) do
---       arbiter.request
---
---     when (queue.notFull .&&. opcode `is` #ProbeAckData) do
---       arbiter.request
+data BurstFSM iw (p :: TLParamsKind) =
+  BurstFSM
+    { canStart :: Bit 1
+    , start :: OpcodeC -> Bit iw -> Bit (AddrWidth p) -> Bit (SizeWidth p) -> Action ()
+    , canStop :: Bit 1
+    , stop :: Action () }
+
+makeBurstFSM :: forall iw p.
+  (KnownNat iw, KnownTLParams p)
+    => Bit (SourceWidth p)
+    -> TLSlave p
+    -> ArbiterClient
+    -> RAMBE iw (LaneWidth p)
+    -> Module (BurstFSM iw p)
+makeBurstFSM source slave arbiter ram = do
+  let laneSize :: TLSize = constant $ toInteger $ valueOf @(LaneWidth p)
+  msg :: Reg (ChannelC p) <- makeReg dontCare
+  let opcode :: OpcodeC = msg.val.opcode
+
+  size :: Reg TLSize <- makeReg 0
+  index :: Reg (Bit iw) <- makeReg dontCare
+  valid :: Reg (Bit 1) <- makeReg false
+
+  let isRelease =
+        opcode `is` #ReleaseData .||. opcode `is` #Release
+
+  let releaseAck =
+        slave.channelD.canPeek
+        .&&. slave.channelD.peek.opcode `is` #ReleaseAck
+        .&&. slave.channelD.peek.source === source
+
+  -- queue between stage 1 and 2
+  queue :: Queue () <- makePipelineQueue 1
+
+  always do
+    when (size.val =!= 0 .&&. queue.notFull .&&. hasDataC opcode) do
+      size <== size.val .>=. laneSize ? (size.val - laneSize, 0)
+      index <== index.val + 1
+      ram.loadBE index.val
+      arbiter.request
+      queue.enq ()
+
+    when (queue.canDeq .&&. hasDataC opcode .&&. slave.channelC.canPut) do
+      slave.channelC.put (msg.val{lane= ram.outBE} :: ChannelC p)
+      queue.deq
+
+    when (slave.channelC.canPut .&&. size.val =!= 0 .&&. inv (hasDataC opcode)) do
+      slave.channelC.put msg.val
+      size <== 0
+
+  return
+    BurstFSM
+      { canStart= inv valid.val .&&. inv queue.canDeq
+      , start= \ op idx addr logSize -> do
+          msg <==
+            ChannelC
+              { opcode= op
+              , address= addr
+              , size= logSize
+              , source= source
+              , lane= dontCare}
+          size <== 1 .<<. laneSize
+          valid <== true
+          index <== idx
+          return ()
+      , canStop=
+          valid.val .&&. size.val === 0
+          .&&. (releaseAck .||. inv isRelease)
+      , stop= do
+          when (isRelease) do
+            slave.channelD.consume
+          valid <== false
+          return ()}
 
 data ProbeFSM iw (p :: TLParamsKind) =
   ProbeFSM
