@@ -14,6 +14,7 @@ executable blarney-test
     Blarney.Ehr,
     TileLink.Types,
     TileLink.Utils,
+    TileLink.RAM
     TileLink,
     AXI4,
     Utils,

@@ -18,6 +18,7 @@ import Alu
 
 import TileLink.Utils
 import TileLink.Types
+import TileLink.RAM
 
 displayAscii :: Bit 8 -> Action ()
 displayAscii term =
