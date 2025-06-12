@@ -1,4 +1,4 @@
-module Arbiter where
+module Blarney.Arbiter where
 
 import Blarney
 import Blarney.Option

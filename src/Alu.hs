@@ -2,10 +2,10 @@ module Alu where
 
 import Blarney
 import Blarney.Option
+import Blarney.Ehr
 
 import Instr
 import Utils
-import Ehr
 
 alu :: ExecInput -> ExecOutput
 alu query =

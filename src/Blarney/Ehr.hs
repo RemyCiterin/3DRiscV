@@ -1,4 +1,4 @@
-module Ehr where
+module Blarney.Ehr where
 
 import Blarney
 import Data.Proxy

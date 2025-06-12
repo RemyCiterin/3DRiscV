@@ -10,12 +10,14 @@ flag enable-namer-plugin
 executable blarney-test
   main-is: Main.hs
   other-modules:
-    Ehr,
+    Blarney.Arbiter,
+    Blarney.Ehr,
+    TileLink.Types,
+    TileLink.Utils,
     TileLink,
     AXI4,
     Utils,
     Alu,
-    Arbiter,
     Cache,
     CPU,
     Instr,
@@ -47,6 +49,8 @@ executable blarney-test
     RebindableSyntax
     RecursiveDo
     TypeFamilies
+    UndecidableInstances
+    AllowAmbiguousTypes
   ghc-options:
     -fno-cse
     -fno-full-laziness

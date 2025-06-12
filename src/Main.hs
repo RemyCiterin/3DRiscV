@@ -3,11 +3,11 @@ import Blarney.Queue
 import Blarney.Option
 import Blarney.TaggedUnion
 import System.Environment
-import Ehr
+import Blarney.Arbiter
+import Blarney.Ehr
 
 import Utils
 
-import Arbiter
 
 import TileLink
 

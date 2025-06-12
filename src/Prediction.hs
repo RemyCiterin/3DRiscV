@@ -1,9 +1,9 @@
 module Prediction where
 
-import Ehr
 import Instr
 import Utils
 import Blarney
+import Blarney.Ehr
 import Blarney.Queue
 import Blarney.Option
 import Data.Proxy

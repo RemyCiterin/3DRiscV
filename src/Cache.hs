@@ -1,14 +1,14 @@
 module Cache where
 
-import Ehr
 import Blarney
+import Blarney.Ehr
 import Blarney.Queue
 import Blarney.Option
 import Blarney.ClientServer
 import Blarney.SourceSink
 import Blarney.Stream
 import Blarney.Stmt
-import Arbiter
+import Blarney.Arbiter
 import Utils
 
 -- address of a cache line

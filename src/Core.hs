@@ -1,6 +1,7 @@
 module Core where
 
 import Blarney
+import Blarney.Ehr
 import Blarney.Queue
 import Blarney.Option
 import Blarney.Stream
@@ -10,11 +11,13 @@ import Blarney.Connectable
 
 import Prediction
 import TileLink
-import Cache
 import Utils
 import Instr
 import Alu
-import Ehr
+
+
+import TileLink.Utils
+import TileLink.Types
 
 displayAscii :: Bit 8 -> Action ()
 displayAscii term =
@@ -68,7 +71,8 @@ makeFetch ::
   Stream Redirection ->
   Module (TLMaster TLConfig, Stream FetchOutput, Training, Training)
 makeFetch redirection = do
-  bpred :: BranchPredictor HistSize RasSize EpochWidth <- withName "bpred" $ makeBranchPredictor 10
+  bpred :: BranchPredictor HistSize RasSize EpochWidth <-
+    withName "bpred" $ makeBranchPredictor 10
 
   channelA :: Queue (ChannelA TLConfig) <- makeBypassQueue
   channelD :: Queue (ChannelD TLConfig) <- makeSizedQueue 4
@@ -421,41 +425,13 @@ makeCore = do
 
   return (imaster, dmaster)
 
-makeMem :: Stream CpuRequest -> Module (Stream CpuResponse)
-makeMem stream = do
-  ram :: RAMBE 16 4 <- makeDualRAMForwardInitBE "Mem.hex"
-  responseQ :: Queue CpuResponse <- makeQueue
-  queue :: Queue () <- makePipelineQueue 1
-
-  cycle :: Reg (Bit 32) <- makeReg 0
-
-  always do
-    cycle <== cycle.val + 1
-
-    when (stream.canPeek .&&. queue.notFull) do
-      let (msb, lsb) = split (slice @31 @2 (stream.peek.addr - 0x80000000))
-
-      if stream.peek.read then do
-        ram.loadBE lsb
-      else do
-        when (msb === 0) do
-          ram.storeBE lsb stream.peek.mask stream.peek.beat
-      stream.consume
-      queue.enq ()
-
-    when (queue.canDeq .&&. responseQ.notFull) do
-      responseQ.enq CpuResponse{beat= ram.outBE}
-      queue.deq
-
-  return (toStream responseQ)
-
 makeTestCore :: Module ()
 makeTestCore = mdo
   let config =
         TLRAMConfig
           { fileName= Just "Mem.hex"
           , lowerBound= 0x80000000
-          , bypassChannelA= True
+          , bypassChannelA= False
           , bypassChannelD= True
           , sink= 0 }
   islave <- makeTLRAM @16 @TLConfig config
@@ -471,7 +447,7 @@ makeFakeTestCore _ = mdo
         TLRAMConfig
           { fileName= Just "Mem.hex"
           , lowerBound= 0x80000000
-          , bypassChannelA= True
+          , bypassChannelA= False
           , bypassChannelD= True
           , sink= 0 }
   islave <- withName "imem" $ makeTLRAM @16 @TLConfig config
