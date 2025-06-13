@@ -132,7 +132,7 @@ makeMetaSource getSize hasData source laneSize = do
 
   let msg = source.peek
   let size = first.val ? (1 .<<. getSize msg, sizeReg.val)
-  let last = size .<. fromInteger laneSize .||. inv (hasData msg)
+  let last = size .<=. fromInteger laneSize .||. inv (hasData msg)
 
   return
     MetaSource
@@ -142,7 +142,7 @@ makeMetaSource getSize hasData source laneSize = do
             , peek= source.peek
             , consume= do
                 source.consume
-                sizeReg <== size - fromInteger laneSize
+                sizeReg <== size .<. fromInteger laneSize ? (0, size - fromInteger laneSize)
                 first <== last
             }
       , offset= size - (1 .<<. getSize msg)

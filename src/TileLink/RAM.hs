@@ -51,14 +51,6 @@ makeTLRAM config = do
       let idx = size.val === 0 ? (truncate addr, index.val)
       let msb :: Bit (AddrWidth p - iw) = truncateLSBCast addr
 
-      queue.enq
-        ChannelD
-          { opcode= isPut ? (tag #AccessAck (), tag #AccessAckData ())
-          , source= channelA.peek.source
-          , size= channelA.peek.size
-          , lane= dontCare
-          , sink= config.sink }
-
       if isPut then do
         when (msb === 0) do
           ram.storeBE idx channelA.peek.mask channelA.peek.lane
@@ -68,9 +60,18 @@ makeTLRAM config = do
       size <== sz .>. laneSize ? (sz - laneSize, 0)
       index <== idx + 1
 
-      when (inv isPut .||. sz .<=. laneSize) do
-        --display (fshow channelA.peek)
+      when (isPut .||. sz .<=. laneSize) do
+        display (fshow channelA.peek)
         channelA.consume
+
+      when (inv isPut .||. sz .<=. laneSize) do
+        queue.enq
+          ChannelD
+            { opcode= isPut ? (tag #AccessAck (), tag #AccessAckData ())
+            , source= channelA.peek.source
+            , size= channelA.peek.size
+            , lane= dontCare
+            , sink= config.sink }
 
     when (queue.canDeq .&&. channelD.canPut) do
       channelD.put (queue.first{lane= ram.outBE} :: ChannelD p)

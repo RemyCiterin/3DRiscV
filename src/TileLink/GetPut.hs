@@ -4,10 +4,13 @@ import Blarney
 import Blarney.Queue
 import Blarney.SourceSink
 import Blarney.TaggedUnion
+import Blarney.Connectable
 import Blarney.Arbiter
+import Blarney.Stmt
 
 import TileLink.Utils
 import TileLink.Types
+import TileLink.RAM
 
 data GetMaster iw (p :: TLParamsKind) =
   GetMaster
@@ -50,10 +53,11 @@ makeGetMaster source arbiter ram slave = do
         index <== index.val + 1
         last <== metaD.last
 
-  let init opcode idx addr size = do
+  return GetMaster
+    { get= \ idx addr size -> do
         slave.channelA.put
           ChannelA
-            { opcode= opcode
+            { opcode= tag #Get ()
             , lane= dontCare
             , mask= getLaneMask @p addr size
             , address= addr
@@ -63,10 +67,6 @@ makeGetMaster source arbiter ram slave = do
         request <== (idx,addr)
         valid <== true
         index <== idx
-
-  return GetMaster
-    { get= \ idx addr size -> do
-        init (tag #Get ()) idx addr size
     , getAck= do
         valid <== false
         last <== false
@@ -74,7 +74,7 @@ makeGetMaster source arbiter ram slave = do
     , canGetAck= last.val
     , active= valid.val
     , address= request.val.snd
-    , index= request.val.fst}
+    , index= request.val.fst }
 
 data PutMaster iw (p :: TLParamsKind) =
   PutMaster
@@ -145,3 +145,83 @@ makePutMaster source arbiter ram slave = do
     , active= valid.val
     , address= request.val.snd
     , index= request.val.fst}
+
+makeTestGetPut :: (Bit 1) -> Module (Bit 1)
+makeTestGetPut _ = do
+  let config =
+        TLRAMConfig
+          { lowerBound= 0x80000000
+          , bypassChannelA= False
+          , bypassChannelD= False
+          , sink= 0
+          , fileName= Just "Mem.hex" }
+  slave <- makeTLRAM @16 @(TLParams 32 4 4 8 8) config
+
+  queueA <- makeQueue
+  queueD <- makeQueue
+  let master :: TLMaster (TLParams 32 4 4 8 8) =
+        TLMaster
+          { channelA= toSource queueA
+          , channelB= nullSink
+          , channelC= nullSource
+          , channelD= toSink queueD
+          , channelE= nullSource }
+
+  makeConnection master slave
+
+  let slave :: TLSlave (TLParams 32 4 4 8 8) =
+        TLSlave
+          { channelA= toSink queueA
+          , channelB= nullSource
+          , channelC= nullSink
+          , channelD= toSource queueD
+          , channelE= nullSink }
+
+  ram :: RAMBE 10 4 <- makeDualRAMBE
+
+  getArbiter <- makeNullArbiter
+  putArbiter <- makeNullArbiter
+
+  getM <- makeGetMaster 0 getArbiter ram slave
+  putM <- makePutMaster 0 putArbiter ram slave
+
+  index :: Reg (Bit 10) <- makeReg 0
+  queue :: Queue (Bit 10) <- makePipelineQueue 1
+
+  always do
+    when (queue.canDeq) do
+      let idx = queue.first
+      display "index: " idx " value: 0x" (formatHex 8 ram.outBE)
+      queue.deq
+
+  runStmt do
+    action do
+      ram.storeBE 0 0b0100 0x00FF0000
+    action do
+      ram.loadBE index.val
+      queue.enq index.val
+    wait putM.canPut
+    action do
+      putM.put 0 0x80000002 1
+    wait putM.canPutAck
+    action do
+      putM.putAck
+
+    wait getM.canGet
+    action do
+      display "start get sequence"
+      getM.get 0 0x80000000 4
+
+    wait getM.canGetAck
+    action do
+      getM.getAck
+
+    while (index.val .<. 16) do
+      wait queue.notFull
+      action do
+        index <== index.val + 1
+        ram.loadBE index.val
+        queue.enq index.val
+
+  -- ensure the circuit is not optimized by yosys/nextpnr
+  return master.channelA.canPeek

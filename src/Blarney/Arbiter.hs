@@ -39,3 +39,12 @@ makeFairArbiter size = do
       request = do r <== 1,
       grant = untypedAt i grant
     } | (r,i) <- zip req [0..]]
+
+-- An arbiter that always accept requests
+makeNullArbiter :: Module ArbiterClient
+makeNullArbiter = do
+  wire <- makeWire false
+
+  return ArbiterClient
+    { request= wire <== true
+    , grant= wire.val }
