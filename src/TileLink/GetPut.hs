@@ -8,6 +8,7 @@ import Blarney.Connectable
 import Blarney.Arbiter
 import Blarney.Stmt
 
+import TileLink.Interconnect
 import TileLink.Utils
 import TileLink.Types
 import TileLink.RAM
@@ -19,6 +20,7 @@ data GetMaster iw (p :: TLParamsKind) =
     , canGetAck :: Bit 1
     , getAck :: Action ()
     , active :: Bit 1
+    , size :: Bit (SizeWidth p)
     , address :: Bit (AddrWidth p)
     , index :: Bit iw }
 
@@ -38,7 +40,7 @@ makeGetMaster source arbiter ram slave = do
   valid :: Reg (Bit 1) <- makeReg false
   last :: Reg (Bit 1) <- makeReg false
 
-  request :: Reg (Bit iw, Bit (AddrWidth p)) <- makeReg dontCare
+  request :: Reg (Bit iw, Bit (AddrWidth p), Bit (SizeWidth p)) <- makeReg dontCare
 
   always do
     when (channelD.canPeek) do
@@ -54,17 +56,18 @@ makeGetMaster source arbiter ram slave = do
         last <== metaD.last
 
   return GetMaster
-    { get= \ idx addr size -> do
+    { get= \ idx addr logSize -> do
+        dynamicAssert (addr .&. ((1 .<<. logSize) - 1) === 0) "unaligned address"
         slave.channelA.put
           ChannelA
             { opcode= tag #Get ()
             , lane= dontCare
-            , mask= getLaneMask @p addr size
+            , mask= getLaneMask @p addr logSize
             , address= addr
-            , size= size
+            , size= logSize
             , source= source}
-        mask <== getLaneMask @p addr size
-        request <== (idx,addr)
+        mask <== getLaneMask @p addr logSize
+        request <== (idx,addr,logSize)
         valid <== true
         index <== idx
     , getAck= do
@@ -73,8 +76,9 @@ makeGetMaster source arbiter ram slave = do
     , canGet= slave.channelA.canPut .&&. inv valid.val
     , canGetAck= last.val
     , active= valid.val
-    , address= request.val.snd
-    , index= request.val.fst }
+    , address= let (_,b,_) = request.val in b
+    , index= let (a,_,_) = request.val in a
+    , size= let (_,_,c) = request.val in c }
 
 data PutMaster iw (p :: TLParamsKind) =
   PutMaster
@@ -84,6 +88,7 @@ data PutMaster iw (p :: TLParamsKind) =
     , putAck :: Action ()
     , active :: Bit 1
     , address :: Bit (AddrWidth p)
+    , size :: Bit (SizeWidth p)
     , index :: Bit iw }
 
 makePutMaster ::
@@ -105,7 +110,7 @@ makePutMaster source arbiter ram slave = do
   size :: Reg TLSize <- makeReg 0
   index :: Reg (Bit iw) <- makeReg dontCare
 
-  request :: Reg (Bit iw, Bit (AddrWidth p)) <- makeReg dontCare
+  request :: Reg (Bit iw, Bit (AddrWidth p), Bit (SizeWidth p)) <- makeReg dontCare
 
   always do
     when (size.val =!= 0 .&&. queue.notFull) do
@@ -123,6 +128,7 @@ makePutMaster source arbiter ram slave = do
 
   return PutMaster
     { put= \ idx addr logSize -> do
+        dynamicAssert (addr .&. ((1 .<<. logSize) - 1) === 0) "unaligned address"
         message <==
           ChannelA
             { opcode= tag #PutData ()
@@ -131,8 +137,8 @@ makePutMaster source arbiter ram slave = do
             , address= addr
             , source= source
             , size= logSize}
+        request <== (idx,addr,logSize)
         size <== 1 .<<. logSize
-        request <== (idx,addr)
         valid <== true
         index <== idx
     , putAck= do
@@ -143,8 +149,9 @@ makePutMaster source arbiter ram slave = do
         channelD.canPeek .&&. channelD.peek.opcode `is` #AccessAck .&&.
         channelD.peek.source === source .&&. size.val === 0
     , active= valid.val
-    , address= request.val.snd
-    , index= request.val.fst}
+    , address= let (_,b,_) = request.val in b
+    , index= let (a,_,_) = request.val in a
+    , size= let (_,_,c) = request.val in c}
 
 makeTestGetPut :: (Bit 1) -> Module (Bit 1)
 makeTestGetPut _ = do
@@ -157,33 +164,29 @@ makeTestGetPut _ = do
           , fileName= Just "Mem.hex" }
   slave <- makeTLRAM @16 @(TLParams 32 4 4 8 8) config
 
-  queueA <- makeQueue
-  queueD <- makeQueue
-  let master :: TLMaster (TLParams 32 4 4 8 8) =
-        TLMaster
-          { channelA= toSource queueA
-          , channelB= nullSink
-          , channelC= nullSource
-          , channelD= toSink queueD
-          , channelE= nullSource }
+  let xbarconfig =
+        XBarConfig
+          { bce= True
+          , rootAddr= \ _ -> 0
+          , rootSink= \ _ -> 0
+          , rootSource= \ x -> x === 0 ? (0,1)
+          , bypassChannelA= False
+          , bypassChannelB= False
+          , bypassChannelC= False
+          , bypassChannelD= False
+          , bypassChannelE= False}
 
-  makeConnection master slave
+  ([master0], [slave0,slave1]) <- makeTLXBar @1 @2 @(TLParams 32 4 4 8 8) xbarconfig
 
-  let slave :: TLSlave (TLParams 32 4 4 8 8) =
-        TLSlave
-          { channelA= toSink queueA
-          , channelB= nullSource
-          , channelC= nullSink
-          , channelD= toSource queueD
-          , channelE= nullSink }
+  makeConnection master0 slave
 
   ram :: RAMBE 10 4 <- makeDualRAMBE
 
   getArbiter <- makeNullArbiter
   putArbiter <- makeNullArbiter
 
-  getM <- makeGetMaster 0 getArbiter ram slave
-  putM <- makePutMaster 0 putArbiter ram slave
+  getM <- makeGetMaster 0 getArbiter ram slave0
+  putM <- makePutMaster 1 putArbiter ram slave1
 
   index :: Reg (Bit 10) <- makeReg 0
   queue :: Queue (Bit 10) <- makePipelineQueue 1
@@ -198,11 +201,22 @@ makeTestGetPut _ = do
     action do
       ram.storeBE 0 0b0100 0x00FF0000
     action do
+      ram.storeBE 5 0b1111 0x12345678
+    action do
+      ram.storeBE 6 0b1111 0x87654321
+    action do
       ram.loadBE index.val
       queue.enq index.val
     wait putM.canPut
     action do
       putM.put 0 0x80000002 1
+    wait putM.canPutAck
+    action do
+      putM.putAck
+
+    wait putM.canPut
+    action do
+      putM.put 5 0x80000008 3
     wait putM.canPutAck
     action do
       putM.putAck
@@ -223,5 +237,5 @@ makeTestGetPut _ = do
         ram.loadBE index.val
         queue.enq index.val
 
-  -- ensure the circuit is not optimized by yosys/nextpnr
-  return master.channelA.canPeek
+  -- ensure the circuit is not remove by yosys/nextpnr
+  return master0.channelA.canPeek
