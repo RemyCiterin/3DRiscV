@@ -170,11 +170,11 @@ makeTestGetPut _ = do
           , rootAddr= \ _ -> 0
           , rootSink= \ _ -> 0
           , rootSource= \ x -> x === 0 ? (0,1)
-          , bypassChannelA= False
-          , bypassChannelB= False
-          , bypassChannelC= False
-          , bypassChannelD= False
-          , bypassChannelE= False}
+          , sizeChannelA= 2
+          , sizeChannelB= 2
+          , sizeChannelC= 2
+          , sizeChannelD= 2
+          , sizeChannelE= 2}
 
   ([master0], [slave0,slave1]) <- makeTLXBar @1 @2 @(TLParams 32 4 4 8 8) xbarconfig
 

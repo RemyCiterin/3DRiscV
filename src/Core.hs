@@ -90,7 +90,8 @@ makeFetch redirection = do
 
   queue :: Queue () <- makePipelineQueue 1
 
-  fetchQ :: Queue (Option (Bit 32, Bit 32, BPredState HistSize RasSize, Epoch)) <- makeSizedQueue 4
+  fetchQ :: Queue (Option (Bit 32, Bit 32, BPredState HistSize RasSize, Epoch)) <-
+    makeSizedQueue 4
 
   outputQ :: Queue FetchOutput <- makeQueue
 
@@ -334,7 +335,7 @@ makeCore = do
 
   redirectQ :: Queue Redirection <- withName "fetch" $ makeBypassQueue
 
-  window :: Queue DecodeOutput <- makeQueue
+  window :: Queue DecodeOutput <- makeSizedQueueCore 5
 
   (imaster, fetch, trainHit, trainMis) <- withName "fetch" $ makeFetch (toStream redirectQ)
   decode <- withName "decode" $ makeDecode fetch

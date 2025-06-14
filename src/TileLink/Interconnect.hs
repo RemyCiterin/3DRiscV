@@ -17,11 +17,11 @@ data XBarConfig n m p =
     , rootSource :: Bit (SourceWidth p) -> Bit (Log2 m)
     , rootSink :: Bit (SinkWidth p) -> Bit (Log2 n)
     , rootAddr :: Bit (AddrWidth p) -> Bit (Log2 m)
-    , bypassChannelA :: Bool
-    , bypassChannelB :: Bool
-    , bypassChannelC :: Bool
-    , bypassChannelD :: Bool
-    , bypassChannelE :: Bool }
+    , sizeChannelA :: Int
+    , sizeChannelB :: Int
+    , sizeChannelC :: Int
+    , sizeChannelD :: Int
+    , sizeChannelE :: Int }
 
 -- n is the number of masters, and m the number of slaves
 makeTLXBar :: forall n m p.
@@ -29,11 +29,11 @@ makeTLXBar :: forall n m p.
     => XBarConfig n m p
     -> Module ([TLMaster p], [TLSlave p])
 makeTLXBar config = do
-  queueA :: Queue (ChannelA p) <- if config.bypassChannelA then makeBypassQueue else makeQueue
-  queueB :: Queue (ChannelB p) <- if config.bypassChannelB then makeBypassQueue else makeQueue
-  queueC :: Queue (ChannelC p) <- if config.bypassChannelC then makeBypassQueue else makeQueue
-  queueD :: Queue (ChannelD p) <- if config.bypassChannelD then makeBypassQueue else makeQueue
-  queueE :: Queue (ChannelE p) <- if config.bypassChannelE then makeBypassQueue else makeQueue
+  queueA :: Queue (ChannelA p) <- buildQueue config.sizeChannelA
+  queueB :: Queue (ChannelB p) <- buildQueue config.sizeChannelB
+  queueC :: Queue (ChannelC p) <- buildQueue config.sizeChannelC
+  queueD :: Queue (ChannelD p) <- buildQueue config.sizeChannelD
+  queueE :: Queue (ChannelE p) <- buildQueue config.sizeChannelE
 
   let laneSize :: TLSize = constant (toInteger (valueOf @(LaneWidth p)))
 
@@ -132,3 +132,8 @@ makeTLXBar config = do
         , channelE= sinkE!i}
 
     | i <- [0..toInteger $ valueOf @m - 1]])
+  where
+    buildQueue 0 = makeBypassQueue
+    buildQueue 2 = makeQueue
+    buildQueue 1 = makePipelineQueue 1
+    buildQueue n = makeSizedQueueCore n

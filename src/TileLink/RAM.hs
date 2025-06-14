@@ -61,7 +61,7 @@ makeTLRAM config = do
       index <== idx + 1
 
       when (isPut .||. sz .<=. laneSize) do
-        display (fshow channelA.peek)
+        --display (fshow channelA.peek)
         channelA.consume
 
       when (inv isPut .||. sz .<=. laneSize) do
