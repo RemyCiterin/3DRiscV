@@ -235,19 +235,21 @@ makeBurstFSM source slave arbiter ram = do
 
   always do
     when (size.val =!= 0 .&&. queue.notFull .&&. hasDataC opcode) do
+      if hasDataC opcode then do
+        arbiter.request
+      else do
+        slave.channelC.put msg.val
+        size <== 0
+
+    when (arbiter.grant) do
       size <== size.val .>=. laneSize ? (size.val - laneSize, 0)
       index <== index.val + 1
       ram.loadBE index.val
-      arbiter.request
       queue.enq ()
 
-    when (queue.canDeq .&&. hasDataC opcode .&&. slave.channelC.canPut) do
+    when (queue.canDeq .&&. slave.channelC.canPut) do
       slave.channelC.put (msg.val{lane= ram.outBE} :: ChannelC p)
       queue.deq
-
-    when (slave.channelC.canPut .&&. size.val =!= 0 .&&. inv (hasDataC opcode)) do
-      slave.channelC.put msg.val
-      size <== 0
 
   return
     BurstFSM
@@ -259,19 +261,17 @@ makeBurstFSM source slave arbiter ram = do
               , address= addr
               , size= logSize
               , source= source
-              , lane= dontCare}
+              , lane= dontCare }
           size <== 1 .<<. laneSize
           valid <== true
           index <== idx
-          return ()
       , canStop=
           valid.val .&&. size.val === 0
           .&&. (releaseAck .||. inv isRelease)
       , stop= do
-          when (isRelease) do
+          when isRelease do
             slave.channelD.consume
-          valid <== false
-          return ()}
+          valid <== false }
 
 data ProbeFSM iw (p :: TLParamsKind) =
   ProbeFSM
