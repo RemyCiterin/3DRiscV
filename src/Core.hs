@@ -15,7 +15,7 @@ import Utils
 import Instr
 import Alu
 
-
+import TileLink.UncoherentBCache
 import TileLink.Utils
 import TileLink.Types
 import TileLink.RAM
@@ -75,15 +75,17 @@ makeFetch redirection = do
   bpred :: BranchPredictor HistSize RasSize EpochWidth <-
     withName "bpred" $ makeBranchPredictor 10
 
-  channelA :: Queue (ChannelA TLConfig) <- makeBypassQueue
-  channelD :: Queue (ChannelD TLConfig) <- makeSizedQueue 4
-  let master =
-        TLMaster
-          { channelA=toSource channelA
-          , channelB=nullSink
-          , channelC=nullSource
-          , channelD=toSink channelD
-          , channelE=nullSource }
+  key :: Reg (Bit 20) <- makeReg dontCare
+  (cache,master) <- makeBCacheCore @2 @20 @6 @4 @() @TLConfig 0 (\ _ _ -> dontCare)
+  responseQ <- makeSizedQueueCore 4
+
+  always do
+    when (cache.canMatch) do
+      cache.match key.val
+
+    when (cache.loadResponse.canPeek .&&. responseQ.notFull) do
+      responseQ.enq cache.loadResponse.peek
+      cache.loadResponse.consume
 
   pc :: Ehr (Bit 32) <- makeEhr 2 0x80000000
   epoch :: Ehr Epoch <- makeEhr 2 0
@@ -96,16 +98,10 @@ makeFetch redirection = do
   outputQ :: Queue FetchOutput <- makeQueue
 
   always do
-    when (channelA.notFull .&&. queue.notFull) do
-      channelA.enq
-        ChannelA
-          { opcode= tag #Get ()
-          , address= pc.read 1
-          , lane= dontCare
-          , mask= ones
-          , size= 2
-          , source= 0}
+    when (cache.canLookup .&&. queue.notFull) do
+      cache.lookup (slice @11 @6 (pc.read 1)) (slice @5 @2 (pc.read 1)) (tag #Load ())
       bpred.start (pc.read 1) (epoch.read 1)
+      key <== truncateLSB (pc.read 1)
       queue.enq ()
 
     when (queue.canDeq .&&. fetchQ.notFull .&&. inv redirection.canPeek) do
@@ -119,19 +115,19 @@ makeFetch redirection = do
 
       queue.deq
 
-    when (fetchQ.canDeq .&&. channelD.canDeq .&&. outputQ.notFull) do
+    when (fetchQ.canDeq .&&. responseQ.canDeq .&&. outputQ.notFull) do
       when fetchQ.first.valid do
         let (outPc, outPred, outState, outEpoch) = fetchQ.first.val
 
         outputQ.enq FetchOutput{
-          instr= channelD.first.lane,
+          instr= responseQ.first,
           prediction= outPred,
           bstate= outState,
           epoch= outEpoch,
           pc= outPc
         }
 
-      channelD.deq
+      responseQ.deq
       fetchQ.deq
 
     when redirection.canPeek do

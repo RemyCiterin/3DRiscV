@@ -13,6 +13,7 @@ executable blarney-test
     Blarney.Sharing,
     Blarney.Arbiter,
     Blarney.Ehr,
+    TileLink.UncoherentBCache,
     TileLink.Interconnect,
     TileLink.Types,
     TileLink.Utils,

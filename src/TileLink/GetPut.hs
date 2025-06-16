@@ -144,7 +144,7 @@ makePutMaster source arbiter ram slave = do
     , putAck= do
         channelD.consume
         valid <== false
-    , canPut= inv valid.val
+    , canPut= inv valid.val .&&. inv queue.canDeq
     , canPutAck=
         channelD.canPeek .&&. channelD.peek.opcode `is` #AccessAck .&&.
         channelD.peek.source === source .&&. size.val === 0
