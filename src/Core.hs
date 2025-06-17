@@ -76,7 +76,8 @@ makeFetch redirection = do
     withName "bpred" $ makeBranchPredictor 10
 
   key :: Reg (Bit 20) <- makeReg dontCare
-  (cache,master) <- makeBCacheCore @2 @20 @6 @4 @() @TLConfig 0 (\ _ _ -> dontCare)
+  (cache,master) <-
+    withName "icache" $ makeBCacheCore @2 @20 @6 @4 @() @TLConfig 0 (\ _ _ -> dontCare)
   responseQ <- makeSizedQueueCore 4
 
   always do
@@ -161,15 +162,13 @@ makeLoadStoreUnit ::
 makeLoadStoreUnit input commit = do
   outputQ :: Queue ExecOutput <- makeQueue
 
-  channelA :: Queue (ChannelA TLConfig) <- makeBypassQueue
-  channelD :: Queue (ChannelD TLConfig) <- makeQueue
-  let master =
-        TLMaster
-          { channelA=toSource channelA
-          , channelB=nullSink
-          , channelC=nullSource
-          , channelD=toSink channelD
-          , channelE=nullSource }
+  key :: Reg (Bit 20) <- makeReg dontCare
+  (cache,master) <-
+    withName "dcache" $ makeBCacheCore @2 @20 @6 @4 @() @TLConfig 0 (\ _ _ -> dontCare)
+
+  always do
+    when (cache.canMatch) do
+      cache.match key.val
 
   state :: Reg (Bit 3) <- makeReg 0
 
@@ -200,7 +199,7 @@ makeLoadStoreUnit input commit = do
 
       state <== 3
 
-    when (state.val === 3 .&&. channelA.notFull .&&. commit.canPeek) do
+    when (state.val === 3 .&&. cache.canLookup .&&. commit.canPeek) do
       commit.consume
 
       let beat = req.rs2 .<<. ((slice @1 @0 addr) # (0b000 :: Bit 3))
@@ -213,40 +212,23 @@ makeLoadStoreUnit input commit = do
 
       if (commit.peek) then do
         when (addr === 0x10000000) do displayAscii (slice @7 @0 beat)
-
-        channelA.enq
-            ChannelA
-              { opcode= tag #PutData ()
-              , address= addr .&. inv 0b11
-              , size= 2
-              , source= 1
-              , lane= beat
-              , mask }
-        state <== 4
+        cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Store (mask, beat))
+        key <== truncateLSB addr
+        input.consume
+        state <== 0
       else do
         input.consume
         state <== 0
 
-    when (state.val === 4 .&&. channelD.canDeq) do
-      input.consume
-      channelD.deq
-      state <== 0
-
-    when (state.val === 0 .&&. input.canPeek .&&. channelA.notFull .&&. opcode `is` [LOAD]) do
-      channelA.enq
-          ChannelA
-            { opcode= tag #Get ()
-            , address= addr .&. inv 0b11
-            , size= 2
-            , lane= dontCare
-            , source= 1
-            , mask= ones}
+    when (state.val === 0 .&&. input.canPeek .&&. cache.canLookup .&&. opcode `is` [LOAD]) do
+      cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Load ())
+      key <== truncateLSB addr
       state <== 1
 
-    when (state.val === 1 .&&. channelD.canDeq .&&. outputQ.notFull) do
-      channelD.deq
+    when (state.val === 1 .&&. cache.loadResponse.canPeek .&&. outputQ.notFull) do
+      cache.loadResponse.consume
 
-      let beat :: Bit 32 = channelD.first.lane .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
+      let beat :: Bit 32 = cache.loadResponse.peek .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
       let out :: Bit 32 =
             select [
               isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
