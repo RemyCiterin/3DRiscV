@@ -15,6 +15,7 @@ import Utils
 import Instr
 import Alu
 
+import TileLink.Interconnect
 import TileLink.UncoherentBCache
 import TileLink.Utils
 import TileLink.Types
@@ -164,7 +165,7 @@ makeLoadStoreUnit input commit = do
 
   key :: Reg (Bit 20) <- makeReg dontCare
   (cache,master) <-
-    withName "dcache" $ makeBCacheCore @2 @20 @6 @4 @() @TLConfig 0 (\ _ _ -> dontCare)
+    withName "dcache" $ makeBCacheCore @2 @20 @6 @4 @() @TLConfig 1 (\ _ _ -> dontCare)
 
   always do
     when (cache.canMatch) do
@@ -405,22 +406,6 @@ makeCore = do
 
   return (imaster, dmaster)
 
-makeTestCore :: Module ()
-makeTestCore = mdo
-  let config =
-        TLRAMConfig
-          { fileName= Just "Mem.hex"
-          , lowerBound= 0x80000000
-          , bypassChannelA= False
-          , bypassChannelD= True
-          , sink= 0 }
-  islave <- makeTLRAM @16 @TLConfig config
-  dslave <- makeTLRAM @16 @TLConfig config
-  makeConnection imaster islave
-  makeConnection dmaster dslave
-  (imaster, dmaster) <- makeCore
-  return ()
-
 makeFakeTestCore :: Bit 1 -> Module (Bit 1)
 makeFakeTestCore _ = mdo
   let config =
@@ -430,9 +415,30 @@ makeFakeTestCore _ = mdo
           , bypassChannelA= False
           , bypassChannelD= True
           , sink= 0 }
-  islave <- withName "imem" $ makeTLRAM @16 @TLConfig config
-  dslave <- withName "dmem" $ makeTLRAM @16 @TLConfig config
-  withName "imem" $ makeConnection imaster islave
-  withName "dmem" $ makeConnection dmaster dslave
+
+  let xbarconfig =
+        XBarConfig
+          { bce= True
+          , rootAddr= \ _ -> 0
+          , rootSink= \ _ -> 0
+          , rootSource= \ x -> x === 0 ? (0,1)
+          , sizeChannelA= 2
+          , sizeChannelB= 2
+          , sizeChannelC= 2
+          , sizeChannelD= 2
+          , sizeChannelE= 2}
+
+  ([master0], [slave0,slave1]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
+  slave <- withName "mem" $ makeTLRAM @06 @TLConfig config
+
+  withName "mem" $ makeConnection master0 slave
+  withName "mem" $ makeConnection imaster slave0
+  withName "mem" $ makeConnection dmaster slave1
+
   (imaster, dmaster) <- withName "core" makeCore
   return imaster.channelA.canPeek
+
+makeTestCore :: Module ()
+makeTestCore = mdo
+  _ <- makeFakeTestCore false
+  return ()

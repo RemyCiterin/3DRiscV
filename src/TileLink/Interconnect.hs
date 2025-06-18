@@ -134,6 +134,6 @@ makeTLXBar config = do
     | i <- [0..toInteger $ valueOf @m - 1]])
   where
     buildQueue 0 = makeBypassQueue
-    buildQueue 2 = makeQueue
     buildQueue 1 = makePipelineQueue 1
+    buildQueue 2 = makeQueue
     buildQueue n = makeSizedQueueCore n

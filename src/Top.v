@@ -14,15 +14,22 @@ module mkTop (
 );
 
 
-  TestSpi inst (
-    .out_0(ftdi_rxd),
-    .out_1_miso_0(sd_miso),
-    .out_1_miso_en(1),
-    .out_1_clk(sd_clk),
-    .out_1_mosi(sd_mosi),
-    .out_1_cs(sd_cs),
+  TestCore inst (
+    .out(ftdi_rxd),
+    .in0(ftdi_txd),
     .clock(CLK),
     .reset(!RST_N)
   );
+
+  //TestSpi inst (
+  //  .out_0(ftdi_rxd),
+  //  .out_1_miso_0(sd_miso),
+  //  .out_1_miso_en(1),
+  //  .out_1_clk(sd_clk),
+  //  .out_1_mosi(sd_mosi),
+  //  .out_1_cs(sd_cs),
+  //  .clock(CLK),
+  //  .reset(!RST_N)
+  //);
 
 endmodule

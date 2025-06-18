@@ -4,6 +4,7 @@ sim:
 
 LIB = \
 			src/Top.v \
+			simulation/*v \
 			Verilog/*.v
 
 compile:
@@ -31,4 +32,7 @@ prog:
 
 verilator: compile
 	make -C simulation all
+	./sim
+
+run:
 	./sim
