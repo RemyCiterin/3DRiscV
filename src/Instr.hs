@@ -74,6 +74,17 @@ data Mnemonic =
   | CSRRW
   | CSRRS
   | CSRRC
+  | LOADR
+  | STOREC
+  | AMOAND
+  | AMOADD
+  | AMOOR
+  | AMOXOR
+  | AMOMIN
+  | AMOMAX
+  | AMOMINU
+  | AMOMAXU
+  | AMOSWAP
   deriving (Bounded, Enum, Show, Ord, Eq)
 
 -- | Upper bound on number of instruction mnemonics used by the decoder
@@ -131,6 +142,17 @@ decodeTable =
   , "csr[11:0] rs1<5> csrI<1> 11 rd<5> 1110011" --> CSRRC
   , "imm[11:0] rs1<5> ul<1> aw<2> rd<5> 0000011" --> LOAD
   , "imm[11:5] rs2<5> rs1<5> 0 aw<2> imm[4:0] 0100011" --> STORE
+  , "00010 aq<1> rl<1> 00000 rs1<5> 010 rd<5> 0101111" --> LOADR
+  , "00011 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> STOREC
+  , "00001 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOSWAP
+  , "00000 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOADD
+  , "00100 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOXOR
+  , "01100 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOAND
+  , "01000 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOOR
+  , "10000 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOMIN
+  , "10100 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOMAX
+  , "11000 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOMINU
+  , "11100 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOMAXU
   ]
 
 data Instr =
@@ -147,6 +169,11 @@ data Instr =
   , isUnsigned  :: Bit 1
   , isMemAccess :: Bit 1
   , canBranch   :: Bit 1
+  , isAcquire   :: Bit 1
+  , isRelease   :: Bit 1
+  , isAMO       :: Bit 1
+  , pred        :: Bit 4
+  , succ        :: Bit 4
   } deriving (Generic, Bits)
 
 decodeInstr :: Bit 32 -> Instr
@@ -162,12 +189,18 @@ decodeInstr instr =
   , csrI = getBitFieldSel selMap "csrI" instr
   , accessWidth = getBitFieldSel selMap "aw" instr
   , isUnsigned = getBitFieldSel selMap "ul" instr
-  , isMemAccess = opcode `is` [LOAD,STORE,FENCE]
+  , isMemAccess = opcode `is` [LOAD,STORE,FENCE,STOREC,LOADR] .||. isAMO
   , canBranch = opcode `is` [JAL,JALR,BEQ,BNE,BLT,BLTU,BGE,BGEU]
+  , isAcquire = getBitFieldSel selMap "aq" instr
+  , isRelease = getBitFieldSel selMap "rl" instr
+  , pred = getBitFieldSel selMap "pred" instr
+  , succ = getBitFieldSel selMap "succ" instr
+  , isAMO
   }
   where
     regDest = getBitFieldSel selMap "rd" instr :: RegId
     (tagMap, fieldMap) = matchMap False decodeTable instr
+    isAMO = opcode `is` [AMOOR,AMOAND,AMOXOR,AMOSWAP,AMOADD,AMOMIN,AMOMAX,AMOMINU,AMOMAXU]
     selMap = matchSel decodeTable
     opcode = packTagMap tagMap
 
@@ -176,34 +209,45 @@ decodeInstr instr =
 instance FShow Instr where
   fshow instr =
     formatCond (instr.opcode === 0) (fshow "invalid-instr") <>
-    formatCond (instr.opcode `is` [LUI   ]) (formatUtype      LUI  ) <>
-    formatCond (instr.opcode `is` [AUIPC ]) (formatUtype      AUIPC) <>
-    formatCond (instr.opcode `is` [ADD   ]) (formatRItype     ADD  ) <>
-    formatCond (instr.opcode `is` [SLT   ]) (formatRItype     SLT  ) <>
-    formatCond (instr.opcode `is` [SLTU  ]) (formatRItype     SLTU ) <>
-    formatCond (instr.opcode `is` [AND   ]) (formatRItype     AND  ) <>
-    formatCond (instr.opcode `is` [OR    ]) (formatRItype     OR   ) <>
-    formatCond (instr.opcode `is` [XOR   ]) (formatRItype     XOR  ) <>
-    formatCond (instr.opcode `is` [SLL   ]) (formatRItype     SLL  ) <>
-    formatCond (instr.opcode `is` [SRL   ]) (formatRItype     SRL  ) <>
-    formatCond (instr.opcode `is` [SRA   ]) (formatRItype     SRA  ) <>
-    formatCond (instr.opcode `is` [SUB   ]) (formatRtype      SUB  ) <>
-    formatCond (instr.opcode `is` [JAL   ]) (formatJtype      JAL  ) <>
-    formatCond (instr.opcode `is` [JALR  ]) (formatItype      JALR ) <>
-    formatCond (instr.opcode `is` [BEQ   ]) (formatBtype      BEQ  ) <>
-    formatCond (instr.opcode `is` [BNE   ]) (formatBtype      BNE  ) <>
-    formatCond (instr.opcode `is` [BLT   ]) (formatBtype      BLT  ) <>
-    formatCond (instr.opcode `is` [BLTU  ]) (formatBtype      BLTU ) <>
-    formatCond (instr.opcode `is` [BGE   ]) (formatBtype      BGE  ) <>
-    formatCond (instr.opcode `is` [BGEU  ]) (formatBtype      BGEU ) <>
-    formatCond (instr.opcode `is` [LOAD  ]) (formatLtype           ) <>
-    formatCond (instr.opcode `is` [STORE ]) (formatStype           ) <>
-    formatCond (instr.opcode `is` [CSRRW ]) (formatCSRRW      CSRRW) <>
-    formatCond (instr.opcode `is` [CSRRS ]) (formatCSRRS      CSRRS) <>
-    formatCond (instr.opcode `is` [CSRRC ]) (formatCSRRC      CSRRC) <>
-    formatCond (instr.opcode `is` [FENCE ]) (fshow "fence" ) <>
-    formatCond (instr.opcode `is` [ECALL ]) (fshow "ecall" ) <>
-    formatCond (instr.opcode `is` [EBREAK]) (fshow "ebreak")
+    formatCond (instr.opcode `is` [LUI    ]) (formatUtype      LUI  ) <>
+    formatCond (instr.opcode `is` [AUIPC  ]) (formatUtype      AUIPC) <>
+    formatCond (instr.opcode `is` [ADD    ]) (formatRItype     ADD  ) <>
+    formatCond (instr.opcode `is` [SLT    ]) (formatRItype     SLT  ) <>
+    formatCond (instr.opcode `is` [SLTU   ]) (formatRItype     SLTU ) <>
+    formatCond (instr.opcode `is` [AND    ]) (formatRItype     AND  ) <>
+    formatCond (instr.opcode `is` [OR     ]) (formatRItype     OR   ) <>
+    formatCond (instr.opcode `is` [XOR    ]) (formatRItype     XOR  ) <>
+    formatCond (instr.opcode `is` [SLL    ]) (formatRItype     SLL  ) <>
+    formatCond (instr.opcode `is` [SRL    ]) (formatRItype     SRL  ) <>
+    formatCond (instr.opcode `is` [SRA    ]) (formatRItype     SRA  ) <>
+    formatCond (instr.opcode `is` [SUB    ]) (formatRtype      SUB  ) <>
+    formatCond (instr.opcode `is` [JAL    ]) (formatJtype      JAL  ) <>
+    formatCond (instr.opcode `is` [JALR   ]) (formatItype      JALR ) <>
+    formatCond (instr.opcode `is` [BEQ    ]) (formatBtype      BEQ  ) <>
+    formatCond (instr.opcode `is` [BNE    ]) (formatBtype      BNE  ) <>
+    formatCond (instr.opcode `is` [BLT    ]) (formatBtype      BLT  ) <>
+    formatCond (instr.opcode `is` [BLTU   ]) (formatBtype      BLTU ) <>
+    formatCond (instr.opcode `is` [BGE    ]) (formatBtype      BGE  ) <>
+    formatCond (instr.opcode `is` [BGEU   ]) (formatBtype      BGEU ) <>
+    formatCond (instr.opcode `is` [LOAD   ]) (formatLtype           ) <>
+    formatCond (instr.opcode `is` [STORE  ]) (formatStype           ) <>
+    formatCond (instr.opcode `is` [CSRRW  ]) (formatCSRRW      CSRRW) <>
+    formatCond (instr.opcode `is` [CSRRS  ]) (formatCSRRS      CSRRS) <>
+    formatCond (instr.opcode `is` [CSRRC  ]) (formatCSRRC      CSRRC) <>
+    formatCond (instr.opcode `is` [FENCE  ]) (fshow "fence" ) <>
+    formatCond (instr.opcode `is` [ECALL  ]) (fshow "ecall" ) <>
+    formatCond (instr.opcode `is` [EBREAK ]) (fshow "ebreak") <>
+    formatCond (instr.opcode `is` [AMOADD ]) (formatAMO AMOADD ) <>
+    formatCond (instr.opcode `is` [AMOOR  ]) (formatAMO AMOOR  ) <>
+    formatCond (instr.opcode `is` [AMOSWAP]) (formatAMO AMOSWAP) <>
+    formatCond (instr.opcode `is` [AMOAND ]) (formatAMO AMOAND ) <>
+    formatCond (instr.opcode `is` [AMOXOR ]) (formatAMO AMOXOR ) <>
+    formatCond (instr.opcode `is` [AMOMIN ]) (formatAMO AMOMIN ) <>
+    formatCond (instr.opcode `is` [AMOMAX ]) (formatAMO AMOMAX ) <>
+    formatCond (instr.opcode `is` [AMOMINU]) (formatAMO AMOMINU) <>
+    formatCond (instr.opcode `is` [AMOMAXU]) (formatAMO AMOMAXU) <>
+    formatCond (instr.opcode `is` [STOREC ]) (formatAMO STOREC) <>
+    formatCond (instr.opcode `is` [LOADR  ]) (formatLR LOADR)
     where
       imm = toSigned instr.imm.val
       immHex = fshow "0x" <> formatHex 0 instr.imm.val
@@ -220,6 +264,9 @@ instance FShow Instr where
       rs1 = fshowRegId instr.rs1.val
       rs2 = fshowRegId instr.rs2.val
       rd  = fshowRegId instr.rd.val
+
+      formatAcquire = formatCond instr.isAcquire $ fshow ".aq"
+      formatRelease = formatCond instr.isRelease $ fshow ".rl"
 
       formatRItype opcode =
         formatCond (instr.imm.valid) (formatItype opcode) <>
@@ -246,6 +293,10 @@ instance FShow Instr where
       formatCSRRS opcode = formatOp opcode <> fshow " " <> rd <> fshow ", " <> rs1 <> fshow ", " <> csr
       formatStype = formatStore  <> fshow " " <> rs2 <> fshow ", " <> immDec <> fshow "(" <> rs1 <> fshow ")"
       formatLtype = formatLoad <> fshow " " <> rd <> fshow ", " <> immDec <> fshow "(" <> rs1 <> fshow ")"
+      formatAMO opcode = formatOp opcode <> formatAcquire <> formatRelease <>
+        fshow " " <> rd <> fshow ", " <> rs2 <> fshow ", (" <> rs1 <> fshow ")"
+      formatLR opcode = formatOp opcode <> formatAcquire <> formatRelease <>
+        fshow " " <> rd <> fshow ", (" <> rs1 <> fshow ")"
 
 
 data ExecInput = ExecInput

@@ -53,3 +53,16 @@ alu query =
         opcode `is` [SRL] --> rs1 .>>. slice @4 @0 op2,
         opcode `is` [SRA] --> rs1 .>>>. slice @4 @0 op2
       ]
+
+execAMO :: (MnemonicVec, Bit 32) -> Bit 32 -> Bit 32
+execAMO (opcode, x) y =
+  select
+    [ opcode `is` [AMOOR] --> x .|. y
+    , opcode `is` [AMOADD] --> x .&. y
+    , opcode `is` [AMOXOR] --> x .^. y
+    , opcode `is` [AMOSWAP] --> x
+    , opcode `is` [AMOADD] --> x + y
+    , opcode `is` [AMOMIN] --> toSigned x .>. toSigned y ? (y,x)
+    , opcode `is` [AMOMAX] --> toSigned x .>. toSigned y ? (x,y)
+    , opcode `is` [AMOMINU] --> x .>. y ? (y,x)
+    , opcode `is` [AMOMAXU] --> x .>. y ? (x,y) ]

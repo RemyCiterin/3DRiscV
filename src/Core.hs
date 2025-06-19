@@ -165,13 +165,13 @@ makeLoadStoreUnit input commit = do
 
   key :: Reg (Bit 20) <- makeReg dontCare
   (cache,master) <-
-    withName "dcache" $ makeBCacheCore @2 @20 @6 @4 @() @TLConfig 1 (\ _ _ -> dontCare)
+    withName "dcache" $ makeBCacheCore @2 @20 @6 @4 @(MnemonicVec,Bit 32) @TLConfig 1 execAMO
 
   always do
     when (cache.canMatch) do
       cache.match key.val
 
-  state :: Reg (Bit 3) <- makeReg 0
+  state :: Reg (Bit 4) <- makeReg 0
 
   let req = input.peek
   let opcode = req.instr.opcode
@@ -221,8 +221,9 @@ makeLoadStoreUnit input commit = do
         input.consume
         state <== 0
 
-    when (state.val === 0 .&&. input.canPeek .&&. cache.canLookup .&&. opcode `is` [LOAD]) do
-      cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Load ())
+    when (state.val === 0 .&&. input.canPeek .&&. cache.canLookup .&&. opcode `is` [LOAD,LOADR]) do
+      let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
+      cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) op
       key <== truncateLSB addr
       state <== 1
 
@@ -308,6 +309,7 @@ makeRegisterFile = do
 makeCore ::
   Module (TLMaster TLConfig, TLMaster TLConfig)
 makeCore = do
+  doCommit :: Ehr (Bit 1) <- makeEhr 3 false
   commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
   aluQ :: Queue ExecInput <- withName "alu" $ makeQueue
   lsuQ :: Queue ExecInput <- withName "lsu" $ makeQueue
@@ -367,7 +369,12 @@ makeCore = do
       let req :: DecodeOutput = window.first
       let instr :: Instr = req.instr
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
-      let rdy = instr.isMemAccess ? (lsu.canPeek, alu.canPeek)
+
+      when (inv (doCommit.read 0) .&&. instr.isMemAccess) do
+        commitQ.enq (req.epoch === epoch.read 0)
+        doCommit.write 0 true
+
+      let rdy = instr.isMemAccess ? (lsu.canPeek .&&. doCommit.read 1, alu.canPeek)
 
       let resp = instr.isMemAccess ? (lsu.peek, alu.peek)
 
@@ -376,7 +383,7 @@ makeCore = do
         registers.setReady rd
 
         if instr.isMemAccess then do
-          commitQ.enq (req.epoch === epoch.read 0)
+          doCommit.write 1 false
           lsu.consume
         else do
           alu.consume
@@ -429,7 +436,7 @@ makeFakeTestCore _ = mdo
           , sizeChannelE= 2}
 
   ([master0], [slave0,slave1]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
-  slave <- withName "mem" $ makeTLRAM @06 @TLConfig config
+  slave <- withName "mem" $ makeTLRAM @16 @TLConfig config
 
   withName "mem" $ makeConnection master0 slave
   withName "mem" $ makeConnection imaster slave0

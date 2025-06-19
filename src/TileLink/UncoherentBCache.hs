@@ -48,7 +48,7 @@ data BCacheCore kw iw ow atomic p =
     , match :: Bit kw -> Action ()
     , abort :: Action ()
     , loadResponse :: Source (Bit (8*LaneWidth p))
-    --, scResponse :: Source (Bit 1)
+    , scResponse :: Source (Bit 1)
     , atomicResponse :: Source (Bit (8*LaneWidth p)) }
 
 idle, reading, acquire, release :: Bit 2
@@ -93,7 +93,11 @@ makeBCacheCore source execAtomic = do
   putArbiter <- makeNullArbiter
   getArbiter <- makeNullArbiter
 
+  reserved :: Reg (Bit 1) <- makeReg false
+
   dataQueue :: Queue (Option (atomic, Bit (w+(iw+ow)))) <- makePipelineQueue 1
+
+  scResponseQ :: Queue (Bit 1) <- makeQueue
 
   state :: Ehr (Bit 2) <- makeEhr 2 idle
 
@@ -116,6 +120,7 @@ makeBCacheCore source execAtomic = do
   way :: Reg (Bit w) <- makeReg dontCare
 
   let execOp :: Bit w -> Action () = \ way -> do
+        reserved <== request.val `is` #LoadR
         when (request.val `is` #Load .||. request.val `is` #LoadR) do
           dataRamA.loadBE (way # index.val # offset.val)
           dataQueue.enq none
@@ -128,9 +133,12 @@ makeBCacheCore source execAtomic = do
           dataRamA.storeBE (way # index.val # offset.val) mask lane
           storeListRAM dirtyRam way index.val true
         when (request.val `is` #StoreC) do
-          let (mask,lane) = untag #Store request.val
-          dataRamA.storeBE (way # index.val # offset.val) mask lane
-          storeListRAM dirtyRam way index.val true
+          dynamicAssert (scResponseQ.notFull) "enq into a full queue"
+          scResponseQ.enq reserved.val
+          when (reserved.val) do
+            let (mask,lane) = untag #Store request.val
+            dataRamA.storeBE (way # index.val # offset.val) mask lane
+            storeListRAM dirtyRam way index.val true
 
   let address :: Bit kw -> Bit (AddrWidth p) = \ key ->
         cast (key # index.val # (0 :: Bit ow) # (0 :: Bit (Log2 (LaneWidth p))))
@@ -168,8 +176,11 @@ makeBCacheCore source execAtomic = do
           , canMatch=
               inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `is` #Store)
               .&&. inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `is` #StoreC)
-              .&&. state.read 0 === reading .&&. dataQueue.notFull
-              .&&. getM.canGet .&&. putM.canPut
+              .&&. state.read 0 === reading
+              .&&. scResponseQ.notFull
+              .&&. dataQueue.notFull
+              .&&. getM.canGet
+              .&&. putM.canPut
           , match= \ msb -> do
               dynamicAssert (state.read 0 === reading) "matching with an unexpected state"
               key <== msb
@@ -185,6 +196,7 @@ makeBCacheCore source execAtomic = do
                 state.write 0 idle
                 execOp way
               else do
+                reserved <== false
                 way <== randomWay.val
                 storeListRAM keyRam randomWay.val index.val msb
                 storeListRAM validRam randomWay.val index.val true
@@ -201,6 +213,7 @@ makeBCacheCore source execAtomic = do
 
               return ()
           , abort= state.write 0 idle
+          , scResponse= toSource scResponseQ
           , loadResponse=
               Source
                 { canPeek= dataQueue.canDeq .&&. inv dataQueue.first.valid
