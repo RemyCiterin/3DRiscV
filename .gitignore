@@ -6,3 +6,7 @@ simulation/obj_dir
 sim
 Mem.hex
 Mem.ihex
+zig/firmware.asm
+zig/zig-out
+zig/zig-cache
+zig/.zig-cache

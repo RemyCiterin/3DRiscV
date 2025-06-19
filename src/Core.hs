@@ -165,7 +165,7 @@ makeLoadStoreUnit input commit = do
 
   key :: Reg (Bit 20) <- makeReg dontCare
   (cache,master) <-
-    withName "dcache" $ makeBCacheCore @2 @20 @6 @4 @(MnemonicVec,Bit 32) @TLConfig 1 execAMO
+    withName "dcache" $ makeBCacheCore @2 @20 @6 @4 @_ @TLConfig 1 execAMO
 
   always do
     when (cache.canMatch) do
@@ -174,7 +174,8 @@ makeLoadStoreUnit input commit = do
   state :: Reg (Bit 4) <- makeReg 0
 
   let req = input.peek
-  let opcode = req.instr.opcode
+  let instr = req.instr
+  let opcode = instr.opcode
   let addr = req.rs1 + req.instr.imm.val
 
   let isWord = req.instr.accessWidth === 0b10
@@ -189,6 +190,7 @@ makeLoadStoreUnit input commit = do
         ]
 
   always do
+    -- *** STORE ***
     when (state.val === 0 .&&. input.canPeek .&&. opcode `is` [STORE] .&&. outputQ.notFull) do
       outputQ.enq ExecOutput{
         exception= inv aligned,
@@ -221,6 +223,7 @@ makeLoadStoreUnit input commit = do
         input.consume
         state <== 0
 
+    -- *** LOAD / LOAD RESERVE ***
     when (state.val === 0 .&&. input.canPeek .&&. cache.canLookup .&&. opcode `is` [LOAD,LOADR]) do
       let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
       cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) op
@@ -249,12 +252,79 @@ makeLoadStoreUnit input commit = do
       input.consume
       state <== 0
 
+    -- *** FENCE ***
     when (state.val === 0 .&&. input.canPeek .&&. opcode `is` [FENCE] .&&. outputQ.notFull) do
       outputQ.enq ExecOutput{pc=req.pc+4, exception=false, cause= dontCare, tval= dontCare, rd= 0}
       state <== 5
 
     when (state.val === 5 .&&. commit.canPeek) do
       commit.consume
+      input.consume
+      state <== 0
+
+    -- *** AMO / STORE CONDITIONAL ***
+    let amoOrSc = instr.isAMO .||. opcode `is` [STOREC]
+    when (state.val === 0 .&&. input.canPeek .&&. amoOrSc .&&. outputQ.notFull) do
+      if (aligned) then do
+        state <== 6
+      else do
+        state <== 7
+        outputQ.enq ExecOutput{
+          exception= inv aligned,
+          pc= req.pc + 4,
+          tval= addr,
+          cause= 6,
+          rd= 0
+        }
+
+    when (state.val === 7 .&&. commit.canPeek) do
+      commit.consume
+      input.consume
+      state <== 0
+
+    when (state.val === 6 .&&. commit.canPeek .&&. inv commit.peek .&&. outputQ.notFull) do
+        outputQ.enq ExecOutput{
+          exception= false,
+          pc= req.pc + 4,
+          tval= addr,
+          cause= 6,
+          rd= 0
+        }
+        commit.consume
+        input.consume
+        state <== 0
+
+    when (state.val === 6 .&&. cache.canLookup .&&. commit.canPeek .&&. commit.peek) do
+      commit.consume
+
+      if instr.isAMO then do
+        cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Atomic (opcode, req.rs2))
+        key <== truncateLSB addr
+      else do
+        cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #StoreC (ones, req.rs2))
+        key <== truncateLSB addr
+
+    when (state.val === 6 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
+      outputQ.enq ExecOutput{
+        rd= zeroExtend $ inv cache.scResponse.peek,
+        exception= false,
+        pc= req.pc + 4,
+        tval= addr,
+        cause= 6
+      }
+      cache.scResponse.consume
+      input.consume
+      state <== 0
+
+    when (state.val === 6 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
+      outputQ.enq ExecOutput{
+        rd= cache.atomicResponse.peek,
+        exception= false,
+        pc= req.pc + 4,
+        tval= addr,
+        cause= 6
+      }
+      cache.atomicResponse.consume
       input.consume
       state <== 0
 
@@ -309,7 +379,7 @@ makeRegisterFile = do
 makeCore ::
   Module (TLMaster TLConfig, TLMaster TLConfig)
 makeCore = do
-  doCommit :: Ehr (Bit 1) <- makeEhr 3 false
+  doCommit :: Ehr (Bit 1) <- makeEhr 2 false
   commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
   aluQ :: Queue ExecInput <- withName "alu" $ makeQueue
   lsuQ :: Queue ExecInput <- withName "lsu" $ makeQueue
@@ -388,9 +458,15 @@ makeCore = do
         else do
           alu.consume
 
+        when (instr.opcode === 0) do
+          display "exec invalid instruction"
+
         when (req.epoch === epoch.read 0) do
           when (instr.opcode `is` [FENCE]) do
             display "fence at cycle: " cycle.val " instret: " instret.val
+
+          when (resp.exception) do
+            display "exception at pc=0x" (formatHex 0 req.pc)
 
           instret <== instret.val + 1
 
@@ -400,7 +476,6 @@ makeCore = do
 
           when (rd =!= 0) do
             --display "    " (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
-            --registers.update rd resp.rd
             registers.write rd resp.rd
 
           if (resp.pc =!= req.prediction) then do
@@ -433,10 +508,10 @@ makeFakeTestCore _ = mdo
           , sizeChannelB= 2
           , sizeChannelC= 2
           , sizeChannelD= 2
-          , sizeChannelE= 2}
+          , sizeChannelE= 2 }
 
   ([master0], [slave0,slave1]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
-  slave <- withName "mem" $ makeTLRAM @16 @TLConfig config
+  slave <- withName "mem" $ makeTLRAM @18 @TLConfig config
 
   withName "mem" $ makeConnection master0 slave
   withName "mem" $ makeConnection imaster slave0

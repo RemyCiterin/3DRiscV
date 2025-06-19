@@ -127,7 +127,11 @@ pub export fn kernel_main() align(16) callconv(.C) void {
         \\  interface for UART, SDRAM, MMC and HDMI
     , .{});
 
-    const kalloc_len = 28 * 1024;
+    var x: u32 = 0x30;
+    const y = @atomicRmw(u32, &x, .Nand, 0x33, .acq_rel);
+    logger.info("x := 0x{x} y := 0x{x}", .{ x, y });
+
+    const kalloc_len = 10 * 1024;
     var kernel_fba = std.heap.FixedBufferAllocator.init(kalloc_buffer[0..kalloc_len]);
     kalloc = kernel_fba.allocator();
 

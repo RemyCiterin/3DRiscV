@@ -60,6 +60,9 @@ makeTLRAM config = do
       size <== sz .>. laneSize ? (sz - laneSize, 0)
       index <== idx + 1
 
+      --when (isPut .&&. sz .<=. laneSize .&&. msb =!= 0) do
+      --  display "write out of bounds"
+
       when (isPut .||. sz .<=. laneSize) do
         --display (fshow channelA.peek)
         channelA.consume

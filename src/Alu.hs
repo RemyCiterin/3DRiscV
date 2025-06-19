@@ -58,7 +58,7 @@ execAMO :: (MnemonicVec, Bit 32) -> Bit 32 -> Bit 32
 execAMO (opcode, x) y =
   select
     [ opcode `is` [AMOOR] --> x .|. y
-    , opcode `is` [AMOADD] --> x .&. y
+    , opcode `is` [AMOAND] --> x .&. y
     , opcode `is` [AMOXOR] --> x .^. y
     , opcode `is` [AMOSWAP] --> x
     , opcode `is` [AMOADD] --> x + y

@@ -11,8 +11,9 @@ compile:
 	cabal run blarney-test -- --enable-name-prop
 
 test:
-	riscv32-none-elf-objcopy -O ihex ../Superscalar/rust/target/riscv32i-unknown-none-elf/release/SuperOS Mem.ihex
+	riscv32-none-elf-objcopy -O ihex zig/zig-out/bin/kernel.elf Mem.ihex
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 100000 1 > Mem.hex
+	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -D > zig/firmware.asm
 
 yosys:
 	yosys \

@@ -205,11 +205,9 @@ makeBCacheCore source execAtomic = do
                   state.write 0 release
                   let key = outListRAM keyRam randomWay.val
                   putM.put (randomWay.val # index.val # 0) (address key) logSize
-                  --display "release block: 0x" (formatHex 0 (address key))
                 else do
                   state.write 0 acquire
                   getM.get (randomWay.val # index.val # 0) (address msb) logSize
-                  --display "acquire block: 0x" (formatHex 0 (address msb))
 
               return ()
           , abort= state.write 0 idle
