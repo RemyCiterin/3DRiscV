@@ -221,7 +221,8 @@ makeLoadStoreUnit input commit = do
           isWord --> 0b1111
         ] .<<. (slice @1 @0 addr)
 
-  let canLoad = cache.canLookup .&&. mmioSlave.channelA.canPut
+  -- no speculative MMIO loads, other accessses can start loads before commit
+  let canLoad = isCached addr ? (cache.canLookup, mmioSlave.channelA.canPut .&&. commit.canPeek)
   let canStore = cache.canLookup .&&. mmioSlave.channelA.canPut
 
   let sendLoad op = do
@@ -265,142 +266,127 @@ makeLoadStoreUnit input commit = do
   let canReceiveStore = mmioSlave.channelD.canPeek
   let consumeStore = mmioSlave.channelD.consume
 
+  let out =
+        ExecOutput
+          { exception= inv aligned
+          , pc= req.pc + 4
+          , cause= dontCare
+          , rd= dontCare
+          , tval= addr }
+
   always do
     -- *** STORE ***
-    when (state.val === 0 .&&. input.canPeek .&&. opcode `is` [STORE] .&&. outputQ.notFull) do
-      outputQ.enq ExecOutput{
-        exception= inv aligned,
-        pc= req.pc + 4,
-        tval= addr,
-        cause= 6,
-        rd= 0
-      }
+    when (input.canPeek .&&. opcode `is` [STORE]) do
 
-      state <== 3
+      when (state.val === 0 .&&. outputQ.notFull) do
+        outputQ.enq out{ cause= 6 }
 
-    when (state.val === 3 .&&. canStore .&&. commit.canPeek) do
-      commit.consume
+        state <== 1
 
-      if (commit.peek) then do
-        when (addr === 0x10000000) $ displayAscii (slice @7 @0 beat)
-        when (isCached addr) input.consume
-        state <== isCached addr ? (0, 8)
-        sendStore
-      else do
+      when (state.val === 1 .&&. commit.canPeek .&&. canStore) do
+        commit.consume
+
+        if (commit.peek) then do
+          when (addr === 0x10000000) $ displayAscii (slice @7 @0 beat)
+          when (isCached addr) input.consume
+          state <== isCached addr ? (0, 2)
+          sendStore
+        else do
+          input.consume
+          state <== 0
+
+      when (state.val === 2 .&&. canReceiveStore) do
         input.consume
+        consumeStore
         state <== 0
 
-    when (state.val === 8 .&&. canReceiveStore) do
-      input.consume
-      consumeStore
-      state <== 0
-
     -- *** LOAD / LOAD RESERVE ***
-    when (state.val === 0 .&&. input.canPeek .&&. canLoad .&&. opcode `is` [LOAD,LOADR]) do
-      if (aligned) then do
-        let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
-        sendLoad op
-        state <== 1
-      else do
-        outputQ.enq ExecOutput{pc=req.pc+4, exception=true, cause= 4, tval= addr, rd= dontCare}
+    when (input.canPeek .&&. opcode `is` [LOAD,LOADR]) do
+      let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
+
+      when (state.val === 0 .&&. canLoad) do
+        if (aligned .&&. (isCached addr .||. commit.peek)) then do
+          sendLoad op
+          state <== 1
+        else do
+          outputQ.enq out{cause=4}
+          state <== 2
+
+      when (state.val === 1 .&&. canReceiveLoad .&&. outputQ.notFull) do
+        consumeLoad
+
+        let beat :: Bit 32 = responseLoad .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
+        let rd :: Bit 32 =
+              select [
+                isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
+                isHalf .&&. req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
+                isByte .&&. inv req.instr.isUnsigned --> signExtend (slice @7 @0 beat),
+                isHalf .&&. inv req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
+                isWord --> beat
+              ]
+
+        outputQ.enq (out{rd} :: ExecOutput)
         state <== 2
 
-    when (state.val === 1 .&&. canReceiveLoad .&&. outputQ.notFull) do
-      consumeLoad
-
-      let beat :: Bit 32 = responseLoad .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
-      let rd :: Bit 32 =
-            select [
-              isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
-              isHalf .&&. req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
-              isByte .&&. inv req.instr.isUnsigned --> signExtend (slice @7 @0 beat),
-              isHalf .&&. inv req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
-              isWord --> beat
-            ]
-
-      outputQ.enq ExecOutput{pc=req.pc+4, exception=false, cause= 4, tval= addr, rd}
-      state <== 2
-
-    when (state.val === 2 .&&. commit.canPeek) do
-      commit.consume
-      input.consume
-      state <== 0
-
-    -- *** FENCE ***
-    when (state.val === 0 .&&. input.canPeek .&&. opcode `is` [FENCE] .&&. outputQ.notFull) do
-      outputQ.enq ExecOutput{pc=req.pc+4, exception=false, cause= dontCare, tval= dontCare, rd= 0}
-      state <== 5
-
-    when (state.val === 5 .&&. commit.canPeek) do
-      commit.consume
-      input.consume
-      state <== 0
-
-    -- *** AMO / STORE CONDITIONAL ***
-    let amoOrSc = instr.isAMO .||. opcode `is` [STOREC]
-    when (state.val === 0 .&&. input.canPeek .&&. amoOrSc .&&. outputQ.notFull) do
-      if (aligned) then do
-        state <== 6
-      else do
-        state <== 7
-        outputQ.enq ExecOutput{
-          exception= inv aligned,
-          pc= req.pc + 4,
-          tval= addr,
-          cause= 6,
-          rd= 0
-        }
-
-    when (state.val === 7 .&&. commit.canPeek) do
-      commit.consume
-      input.consume
-      state <== 0
-
-    when (state.val === 6 .&&. commit.canPeek .&&. inv commit.peek .&&. outputQ.notFull) do
-        outputQ.enq ExecOutput{
-          exception= false,
-          pc= req.pc + 4,
-          tval= addr,
-          cause= 6,
-          rd= 0
-        }
+      when (state.val === 2 .&&. commit.canPeek) do
         commit.consume
         input.consume
         state <== 0
 
-    when (state.val === 6 .&&. cache.canLookup .&&. commit.canPeek .&&. commit.peek) do
-      commit.consume
+    -- *** FENCE ***
+    when (input.canPeek .&&. opcode `is` [FENCE]) do
+      when (state.val === 0 .&&. outputQ.notFull) do
+        outputQ.enq out
+        state <== 1
 
-      if instr.isAMO then do
-        cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Atomic (opcode, req.rs2))
-        key <== truncateLSB addr
-      else do
-        cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #StoreC (ones, req.rs2))
-        key <== truncateLSB addr
+      when (state.val === 1 .&&. commit.canPeek) do
+          commit.consume
+          input.consume
+          state <== 0
 
-    when (state.val === 6 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
-      outputQ.enq ExecOutput{
-        rd= zeroExtend $ inv cache.scResponse.peek,
-        exception= false,
-        pc= req.pc + 4,
-        tval= addr,
-        cause= 6
-      }
-      cache.scResponse.consume
-      input.consume
-      state <== 0
+    -- *** AMO / STORE CONDITIONAL ***
+    let amoOrSc = instr.isAMO .||. opcode `is` [STOREC]
+    when (input.canPeek .&&. amoOrSc) do
+      when (state.val === 0 .&&. outputQ.notFull) do
+        if (aligned) then do
+          state <== 1
+        else do
+          state <== 2
+          outputQ.enq out{cause=6}
 
-    when (state.val === 6 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
-      outputQ.enq ExecOutput{
-        rd= cache.atomicResponse.peek,
-        exception= false,
-        pc= req.pc + 4,
-        tval= addr,
-        cause= 6
-      }
-      cache.atomicResponse.consume
-      input.consume
-      state <== 0
+      when (state.val === 2 .&&. commit.canPeek) do
+        commit.consume
+        input.consume
+        state <== 0
+
+      when (state.val === 1 .&&. commit.canPeek .&&. inv commit.peek .&&. outputQ.notFull) do
+          outputQ.enq out
+          commit.consume
+          input.consume
+          state <== 0
+
+      when (state.val === 1 .&&. cache.canLookup .&&. commit.canPeek .&&. commit.peek) do
+        commit.consume
+        state <== 2
+
+        if instr.isAMO then do
+          cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Atomic (opcode, req.rs2))
+          key <== truncateLSB addr
+        else do
+          cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #StoreC (ones, req.rs2))
+          key <== truncateLSB addr
+
+      when (state.val === 2 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
+        outputQ.enq (out{rd= zeroExtend $ inv cache.scResponse.peek} :: ExecOutput)
+        cache.scResponse.consume
+        input.consume
+        state <== 0
+
+      when (state.val === 2 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
+        outputQ.enq (out{rd= cache.atomicResponse.peek} :: ExecOutput)
+        cache.atomicResponse.consume
+        input.consume
+        state <== 0
 
   return (master, toStream outputQ)
 

@@ -128,7 +128,11 @@ pub export fn kernel_main() align(16) callconv(.C) void {
     , .{});
 
     var x: u32 = 0x30;
-    const y = @atomicRmw(u32, &x, .Nand, 0x33, .acq_rel);
+    var y = @atomicRmw(u32, &x, .Nand, 0x33, .acq_rel);
+    logger.info("x := 0x{x} y := 0x{x}", .{ x, y });
+
+    x = 0x30;
+    y = @atomicRmw(u32, &x, .And, 0x33, .acq_rel);
     logger.info("x := 0x{x} y := 0x{x}", .{ x, y });
 
     const kalloc_len = 10 * 1024;
