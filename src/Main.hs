@@ -36,6 +36,13 @@ testRegFile = do
 
   return ()
 
+testIf :: Module ()
+testIf = do
+  always do
+    x <- if false then return false else return true
+    display x
+    finish
+
 testRAM :: Module ()
 testRAM = do
   ram :: RAM (Bit 10) (Bit 32) <- makeDualRAM
@@ -107,7 +114,7 @@ main = do
         --simulate Uart.testUart2
         --simulate testRAM
         --simulate Cache.testCache
-        simulate Core.makeTestCore
+        simulate testIf
      | otherwise -> do
         writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogTop top "Main" "Verilog/"

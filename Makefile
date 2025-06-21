@@ -16,6 +16,7 @@ test:
 	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -D > zig/firmware.asm
 
 yosys:
+	sed -i '/$$finish/d' Verilog/TestCore.v
 	yosys \
 		-DULX3S -q -p "synth_ecp5 -abc9 -abc2 -top mkTop -json ./build/mkTop.json" \
 		$(LIB)

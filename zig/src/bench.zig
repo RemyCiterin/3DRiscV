@@ -21,16 +21,24 @@ noinline fn seed() u32 {
 
 pub var measureLock = Spinlock{};
 
+pub fn getCycle() u32 {
+    return @as(*volatile u32, @ptrFromInt(0x30000000)).*;
+}
+
+pub fn getInstret() u32 {
+    return @as(*volatile u32, @ptrFromInt(0x30000004)).*;
+}
+
 // Measure the performance of a benchmark test
 pub fn measure(
     id: usize,
     bench: anytype,
 ) @TypeOf(bench.call()) {
-    var cycle = RV.mcycle.read();
-    var instret = RV.minstret.read();
+    var cycle = getCycle();
+    var instret = getInstret();
     const output = bench.call();
-    instret = RV.minstret.read() -% instret;
-    cycle = RV.mcycle.read() -% cycle;
+    instret = getInstret() -% instret;
+    cycle = getCycle() -% cycle;
 
     measureLock.lock();
     defer measureLock.unlock();
@@ -100,7 +108,6 @@ pub const BinarySearch = struct {
     pub fn init(allocator: std.mem.Allocator, N: usize) !Self {
         var array = try allocator.alloc(u32, N);
         for (0..N) |i| array[i] = i;
-        logger.info("{} {any}", .{ N, array });
 
         return .{
             .array = array,
@@ -140,10 +147,8 @@ pub const BinarySearch = struct {
 
     pub fn call(self: Self) void {
         for (0.., self.array) |i, v| {
-            if (self.search(v) != i) {
-                logger.info("{any}", .{self.array});
+            if (self.search(v) != i)
                 @panic("item not found");
-            }
         }
     }
 };

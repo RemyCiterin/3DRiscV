@@ -1,6 +1,7 @@
 module TileLink.UncoherentBCache
   ( BCacheRequest
   , BCacheCore(..)
+  , makeBCacheCoreWith
   , makeBCacheCore
   ) where
 
@@ -57,7 +58,7 @@ reading = 1
 acquire= 2
 release = 3
 
-makeBCacheCore :: forall w kw iw ow atomic p.
+makeBCacheCoreWith :: forall w kw iw ow atomic p.
   ( Bits atomic
   , KnownTLParams p
   , KnownNat iw
@@ -68,28 +69,10 @@ makeBCacheCore :: forall w kw iw ow atomic p.
   , KnownNat (Log2 (LaneWidth p))
   , KnownNat (kw+(iw+(ow+Log2 (LaneWidth p)))))
     => Bit (SourceWidth p)
+    -> TLSlave p
     -> (atomic -> Bit (8 * LaneWidth p) -> Bit (8 * LaneWidth p))
-    -> Module (BCacheCore kw iw ow atomic p, TLMaster p)
-makeBCacheCore source execAtomic = do
-  queueA :: Queue (ChannelA p) <- makeQueue
-  queueD :: Queue (ChannelD p) <- makeQueue
-
-  let slave :: TLSlave p =
-        TLSlave
-          { channelA= toSink queueA
-          , channelB= nullSource
-          , channelC= nullSink
-          , channelD= toSource queueD
-          , channelE= nullSink }
-
-  let master :: TLMaster p =
-        TLMaster
-          { channelA= toSource queueA
-          , channelB= nullSink
-          , channelC= nullSource
-          , channelD= toSink queueD
-          , channelE= nullSource }
-
+    -> Module (BCacheCore kw iw ow atomic p)
+makeBCacheCoreWith source slave execAtomic = do
   putArbiter <- makeNullArbiter
   getArbiter <- makeNullArbiter
 
@@ -158,72 +141,105 @@ makeBCacheCore source execAtomic = do
       execOp way.val
       getM.getAck
 
-  let ifc =
-        BCacheCore
-          { canLookup= state.read 1 === idle
-          , lookup= \ idx off req -> do
-              dynamicAssert (state.read 1 === idle) "lookup with an unexpected state"
-              request <== req
-              offset <== off
-              index <== idx
+  return
+    BCacheCore
+      { canLookup= state.read 1 === idle
+      , lookup= \ idx off req -> do
+          dynamicAssert (state.read 1 === idle) "lookup with an unexpected state"
+          request <== req
+          offset <== off
+          index <== idx
 
-              state.write 1 reading
-              sequence_ [do
-                  v.load idx
-                  d.load idx
-                  t.load idx
-                  | (v,d,t) <- zip3 validRam dirtyRam keyRam]
-          , canMatch=
-              inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `is` #Store)
-              .&&. inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `is` #StoreC)
-              .&&. state.read 0 === reading
-              .&&. scResponseQ.notFull
-              .&&. dataQueue.notFull
-              .&&. getM.canGet
-              .&&. putM.canPut
-          , match= \ msb -> do
-              dynamicAssert (state.read 0 === reading) "matching with an unexpected state"
-              key <== msb
+          state.write 1 reading
+          sequence_ [do
+              v.load idx
+              d.load idx
+              t.load idx
+              | (v,d,t) <- zip3 validRam dirtyRam keyRam]
+      , canMatch=
+          inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `is` #Store)
+          .&&. inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `is` #StoreC)
+          .&&. state.read 0 === reading
+          .&&. scResponseQ.notFull
+          .&&. dataQueue.notFull
+          .&&. getM.canGet
+          .&&. putM.canPut
+      , match= \ msb -> do
+          dynamicAssert (state.read 0 === reading) "matching with an unexpected state"
+          key <== msb
 
-              let hit = orList [v.out .&&. msb === t.out | (t,v) <- zip keyRam validRam]
+          let hit = orList [v.out .&&. msb === t.out | (t,v) <- zip keyRam validRam]
 
-              if hit then do
-                let way :: Bit w =
-                      select
-                        [v.out .&&. msb === t.out --> constant i
-                          | (t,v,i) <- zip3 keyRam validRam [0..]]
+          if hit then do
+            let way :: Bit w =
+                  select
+                    [v.out .&&. msb === t.out --> constant i
+                      | (t,v,i) <- zip3 keyRam validRam [0..]]
 
-                state.write 0 idle
-                execOp way
-              else do
-                reserved <== false
-                way <== randomWay.val
-                storeListRAM keyRam randomWay.val index.val msb
-                storeListRAM validRam randomWay.val index.val true
-                storeListRAM dirtyRam randomWay.val index.val false
-                if outListRAM dirtyRam randomWay.val then do
-                  state.write 0 release
-                  let key = outListRAM keyRam randomWay.val
-                  putM.put (randomWay.val # index.val # 0) (address key) logSize
-                else do
-                  state.write 0 acquire
-                  getM.get (randomWay.val # index.val # 0) (address msb) logSize
+            state.write 0 idle
+            execOp way
+          else do
+            reserved <== false
+            way <== randomWay.val
+            storeListRAM keyRam randomWay.val index.val msb
+            storeListRAM validRam randomWay.val index.val true
+            storeListRAM dirtyRam randomWay.val index.val false
+            if outListRAM dirtyRam randomWay.val then do
+              state.write 0 release
+              let key = outListRAM keyRam randomWay.val
+              putM.put (randomWay.val # index.val # 0) (address key) logSize
+            else do
+              state.write 0 acquire
+              getM.get (randomWay.val # index.val # 0) (address msb) logSize
 
-              return ()
-          , abort= state.write 0 idle
-          , scResponse= toSource scResponseQ
-          , loadResponse=
-              Source
-                { canPeek= dataQueue.canDeq .&&. inv dataQueue.first.valid
-                , consume= dataQueue.deq
-                , peek= dataRamA.outBE}
-          , atomicResponse=
-              Source
-                { canPeek= dataQueue.canDeq .&&. dataQueue.first.valid
-                , consume= do
-                    let (op,pos) = dataQueue.first.val
-                    dataRamA.storeBE pos ones (execAtomic op dataRamA.outBE)
-                    dataQueue.deq
-                , peek= dataRamA.outBE}}
+          return ()
+      , abort= state.write 0 idle
+      , scResponse= toSource scResponseQ
+      , loadResponse=
+          Source
+            { canPeek= dataQueue.canDeq .&&. inv dataQueue.first.valid
+            , consume= dataQueue.deq
+            , peek= dataRamA.outBE}
+      , atomicResponse=
+          Source
+            { canPeek= dataQueue.canDeq .&&. dataQueue.first.valid
+            , consume= do
+                let (op,pos) = dataQueue.first.val
+                dataRamA.storeBE pos ones (execAtomic op dataRamA.outBE)
+                dataQueue.deq
+            , peek= dataRamA.outBE}}
 
+makeBCacheCore :: forall w kw iw ow atomic p.
+  ( Bits atomic
+  , KnownTLParams p
+  , KnownNat iw
+  , KnownNat ow
+  , KnownNat kw
+  , KnownNat w
+  , KnownNat (w+(iw+ow))
+  , KnownNat (Log2 (LaneWidth p))
+  , KnownNat (kw+(iw+(ow+Log2 (LaneWidth p)))))
+    => Bit (SourceWidth p)
+    -> (atomic -> Bit (8 * LaneWidth p) -> Bit (8 * LaneWidth p))
+    -> Module (BCacheCore kw iw ow atomic p, TLMaster p)
+makeBCacheCore source execAtomic = do
+  queueA <- makeQueue
+  queueD <- makeQueue
+
+  let slave =
+        TLSlave
+          { channelA= toSink queueA
+          , channelB= nullSource
+          , channelC= nullSink
+          , channelD= toSource queueD
+          , channelE= nullSink }
+  let master =
+        TLMaster
+          { channelA= toSource queueA
+          , channelB= nullSink
+          , channelC= nullSource
+          , channelD= toSink queueD
+          , channelE= nullSource }
+
+  ifc <- makeBCacheCoreWith @w @kw @iw @ow @atomic @p source slave execAtomic
   return (ifc,master)

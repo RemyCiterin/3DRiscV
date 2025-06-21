@@ -15,6 +15,7 @@ import Utils
 import Instr
 import Alu
 
+import TileLink.Mmio
 import TileLink.Interconnect
 import TileLink.UncoherentBCache
 import TileLink.Utils
@@ -32,6 +33,9 @@ displayAscii term =
     go x (i : is)  =
       formatCond (fromInteger i === x) (fshow (ascii!i)) <>
       go x is
+
+isCached :: Bit 32 -> Bit 1
+isCached addr = addr .>=. 0x80000000
 
 type EpochWidth = 8
 type Epoch = Bit EpochWidth
@@ -161,11 +165,29 @@ makeLoadStoreUnit ::
   Stream (Bit 1) ->
   Module (TLMaster TLConfig, Stream ExecOutput)
 makeLoadStoreUnit input commit = do
+  let cacheSource = 1
+  let mmioSource = 2
+
+  let xbarconfig =
+        XBarConfig
+          { bce= True
+          , rootAddr= \ _ -> 0
+          , rootSink= \ _ -> 0
+          , rootSource= \ x -> x === cacheSource ? (0,1)
+          , sizeChannelA= 2
+          , sizeChannelB= 2
+          , sizeChannelC= 2
+          , sizeChannelD= 2
+          , sizeChannelE= 2 }
+
+  ([master], [cacheSlave,mmioSlave]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
+
   outputQ :: Queue ExecOutput <- makeQueue
 
   key :: Reg (Bit 20) <- makeReg dontCare
-  (cache,master) <-
-    withName "dcache" $ makeBCacheCore @2 @20 @6 @4 @_ @TLConfig 1 execAMO
+  cache <-
+    withName "dcache" $
+      makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
   always do
     when (cache.canMatch) do
@@ -178,16 +200,70 @@ makeLoadStoreUnit input commit = do
   let opcode = instr.opcode
   let addr = req.rs1 + req.instr.imm.val
 
-  let isWord = req.instr.accessWidth === 0b10
-  let isHalf = req.instr.accessWidth === 0b01
-  let isByte = req.instr.accessWidth === 0b00
+  let isWord = instr.accessWidth === 0b10
+  let isHalf = instr.accessWidth === 0b01
+  let isByte = instr.accessWidth === 0b00
 
   let aligned =
         selectDefault false [
-          isByte --> true,
-          isHalf .&&. at @0 addr === 0 --> true,
-          isWord .&&. slice @1 @0 addr === 0 --> true
+          opcode `is` [LOAD,STORE] .&&. isByte --> true,
+          opcode `is` [LOAD,STORE] .&&. isHalf .&&. at @0 addr === 0 --> true,
+          opcode `is` [LOAD,STORE] .&&. isWord .&&. slice @1 @0 addr === 0 --> true,
+          opcode `is` [STOREC,LOADR] .&&. slice @1 @0 addr === 0 .&&. isCached addr --> true,
+          instr.isAMO .&&. slice @1 @0 addr === 0 .&&. isCached addr --> true
         ]
+
+  let beat = req.rs2 .<<. ((slice @1 @0 addr) # (0b000 :: Bit 3))
+  let mask :: Bit 4 =
+        select [
+          isByte --> 0b0001,
+          isHalf --> 0b0011,
+          isWord --> 0b1111
+        ] .<<. (slice @1 @0 addr)
+
+  let canLoad = cache.canLookup .&&. mmioSlave.channelA.canPut
+  let canStore = cache.canLookup .&&. mmioSlave.channelA.canPut
+
+  let sendLoad op = do
+        if isCached addr then do
+          cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) op
+          key <== truncateLSB addr
+        else do
+          mmioSlave.channelA.put
+            ChannelA
+              { opcode= tag #Get ()
+              , source= mmioSource
+              , size= zeroExtend instr.accessWidth
+              , address= addr
+              , lane= dontCare
+              , mask= mask }
+
+  let canReceiveLoad = isCached addr ? (cache.loadResponse.canPeek, mmioSlave.channelD.canPeek)
+
+  let responseLoad = isCached addr ? (cache.loadResponse.peek, mmioSlave.channelD.peek.lane)
+
+  let consumeLoad =
+        if isCached addr then do
+          cache.loadResponse.consume
+        else do
+          mmioSlave.channelD.consume
+
+  let sendStore =
+        if isCached addr then do
+          cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Store (mask,beat))
+          key <== truncateLSB addr
+        else do
+            mmioSlave.channelA.put
+              ChannelA
+                { opcode= tag #PutData ()
+                , source= mmioSource
+                , size= zeroExtendCast instr.accessWidth
+                , address= addr
+                , lane= beat
+                , mask= mask }
+
+  let canReceiveStore = mmioSlave.channelD.canPeek
+  let consumeStore = mmioSlave.channelD.consume
 
   always do
     -- *** STORE ***
@@ -202,39 +278,38 @@ makeLoadStoreUnit input commit = do
 
       state <== 3
 
-    when (state.val === 3 .&&. cache.canLookup .&&. commit.canPeek) do
+    when (state.val === 3 .&&. canStore .&&. commit.canPeek) do
       commit.consume
 
-      let beat = req.rs2 .<<. ((slice @1 @0 addr) # (0b000 :: Bit 3))
-      let mask :: Bit 4 =
-            select [
-              isByte --> 0b0001,
-              isHalf --> 0b0011,
-              isWord --> 0b1111
-            ] .<<. (slice @1 @0 addr)
-
       if (commit.peek) then do
-        when (addr === 0x10000000) do displayAscii (slice @7 @0 beat)
-        cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Store (mask, beat))
-        key <== truncateLSB addr
-        input.consume
-        state <== 0
+        when (addr === 0x10000000) $ displayAscii (slice @7 @0 beat)
+        when (isCached addr) input.consume
+        state <== isCached addr ? (0, 8)
+        sendStore
       else do
         input.consume
         state <== 0
 
+    when (state.val === 8 .&&. canReceiveStore) do
+      input.consume
+      consumeStore
+      state <== 0
+
     -- *** LOAD / LOAD RESERVE ***
-    when (state.val === 0 .&&. input.canPeek .&&. cache.canLookup .&&. opcode `is` [LOAD,LOADR]) do
-      let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
-      cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) op
-      key <== truncateLSB addr
-      state <== 1
+    when (state.val === 0 .&&. input.canPeek .&&. canLoad .&&. opcode `is` [LOAD,LOADR]) do
+      if (aligned) then do
+        let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
+        sendLoad op
+        state <== 1
+      else do
+        outputQ.enq ExecOutput{pc=req.pc+4, exception=true, cause= 4, tval= addr, rd= dontCare}
+        state <== 2
 
-    when (state.val === 1 .&&. cache.loadResponse.canPeek .&&. outputQ.notFull) do
-      cache.loadResponse.consume
+    when (state.val === 1 .&&. canReceiveLoad .&&. outputQ.notFull) do
+      consumeLoad
 
-      let beat :: Bit 32 = cache.loadResponse.peek .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
-      let out :: Bit 32 =
+      let beat :: Bit 32 = responseLoad .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
+      let rd :: Bit 32 =
             select [
               isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
               isHalf .&&. req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
@@ -243,8 +318,7 @@ makeLoadStoreUnit input commit = do
               isWord --> beat
             ]
 
-      outputQ.enq ExecOutput{pc=req.pc+4, exception=inv aligned, cause= 4, tval= addr, rd= out}
-
+      outputQ.enq ExecOutput{pc=req.pc+4, exception=false, cause= 4, tval= addr, rd}
       state <== 2
 
     when (state.val === 2 .&&. commit.canPeek) do
@@ -377,7 +451,7 @@ makeRegisterFile = do
           (regUpdate.active .&&. regUpdate.val.fst === x) ? (regUpdate.val.snd, registers!x)}
 
 makeCore ::
-  Module (TLMaster TLConfig, TLMaster TLConfig)
+  Module (TLMaster TLConfig, TLMaster TLConfig, Bit 32, Bit 32)
 makeCore = do
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
   commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
@@ -486,7 +560,22 @@ makeCore = do
           else do
             trainHit req.bstate req.pc resp.pc (some instr)
 
-  return (imaster, dmaster)
+  return (imaster, dmaster, cycle.val, instret.val)
+
+
+makePerfCounter :: Bit 32 -> Bit 32 -> Module (TLSlave TLConfig)
+makePerfCounter cycle instret = do
+  let cycleMmio =
+        Mmio
+          { address= 0x30000000
+          , read= cycle
+          , write= \ _ _ -> pure () }
+  let instretMmio =
+        Mmio
+          { address= 0x30000004
+          , read= instret
+          , write= \ _ _ -> pure () }
+  makeTLMmio 1 [cycleMmio, instretMmio]
 
 makeFakeTestCore :: Bit 1 -> Module (Bit 1)
 makeFakeTestCore _ = mdo
@@ -501,8 +590,8 @@ makeFakeTestCore _ = mdo
   let xbarconfig =
         XBarConfig
           { bce= True
-          , rootAddr= \ _ -> 0
-          , rootSink= \ _ -> 0
+          , rootAddr= \ x -> x .>=. 0x80000000 ? (0,1)
+          , rootSink= \ x -> x === 0 ? (0,1)
           , rootSource= \ x -> x === 0 ? (0,1)
           , sizeChannelA= 2
           , sizeChannelB= 2
@@ -510,14 +599,18 @@ makeFakeTestCore _ = mdo
           , sizeChannelD= 2
           , sizeChannelE= 2 }
 
-  ([master0], [slave0,slave1]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
+  ([master0,master1], [slave0,slave1]) <- makeTLXBar @2 @2 @TLConfig xbarconfig
   slave <- withName "mem" $ makeTLRAM @18 @TLConfig config
 
   withName "mem" $ makeConnection master0 slave
   withName "mem" $ makeConnection imaster slave0
   withName "mem" $ makeConnection dmaster slave1
 
-  (imaster, dmaster) <- withName "core" makeCore
+  perf <- makePerfCounter cycle instret
+  withName "perf" $ makeConnection master1 perf
+
+  (imaster, dmaster, cycle, instret) <- withName "core" makeCore
+
   return imaster.channelA.canPeek
 
 makeTestCore :: Module ()
