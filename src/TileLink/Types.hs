@@ -6,7 +6,7 @@ import Blarney.Connectable
 import Blarney.Queue
 import Blarney.Ehr
 
-import Blarney.TaggedUnion
+import Blarney.ADT
 import Blarney.Arbiter
 
 import Data.Proxy
@@ -46,20 +46,21 @@ type KnownTLParams (p :: TLParamsKind) =
 -- sizes
 type TLSize = Bit 13
 
-type TLPerm =
-  TaggedUnion [
-    "Nothing" ::: (),
-    "Trunk" ::: (),
-    "Dirty" ::: (),
-    "Branch" ::: ()
-  ]
+data TLPerm = TLPerm (Bit 2) deriving(Generic, Bits, Cmp)
 
-formatTLPerm :: TLPerm -> Format
-formatTLPerm perm =
-  formatCond (perm `is` #Nothing) (fshow "Nothing") <>
-  formatCond (perm `is` #Branch) (fshow "Branch") <>
-  formatCond (perm `is` #Trunk) (fshow "Trunk") <>
-  formatCond (perm `is` #Dirty) (fshow "Dirty")
+-- nothing is encodded to zero, such that rams are initialised with it
+nothing, trunk, dirty, branch :: TLPerm
+nothing = TLPerm 0
+branch = TLPerm 1
+trunk = TLPerm 2
+dirty = TLPerm 3
+
+instance FShow TLPerm where
+  fshow perm =
+    formatCond (perm === nothing) (fshow "nothing") <>
+    formatCond (perm === branch) (fshow "branch") <>
+    formatCond (perm === trunk) (fshow "trunk") <>
+    formatCond (perm === dirty) (fshow "dirty")
 
 type Grow =
   TaggedUnion [
@@ -68,11 +69,16 @@ type Grow =
     "BtoT" ::: ()
   ]
 
+n2b, n2t, b2t :: Grow
+n2b = tag #NtoB ()
+n2t = tag #NtoT ()
+b2t = tag #BtoT ()
+
 formatGrow :: Grow -> Format
 formatGrow perm =
-  formatCond (perm `is` #NtoB) (fshow "NtoB") <>
-  formatCond (perm `is` #NtoT) (fshow "NtoT") <>
-  formatCond (perm `is` #BtoT) (fshow "BtoT")
+  formatCond (perm `isTagged` #NtoB) (fshow "NtoB") <>
+  formatCond (perm `isTagged` #NtoT) (fshow "NtoT") <>
+  formatCond (perm `isTagged` #BtoT) (fshow "BtoT")
 
 type Reduce =
   TaggedUnion [
@@ -84,14 +90,22 @@ type Reduce =
     "NtoN" ::: ()
   ]
 
+t2t, t2b, t2n, b2b, b2n, n2n :: Reduce
+t2t = tag #TtoT ()
+t2b = tag #TtoB ()
+t2n = tag #TtoN ()
+b2b = tag #BtoB ()
+b2n = tag #BtoN ()
+n2n = tag #NtoN ()
+
 formatReduce :: Reduce -> Format
 formatReduce perm =
-  formatCond (perm `is` #TtoB) (fshow "TtoB") <>
-  formatCond (perm `is` #TtoN) (fshow "TtoN") <>
-  formatCond (perm `is` #BtoB) (fshow "BtoB") <>
-  formatCond (perm `is` #TtoT) (fshow "TtoT") <>
-  formatCond (perm `is` #BtoN) (fshow "BtoN") <>
-  formatCond (perm `is` #NtoN) (fshow "NtoN")
+  formatCond (perm `isTagged` #TtoB) (fshow "TtoB") <>
+  formatCond (perm `isTagged` #TtoN) (fshow "TtoN") <>
+  formatCond (perm `isTagged` #BtoB) (fshow "BtoB") <>
+  formatCond (perm `isTagged` #TtoT) (fshow "TtoT") <>
+  formatCond (perm `isTagged` #BtoN) (fshow "BtoN") <>
+  formatCond (perm `isTagged` #NtoN) (fshow "NtoN")
 
 type Cap =
   TaggedUnion [
@@ -102,9 +116,9 @@ type Cap =
 
 formatCap :: Cap -> Format
 formatCap perm =
-  formatCond (perm `is` #T) (fshow "T") <>
-  formatCond (perm `is` #B) (fshow "B") <>
-  formatCond (perm `is` #N) (fshow "N")
+  formatCond (perm `isTagged` #T) (fshow "T") <>
+  formatCond (perm `isTagged` #B) (fshow "B") <>
+  formatCond (perm `isTagged` #N) (fshow "N")
 
 type OpcodeA =
   TaggedUnion [
@@ -116,13 +130,13 @@ type OpcodeA =
 
 formatOpcodeA :: OpcodeA -> Format
 formatOpcodeA opcode =
-  formatCond (opcode `is` #Get) (fshow "Get") <>
-  formatCond (opcode `is` #PutData) (fshow "PutData") <>
+  formatCond (opcode `isTagged` #Get) (fshow "Get") <>
+  formatCond (opcode `isTagged` #PutData) (fshow "PutData") <>
   formatCond
-    (opcode `is` #AcquireBlock)
+    (opcode `isTagged` #AcquireBlock)
     (fshow "AcquireBlock<" <> formatGrow (untag #AcquireBlock opcode) <> fshow ">") <>
   formatCond
-    (opcode `is` #AcquirePerms)
+    (opcode `isTagged` #AcquirePerms)
     (fshow "AcquirePerms<" <> formatGrow (untag #AcquirePerms opcode) <> fshow ">")
 
 type OpcodeB =
@@ -135,10 +149,10 @@ type OpcodeB =
 formatOpcodeB :: OpcodeB -> Format
 formatOpcodeB opcode =
   formatCond
-    (opcode `is` #ProbePerms)
+    (opcode `isTagged` #ProbePerms)
     (fshow "ProbePerms<" <> formatCap (untag #ProbePerms opcode) <> fshow ">") <>
   formatCond
-    (opcode `is` #ProbeBlock)
+    (opcode `isTagged` #ProbeBlock)
     (fshow "ProbeBlock<" <> formatCap (untag #ProbeBlock opcode) <> fshow ">")
 
 type OpcodeC =
@@ -152,16 +166,16 @@ type OpcodeC =
 formatOpcodeC :: OpcodeC -> Format
 formatOpcodeC opcode =
   formatCond
-    (opcode `is` #ProbeAck)
+    (opcode `isTagged` #ProbeAck)
     (fshow "ProbeAck<" <> formatReduce (untag #ProbeAck opcode) <> fshow ">") <>
   formatCond
-    (opcode `is` #ProbeAckData)
+    (opcode `isTagged` #ProbeAckData)
     (fshow "ProbeAckData<" <> formatReduce (untag #ProbeAckData opcode) <> fshow ">") <>
   formatCond
-    (opcode `is` #Release)
+    (opcode `isTagged` #Release)
     (fshow "Release<" <> formatReduce (untag #Release opcode) <> fshow ">") <>
   formatCond
-    (opcode `is` #ReleaseData)
+    (opcode `isTagged` #ReleaseData)
     (fshow "ReleaseData<" <> formatReduce (untag #ReleaseData opcode) <> fshow ">")
 
 type OpcodeD =
@@ -175,14 +189,14 @@ type OpcodeD =
 
 formatOpcodeD :: OpcodeD -> Format
 formatOpcodeD opcode =
-  formatCond (opcode `is` #ReleaseAck) (fshow "ReleaseAck") <>
-  formatCond (opcode `is` #AccessAck) (fshow "AccessAck") <>
-  formatCond (opcode `is` #AccessAckData) (fshow "AccessAckData") <>
+  formatCond (opcode `isTagged` #ReleaseAck) (fshow "ReleaseAck") <>
+  formatCond (opcode `isTagged` #AccessAck) (fshow "AccessAck") <>
+  formatCond (opcode `isTagged` #AccessAckData) (fshow "AccessAckData") <>
   formatCond
-    (opcode `is` #Grant)
+    (opcode `isTagged` #Grant)
     (fshow "Grant<" <> formatCap (untag #Grant opcode) <> fshow ">") <>
   formatCond
-    (opcode `is` #GrantData)
+    (opcode `isTagged` #GrantData)
     (fshow "GrantData<" <> formatCap (untag #GrantData opcode) <> fshow ">")
 
 data ChannelA_Flit aw dw sw ow =

@@ -7,6 +7,7 @@ import Blarney.Ehr
 import Blarney.Queue
 import Blarney.Option
 import Data.Proxy
+import Blarney.ADT
 
 data JumpEnum
   = Call

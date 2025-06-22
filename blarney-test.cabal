@@ -13,7 +13,10 @@ executable blarney-test
     Blarney.Sharing,
     Blarney.Arbiter,
     Blarney.Ehr,
+    Blarney.ADT,
     TileLink.UncoherentBCache,
+    TileLink.CoherentBCache,
+    TileLink.AcquireRelease,
     TileLink.Interconnect,
     TileLink.Mmio,
     TileLink.Types,
@@ -57,6 +60,7 @@ executable blarney-test
     TypeFamilies
     UndecidableInstances
     AllowAmbiguousTypes
+    FunctionalDependencies
   ghc-options:
     -fno-cse
     -fno-full-laziness

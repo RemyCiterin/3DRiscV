@@ -2,6 +2,7 @@ module Alu where
 
 import Blarney
 import Blarney.Option
+import Blarney.ADT
 import Blarney.Ehr
 
 import Instr

@@ -1,10 +1,10 @@
 import Blarney
 import Blarney.Queue
 import Blarney.Option
-import Blarney.TaggedUnion
 import System.Environment
 import Blarney.Arbiter
 import Blarney.Ehr
+import Blarney.ADT
 
 import Utils
 

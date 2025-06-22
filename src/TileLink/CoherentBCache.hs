@@ -1,4 +1,4 @@
-module TileLink.UncoherentBCache
+module TileLink.CoherentBCache
   ( BCacheRequest
   , BCacheCore(..)
   , makeBCacheCoreWith
@@ -17,7 +17,7 @@ import Blarney.ADT
 
 import TileLink.Types
 import TileLink.Utils
-import TileLink.GetPut
+import TileLink.AcquireRelease
 
 storeListRAM :: (Bits a, Bits b, KnownNat idx) => [RAM a b] -> Bit idx -> a -> b -> Action ()
 storeListRAM rams index k v =
@@ -40,6 +40,15 @@ type BCacheRequest atomic p =
     , "StoreC" ::: (Bit (LaneWidth p), Bit (8 * LaneWidth p))
     , "Store" ::: (Bit (LaneWidth p), Bit (8 * LaneWidth p))]
 
+needPermTrunk :: forall atomic p.
+  (Bits atomic, KnownTLParams p) => BCacheRequest atomic p -> Bit 1
+needPermTrunk req = inv (req `isTagged` #Load)
+
+satisfyPerms :: forall atomic p.
+  (Bits atomic, KnownTLParams p) => BCacheRequest atomic p -> TLPerm -> Bit 1
+satisfyPerms req perm =
+  perm =!= nothing .&&. inv (perm === branch .&&. needPermTrunk @atomic @p req)
+
 -- Operations are performed in order here, no NACK at matching stage
 data BCacheCore kw iw ow atomic p =
   BCacheCore
@@ -52,11 +61,12 @@ data BCacheCore kw iw ow atomic p =
     , scResponse :: Source (Bit 1)
     , atomicResponse :: Source (Bit (8*LaneWidth p)) }
 
-idle, reading, acquire, release :: Bit 2
-idle = 0
-reading = 1
-acquire= 2
-release = 3
+type BCacheState = Bit 3
+st_idle, st_lookup, st_acquire, st_release :: BCacheState
+st_idle = 0
+st_lookup= 1
+st_acquire= 2
+st_release= 3
 
 makeBCacheCoreWith :: forall w kw iw ow atomic p.
   ( Bits atomic
@@ -82,16 +92,18 @@ makeBCacheCoreWith source slave execAtomic = do
 
   scResponseQ :: Queue (Bit 1) <- makeQueue
 
-  state :: Ehr (Bit 2) <- makeEhr 2 idle
+  state :: Ehr BCacheState <- makeEhr 2 st_idle
 
   let ways = 2^(valueOf @w)
-  validRam :: [RAM (Bit iw) (Bit 1)] <- replicateM ways makeDualRAMForward
-  dirtyRam :: [RAM (Bit iw) (Bit 1)] <- replicateM ways makeDualRAMForward
+  permRam :: [RAM (Bit iw) TLPerm] <- replicateM ways makeDualRAMForward
   keyRam :: [RAM (Bit iw) (Bit kw)] <- replicateM ways makeDualRAMForward
   [dataRamA,dataRamB] <- makeDualRAMForwardBE >>= makeSharedRAMBE 2
 
-  putM <- makePutMaster @(w+(iw+ow)) @p source putArbiter dataRamB slave
-  getM <- makeGetMaster @(w+(iw+ow)) @p source getArbiter dataRamB slave
+  let logSize :: Bit (SizeWidth p) =
+        constant $ toInteger $ valueOf @(AddrWidth p) - valueOf @kw - valueOf @iw
+
+  acquireM <- makeAcquireMaster @(w+(iw+ow)) @p source logSize putArbiter dataRamB slave
+  (releaseM, probeM) <- makeReleaseMaster @(w+(iw+ow)) @p source logSize getArbiter dataRamB slave
 
   randomWay :: Reg (Bit w) <- makeReg dontCare
   always do randomWay <== randomWay.val + 1
@@ -110,90 +122,97 @@ makeBCacheCoreWith source slave execAtomic = do
         when (request.val `isTagged` #Atomic) do
           dataQueue.enq (some (untag #Atomic request.val, way # index.val # offset.val))
           dataRamA.loadBE (way # index.val # offset.val)
-          storeListRAM dirtyRam way index.val true
         when (request.val `isTagged` #Store) do
           let (mask,lane) = untag #Store request.val
           dataRamA.storeBE (way # index.val # offset.val) mask lane
-          storeListRAM dirtyRam way index.val true
         when (request.val `isTagged` #StoreC) do
           dynamicAssert (scResponseQ.notFull) "enq into a full queue"
           scResponseQ.enq reserved.val
           when (reserved.val) do
             let (mask,lane) = untag #Store request.val
             dataRamA.storeBE (way # index.val # offset.val) mask lane
-            storeListRAM dirtyRam way index.val true
 
   let address :: Bit kw -> Bit (AddrWidth p) = \ key ->
         cast (key # index.val # (0 :: Bit ow) # (0 :: Bit (Log2 (LaneWidth p))))
 
-  let logSize :: Bit (SizeWidth p) =
-        constant $ toInteger $ valueOf @(AddrWidth p) - valueOf @kw - valueOf @iw
-
   always do
-    when (state.read 0 === release .&&. putM.canPutAck .&&. getM.canGet) do
-      getM.get (way.val # index.val # 0) (address key.val) logSize
+    when (state.read 0 === st_release .&&. releaseM.ack.canPeek .&&. acquireM.canAcquire) do
+      acquireM.acquireBlock (tag #NtoT ()) (way.val # index.val # 0) (address key.val)
       --display "acquire block: 0x" (formatHex 0 (address key.val))
-      state.write 0 acquire
-      putM.putAck
+      state.write 0 st_acquire
+      releaseM.ack.consume
 
-    when (state.read 0 === acquire .&&. getM.canGetAck) do
-      state.write 0 idle
+    when (state.read 0 === st_acquire .&&. acquireM.canAcquireAck) do
+      storeListRAM keyRam way.val index.val key.val
+
       execOp way.val
-      getM.getAck
+      state.write 0 st_idle
+      perm <- acquireM.acquireAck
+      storeListRAM permRam way.val index.val (dataRamA.storeActiveBE ? (dirty,perm))
 
   return
     BCacheCore
-      { canLookup= state.read 1 === idle
+      { canLookup= state.read 1 === st_idle
       , lookup= \ idx off req -> do
-          dynamicAssert (state.read 1 === idle) "lookup with an unexpected state"
+          dynamicAssert (state.read 1 === st_idle) "lookup with an unexpected state"
           request <== req
           offset <== off
           index <== idx
 
-          state.write 1 reading
+          state.write 1 st_lookup
           sequence_ [do
-              v.load idx
-              d.load idx
+              p.load idx
               t.load idx
-              | (v,d,t) <- zip3 validRam dirtyRam keyRam]
+              | (p,t) <- zip permRam keyRam]
       , canMatch=
           inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `isTagged` #Store)
           .&&. inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `isTagged` #StoreC)
-          .&&. state.read 0 === reading
+          .&&. state.read 0 === st_lookup
           .&&. scResponseQ.notFull
           .&&. dataQueue.notFull
-          .&&. getM.canGet
-          .&&. putM.canPut
+          .&&. acquireM.canAcquire
+          .&&. releaseM.start.canPut
       , match= \ msb -> do
-          dynamicAssert (state.read 0 === reading) "matching with an unexpected state"
+          dynamicAssert (state.read 0 === st_lookup) "matching with an unexpected state"
           key <== msb
 
-          let hit = orList [v.out .&&. msb === t.out | (t,v) <- zip keyRam validRam]
+          let hit =
+                orList
+                  [msb === t.out .&&. satisfyPerms @atomic @p request.val p.out
+                    | (t,p) <- zip keyRam permRam]
 
           if hit then do
             let way :: Bit w =
                   select
-                    [v.out .&&. msb === t.out --> constant i
-                      | (t,v,i) <- zip3 keyRam validRam [0..]]
+                    [msb === t.out --> constant i
+                      | (t,i) <- zip keyRam [0..]]
 
-            state.write 0 idle
             execOp way
+            state.write 0 st_idle
+            when (dataRamA.storeActiveBE) do
+              storeListRAM permRam way index.val dirty
           else do
             reserved <== false
             way <== randomWay.val
-            storeListRAM keyRam randomWay.val index.val msb
-            storeListRAM validRam randomWay.val index.val true
-            storeListRAM dirtyRam randomWay.val index.val false
-            if outListRAM dirtyRam randomWay.val then do
-              state.write 0 release
+            storeListRAM permRam randomWay.val index.val nothing
+            if outListRAM permRam randomWay.val =!= nothing then do
+              state.write 0 st_release
               let key = outListRAM keyRam randomWay.val
-              putM.put (randomWay.val # index.val # 0) (address key) logSize
+              when (outListRAM permRam randomWay.val === dirty) do
+                releaseM.start.put (t2n, address key, some $ randomWay.val # index.val # 0)
+              when (outListRAM permRam randomWay.val === trunk) do
+                releaseM.start.put (t2n, address key, none)
+              when (outListRAM permRam randomWay.val === branch) do
+                releaseM.start.put (b2n, address key, none)
             else do
-              state.write 0 acquire
-              getM.get (randomWay.val # index.val # 0) (address msb) logSize
+              state.write 0 st_acquire
+              acquireM.acquireBlock
+                (needPermTrunk @atomic @p request.val ? (n2t, n2b))
+                (randomWay.val # index.val # 0)
+                (address msb)
 
           return ()
-      , abort= state.write 0 idle
+      , abort= state.write 0 st_idle
       , scResponse= toSource scResponseQ
       , loadResponse=
           Source

@@ -7,7 +7,7 @@ import Blarney.SourceSink
 import Blarney.Queue
 import Blarney.Ehr
 import Blarney.Arbiter
-import Blarney.TaggedUnion
+import Blarney.ADT
 import Data.Proxy
 
 instance Connectable (TLMaster p) (TLSlave p) where
@@ -20,18 +20,18 @@ instance Connectable (TLMaster p) (TLSlave p) where
 
 hasDataA :: OpcodeA -> Bit 1
 hasDataA opcode =
-  opcode `is` #PutData
+  opcode `isTagged` #PutData
 
 hasDataB :: OpcodeB -> Bit 1
 hasDataB opcode = false
 
 hasDataC :: OpcodeC -> Bit 1
 hasDataC opcode =
-  opcode `is` #ProbeAckData .||. opcode `is` #ReleaseData
+  opcode `isTagged` #ProbeAckData .||. opcode `isTagged` #ReleaseData
 
 hasDataD :: OpcodeD -> Bit 1
 hasDataD opcode =
-  opcode `is` #GrantData .||. opcode `is` #AccessAckData
+  opcode `isTagged` #GrantData .||. opcode `isTagged` #AccessAckData
 
 instance KnownNat_ChannelA aw dw sw ow => FShow (ChannelA_Flit aw dw sw ow) where
   fshow msg =
@@ -184,3 +184,10 @@ getLaneMask address logSize =
     let offset :: Bit sz = truncateCast address in
     let size :: TLSize = 1 .<<. logSize in
     ((1 .<<. size) - 1) .<<. offset
+
+capTo :: Cap -> TLPerm
+capTo cap =
+  select
+    [ cap `isTagged` #N --> nothing
+    , cap `isTagged` #B --> branch
+    , cap `isTagged` #T --> trunk ]

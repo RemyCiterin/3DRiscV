@@ -5,6 +5,7 @@ import Data.Char
 import Blarney
 import Blarney.BitScan
 import Blarney.Option
+import Blarney.ADT
 
 import Utils
 

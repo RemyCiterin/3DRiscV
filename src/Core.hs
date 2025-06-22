@@ -6,21 +6,17 @@ import Blarney.Queue
 import Blarney.Option
 import Blarney.Stream
 import Blarney.SourceSink
-import Blarney.TaggedUnion hiding(is)
 import Blarney.Connectable
+import Blarney.ADT
+
 
 import Prediction
-import TileLink
 import Utils
 import Instr
 import Alu
 
-import TileLink.Mmio
-import TileLink.Interconnect
+import TileLink
 import TileLink.UncoherentBCache
-import TileLink.Utils
-import TileLink.Types
-import TileLink.RAM
 
 displayAscii :: Bit 8 -> Action ()
 displayAscii term =
@@ -225,19 +221,25 @@ makeLoadStoreUnit input commit = do
   let canLoad = isCached addr ? (cache.canLookup, mmioSlave.channelA.canPut .&&. commit.canPeek)
   let canStore = cache.canLookup .&&. mmioSlave.channelA.canPut
 
+  let lookup op = do
+        cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) op
+        key <== truncateLSB addr
+
+  let mmioRequest :: ChannelA TLConfig =
+        ChannelA
+          { opcode= dontCare
+          , source= mmioSource
+          , size= zeroExtend instr.accessWidth
+          , address= addr
+          , lane= dontCare
+          , mask= mask }
+
   let sendLoad op = do
         if isCached addr then do
-          cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) op
-          key <== truncateLSB addr
+          lookup op
         else do
           mmioSlave.channelA.put
-            ChannelA
-              { opcode= tag #Get ()
-              , source= mmioSource
-              , size= zeroExtend instr.accessWidth
-              , address= addr
-              , lane= dontCare
-              , mask= mask }
+            (mmioRequest{opcode= tag #Get ()} :: ChannelA TLConfig)
 
   let canReceiveLoad = isCached addr ? (cache.loadResponse.canPeek, mmioSlave.channelD.canPeek)
 
@@ -251,17 +253,10 @@ makeLoadStoreUnit input commit = do
 
   let sendStore =
         if isCached addr then do
-          cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Store (mask,beat))
-          key <== truncateLSB addr
+          lookup (tag #Store (mask,beat))
         else do
             mmioSlave.channelA.put
-              ChannelA
-                { opcode= tag #PutData ()
-                , source= mmioSource
-                , size= zeroExtendCast instr.accessWidth
-                , address= addr
-                , lane= beat
-                , mask= mask }
+              (mmioRequest{opcode= tag #PutData (), lane= beat} :: ChannelA TLConfig)
 
   let canReceiveStore = mmioSlave.channelD.canPeek
   let consumeStore = mmioSlave.channelD.consume
@@ -306,6 +301,7 @@ makeLoadStoreUnit input commit = do
 
       when (state.val === 0 .&&. canLoad) do
         if (aligned .&&. (isCached addr .||. commit.peek)) then do
+          -- perform uncached operation when speculation is resolved
           sendLoad op
           state <== 1
         else do
@@ -355,26 +351,27 @@ makeLoadStoreUnit input commit = do
           outputQ.enq out{cause=6}
 
       when (state.val === 2 .&&. commit.canPeek) do
+        -- abort an unaligned atomic operation
         commit.consume
         input.consume
         state <== 0
 
       when (state.val === 1 .&&. commit.canPeek .&&. inv commit.peek .&&. outputQ.notFull) do
-          outputQ.enq out
-          commit.consume
-          input.consume
-          state <== 0
+        -- abort atomic operation because of a misspeculation
+        outputQ.enq out
+        commit.consume
+        input.consume
+        state <== 0
 
       when (state.val === 1 .&&. cache.canLookup .&&. commit.canPeek .&&. commit.peek) do
+        -- start executing a cached atomic operation when branch prediction is confirmed
         commit.consume
         state <== 2
 
         if instr.isAMO then do
-          cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #Atomic (opcode, req.rs2))
-          key <== truncateLSB addr
+          lookup (tag #Atomic (opcode, req.rs2))
         else do
-          cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) (tag #StoreC (ones, req.rs2))
-          key <== truncateLSB addr
+          lookup (tag #StoreC (ones, req.rs2))
 
       when (state.val === 2 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
         outputQ.enq (out{rd= zeroExtend $ inv cache.scResponse.peek} :: ExecOutput)

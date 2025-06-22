@@ -11,7 +11,7 @@ import Blarney.Core.BV
 import Blarney.Arbiter
 import Blarney.Queue
 import Blarney.SourceSink
-import Blarney.TaggedUnion
+import Blarney.ADT
 import Blarney.Ehr
 
 data Mmio p =
@@ -44,10 +44,10 @@ makeTLMmio sink confs = do
   always do
     when (channelA.canPeek .&&. channelD.canPut) do
       dynamicAssert
-        (channelA.peek.opcode `is` #PutData .||. channelA.peek.opcode `is` #Get)
+        (channelA.peek.opcode `isTagged` #PutData .||. channelA.peek.opcode `isTagged` #Get)
         "makeTLRAM only allow PutData and Get requests"
 
-      let isPut = channelA.peek.opcode `is` #PutData
+      let isPut = channelA.peek.opcode `isTagged` #PutData
       let sz = size.val === 0 ? (1 .<<. channelA.peek.size, size.val)
       let addr = size.val === 0 ? (channelA.peek.address, address.val)
 
