@@ -3,6 +3,7 @@ module TileLink.CoherentBCache
   , BCacheCore(..)
   , makeBCacheCoreWith
   , makeBCacheCore
+  , testBCacheCore
   ) where
 
 import Blarney
@@ -148,6 +149,8 @@ makeBCacheCoreWith source slave execAtomic = do
   index :: Reg (Bit iw) <- makeReg dontCare
   key :: Reg (Bit kw) <- makeReg dontCare
   way :: Reg (Bit w) <- makeReg dontCare
+
+  address :: Reg (Bit (AddrWidth p)) <- makeReg dontCare
   cap :: Reg TLPerm <- makeReg dontCare
 
   let execOp :: Bit w -> Action () = \ way -> do
@@ -189,13 +192,11 @@ makeBCacheCoreWith source slave execAtomic = do
   always do
     when ((state.read 1 === st_idle .||. state.read 1 === st_acquire) .&&. probeM.start.canPeek) do
       let (addr, perm) = probeM.start.peek
-      let (k,idx,off) = decode @p addr
+      let (_,idx,_) = decode @p @kw @iw @ow addr
       state.write 1 st_probe_lookup
       nextState <== state.read 1
+      address <== addr
 
-      key <== k
-      index <== idx
-      offset <== off
       sequence_ [do
           p.load idx
           t.load idx
@@ -203,16 +204,17 @@ makeBCacheCoreWith source slave execAtomic = do
       cap <== perm
 
     when (state.read 0 === st_probe_lookup .&&. probeM.evict.canPut) do
+      let (key, index, _) = decode @p @kw @iw @ow address.val
       state.write 0 st_probe_burst
 
       let hit =
             orList
-              [key.val === t.out .&&. p.out .>. nothing
+              [key === t.out .&&. p.out .>. nothing
                 | (t,p) <- zip keyRam permRam]
 
       let (way :: Bit w, perm) =
             selectDefault (0, nothing)
-              [key.val === t.out .&&. p.out .>. nothing --> (constant i, p.out)
+              [key === t.out .&&. p.out .>. nothing --> (constant i, p.out)
                 | (t,p,i) <- zip3 keyRam permRam [0..]]
 
       when (perm === nothing) do
@@ -220,19 +222,19 @@ makeBCacheCoreWith source slave execAtomic = do
       when (perm === branch) do
         if cap.val === nothing then do
           probeM.evict.put (b2n, none)
-          storeListRAM permRam way index.val nothing
+          storeListRAM permRam way index nothing
         else do
           probeM.evict.put (b2b, none)
       when (perm .>=. trunk) do
         when (cap.val === trunk) do
           probeM.evict.put (t2t, none)
         when (cap.val === branch) do
-          probeM.evict.put (t2b, some $ way # index.val # 0)
-          storeListRAM permRam way index.val branch
+          probeM.evict.put (t2b, some $ way # index # 0)
+          storeListRAM permRam way index branch
           reserved <== false
         when (cap.val === nothing) do
-          probeM.evict.put (t2n, some $ way # index.val # 0)
-          storeListRAM permRam way index.val nothing
+          probeM.evict.put (t2n, some $ way # index # 0)
+          storeListRAM permRam way index nothing
           reserved <== false
 
     when (state.read 0 === st_probe_burst .&&. probeM.ack.canPeek) do
@@ -359,3 +361,84 @@ makeBCacheCore source execAtomic = do
 
   ifc <- makeBCacheCoreWith @w @kw @iw @ow @atomic @p source slave execAtomic
   return (ifc,master)
+
+testBCacheCore :: Bit 1 -> Module (Bit 1)
+testBCacheCore _ = do
+  -- A cache with atomic swap operation
+  (cache, master) <- makeBCacheCore @1 @20 @6 @4 @(Bit 32) @(TLParams 32 4 4 8 8) 42 (\ x _ -> x)
+
+  sizeA :: Reg TLSize <- makeReg 0
+  receiveE :: Reg (Bit 1) <- makeReg true
+
+  sizeC :: Reg TLSize <- makeReg 0
+
+  always do
+    when (master.channelA.canPeek .&&. sizeA.val === 0 .&&. receiveE.val) do
+      display master.channelA.peek
+      master.channelA.consume
+      receiveE <== false
+
+      sizeA <== 1 .<<. master.channelA.peek.size
+
+    when (sizeA.val .>. 0 .&&. master.channelD.canPut) do
+      sizeA <== sizeA.val - 4
+      master.channelD.put
+        ChannelD
+          { opcode= tag #GrantData (item #B)
+          , sink= 0
+          , source= 42
+          , size= 6
+          , lane= 0 }
+
+    when (sizeA.val === 0 .&&. inv receiveE.val .&&. master.channelE.canPeek) do
+      master.channelE.consume
+      receiveE <== true
+
+    when (sizeC.val === 0 .&&. master.channelC.canPeek) do
+      sizeC <== 1 .<<. master.channelC.peek.size
+
+    when (sizeC.val .>. 0 .&&. master.channelC.canPeek .&&. master.channelD.canPut) do
+      display "receive " master.channelC.peek
+      let opcode = master.channelC.peek.opcode
+      master.channelC.consume
+      sizeC <== hasDataC opcode ? (sizeC.val - 4, 0)
+
+      when (sizeC.val === 4 .||. inv (hasDataC opcode)) do
+        master.channelD.put
+          ChannelD
+            { opcode= tag #ReleaseAck ()
+            , source= 42
+            , sink= 0
+            , size= 6
+            , lane= 0 }
+
+  out :: Reg (Bit 32) <- makeReg dontCare
+  let load key idx off = do
+        wait cache.canLookup
+        action (cache.lookup idx off (item #Load))
+        wait cache.canMatch
+        action (cache.match key)
+        wait cache.loadResponse.canPeek
+        action do
+          out <== cache.loadResponse.peek
+          cache.loadResponse.consume
+
+  let store key idx off mask val = do
+        wait cache.canLookup
+        action (cache.lookup idx off (tag #Store (mask,val)))
+        wait cache.canMatch
+        action (cache.match key)
+
+  runStmt do
+    store 0 0 0 ones 24
+    load 0 0 0
+    action do
+      display "response: " out.val
+    load 1 0 0
+    action do
+      display "response: " out.val
+    load 2 0 0
+    action do
+      display "response: " out.val
+
+  return master.channelA.canPeek

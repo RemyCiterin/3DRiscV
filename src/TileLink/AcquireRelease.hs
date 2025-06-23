@@ -54,6 +54,7 @@ makeAcquireMaster source logSize arbiter ram slave = do
         arbiter.request
 
       when (arbiter.grant) do
+        display "Master: " msg
         let p = untag #GrantData msg.opcode
         channelD.consume
 
@@ -107,7 +108,7 @@ makeAcquireMaster source logSize arbiter ram slave = do
         last <== false
         return perm.val
     , canAcquire= slave.channelA.canPut .&&. inv valid.val
-    , canAcquireAck= last.val
+    , canAcquireAck= last.val .&&. slave.channelE.canPut
     , active= valid.val
     , address= request.val.snd
     , index= request.val.fst }
@@ -231,7 +232,7 @@ makeBurstFSM source slave arbiter ram = do
   queue :: Queue () <- makePipelineQueue 1
 
   always do
-    when (size.val =!= 0 .&&. queue.notFull .&&. hasDataC opcode) do
+    when (size.val =!= 0 .&&. queue.notFull) do
       if hasDataC opcode then do
         arbiter.request
       else do
@@ -259,7 +260,7 @@ makeBurstFSM source slave arbiter ram = do
               , size= logSize
               , source= source
               , lane= dontCare }
-          size <== 1 .<<. laneSize
+          size <== 1 .<<. logSize
           valid <== true
           index <== idx
       , canStop=
@@ -310,10 +311,10 @@ makeReleaseMaster source logSize arbiter ram slave = do
               Sink
                 { canPut= state.val === 0 .&&. burstM.canStart
                 , put= \ (reduce, addr, index) -> do
-                    state <== 3
                     let op =
                           index.valid ? (tag #ReleaseData reduce, tag #Release reduce)
-                    burstM.start op index.val addr logSize }
+                    burstM.start op index.val addr logSize
+                    state <== 3 }
           , ack=
               Source
                 { peek= ()

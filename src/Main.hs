@@ -19,6 +19,7 @@ import qualified Instr
 import qualified Uart
 import qualified Cache
 import qualified Core
+import TileLink.CoherentBCache
 
 type Byte i = Bit (8*i)
 
@@ -122,6 +123,7 @@ main = do
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
         writeVerilogTop testRegFile "Rf" "Verilog/"
         writeVerilogTop testRAM "TestRam" "Verilog/"
-        writeVerilogModule Core.makeFakeTestCore "TestCore" "Verilog/"
+        --writeVerilogModule Core.makeFakeTestCore "TestCore" "Verilog/"
+        writeVerilogModule testBCacheCore "TestCore" "Verilog/"
         --writeVerilogModule makeTestGetPut "TestCore" "Verilog/"
         writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"
