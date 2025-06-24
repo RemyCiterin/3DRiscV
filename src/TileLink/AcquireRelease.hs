@@ -13,6 +13,10 @@ import TileLink.Utils
 import TileLink.Types
 
 import Blarney.Option
+import Blarney.Core.RTL(Displayable)
+
+logprint :: FShow a => a -> Action ()
+logprint = \ _ -> pure () -- display "Master: "
 
 data AcquireMaster iw (p :: TLParamsKind) =
   AcquireMaster
@@ -54,7 +58,7 @@ makeAcquireMaster source logSize arbiter ram slave = do
         arbiter.request
 
       when (arbiter.grant) do
-        display "Master: " msg
+        logprint msg
         let p = untag #GrantData msg.opcode
         channelD.consume
 
@@ -72,7 +76,7 @@ makeAcquireMaster source logSize arbiter ram slave = do
 
       when (msg.opcode `isTagged` #Grant .&&. msg.source === source) do
         let p = untag #Grant msg.opcode
-        display "Master: " msg
+        logprint msg
         channelD.consume
 
         perm <==
@@ -269,7 +273,7 @@ makeBurstFSM source slave arbiter ram = do
           .&&. (releaseAck .||. inv isRelease)
       , stop= do
           when isRelease do
-            display "Master: " slave.channelD.peek
+            logprint slave.channelD.peek
             slave.channelD.consume
           valid <== false }
 
@@ -332,7 +336,7 @@ makeReleaseMaster source logSize arbiter ram slave = do
                 { canPeek= canProbe
                 , peek= (message.address, capTo cap)
                 , consume= do
-                    display "Master: " message
+                    logprint message
                     state <== 1 }
           , evict=
               Sink

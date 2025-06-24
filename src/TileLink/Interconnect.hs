@@ -11,6 +11,49 @@ import TileLink.Utils
 
 import Data.Proxy
 
+-- interconnect only for the D channel: release ack, and grant operations need to put data
+-- into the same channel
+makeSharedBurstSink :: forall p a.
+  KnownTLParams p
+    => (a -> Bit 1)
+    -> (a -> Bit (SizeWidth p))
+    -> Int
+    -> Sink a
+    -> Module [Sink a]
+makeSharedBurstSink hasData getSize n sink = do
+  liftNat (log2 n) $ \ (_ :: Proxy width) -> do
+    let laneSize = constant $ toInteger $ valueOf @(LaneWidth p)
+    token :: Reg (Bit width) <- makeReg dontCare
+    sinks <- makeSharedSink n sink
+    size :: Reg TLSize <- makeReg 0
+
+    return
+      [
+        Sink
+          { canPut= s.canPut .&&. (size.val === 0 .||. token.val === constant i)
+          , put= \ msg -> do
+              token <== constant i
+              let sz :: TLSize = size.val === 0 ? (1 .<<. getSize msg, size.val)
+              size <== (sz .<=. laneSize .||. inv (hasData msg)) ?
+                (0, sz - laneSize)
+              s.put msg }
+      | (s, i) <- zip sinks [0..] ]
+
+makeSharedSinkA :: forall p. KnownTLParams p => Int -> Sink (ChannelA p) -> Module [Sink (ChannelA p)]
+makeSharedSinkA i = makeSharedBurstSink @p (\ msg -> hasDataA msg.opcode) (\ msg -> msg.size) i
+
+makeSharedSinkB :: forall p. KnownTLParams p => Int -> Sink (ChannelB p) -> Module [Sink (ChannelB p)]
+makeSharedSinkB i = makeSharedSink i
+
+makeSharedSinkC :: forall p. KnownTLParams p => Int -> Sink (ChannelC p) -> Module [Sink (ChannelC p)]
+makeSharedSinkC i = makeSharedBurstSink @p (\ msg -> hasDataC msg.opcode) (\ msg -> msg.size) i
+
+makeSharedSinkD :: forall p. KnownTLParams p => Int -> Sink (ChannelD p) -> Module [Sink (ChannelD p)]
+makeSharedSinkD i = makeSharedBurstSink @p (\ msg -> hasDataD msg.opcode) (\ msg -> msg.size) i
+
+makeSharedSinkE :: forall p. KnownTLParams p => Int -> Sink (ChannelE p) -> Module [Sink (ChannelE p)]
+makeSharedSinkE i = makeSharedSink i
+
 data XBarConfig n m p =
   XBarConfig
     { bce :: Bool
@@ -44,11 +87,11 @@ makeTLXBar config = do
   sizeC :: Reg TLSize <- makeReg 0
   sizeD :: Reg TLSize <- makeReg 0
 
-  sinkA <- makeSharedSink (valueOf @m) (toSink queueA)
-  sinkB <- makeSharedSink (valueOf @n) (toSink queueB)
-  sinkC <- makeSharedSink (valueOf @m) (toSink queueC)
-  sinkD <- makeSharedSink (valueOf @n) (toSink queueD)
-  sinkE <- makeSharedSink (valueOf @m) (toSink queueE)
+  sinkA <- makeSharedSinkA @p (valueOf @m) (toSink queueA)
+  sinkB <- makeSharedSinkB @p (valueOf @n) (toSink queueB)
+  sinkC <- makeSharedSinkC @p (valueOf @m) (toSink queueC)
+  sinkD <- makeSharedSinkD @p (valueOf @n) (toSink queueD)
+  sinkE <- makeSharedSinkE @p (valueOf @m) (toSink queueE)
   let sourceA = toSource queueA
   let sourceB = toSource queueB
   let sourceC = toSource queueC
@@ -77,57 +120,19 @@ makeTLXBar config = do
   let canPeekD = map (sourceD.canPeek .&&.) rootD
   let canPeekE = map (sourceE.canPeek .&&.) rootE
 
-  let canPutD =
-        [s.canPut .&&. (sizeD.val === 0 .||. constant i === tokenD.val)
-          | (s,i) <- zip sinkD [0..]]
-
-
-  let canPutA =
-        [s.canPut .&&. (sizeA.val === 0 .||. constant i === tokenA.val)
-          | (s,i) <- zip sinkA [0..]]
-
-
-  let canPutC =
-        [s.canPut .&&. (sizeC.val === 0 .||. constant i === tokenC.val)
-          | (s,i) <- zip sinkC [0..]]
-
   return ([
       TLMaster
         { channelA= sourceA{canPeek=canPeekA!i}
         , channelB= sinkB!i
         , channelC= sourceC{canPeek=canPeekC!i}
-        , channelD=
-            Sink
-              { canPut= canPutD!i
-              , put= \ x -> do
-                  (sinkD!i).put x
-                  tokenD <== constant i
-                  let size :: TLSize = sizeD.val === 0 ? (1 .<<. x.size, sizeD.val)
-                  sizeD <== (size .<=. laneSize .||. inv (hasDataD x.opcode)) ?
-                    (0, size - laneSize)}
+        , channelD= sinkD!i
         , channelE= sourceE{canPeek=canPeekE!i}}
 
     | i <- [0..toInteger $ valueOf @n - 1]],[
       TLSlave
-        { channelA=
-            Sink
-              { canPut= canPutA!i
-              , put= \ x -> do
-                  (sinkA!i).put x
-                  tokenA <== constant i
-                  let size :: TLSize = sizeA.val === 0 ? (1 .<<. x.size, sizeA.val)
-                  sizeA <== (size .<=. laneSize .||. inv (hasDataA x.opcode)) ?
-                    (0, size - laneSize)}
+        { channelA= sinkA!i
         , channelB= sourceB{canPeek=canPeekB!i}
-        , channelC=
-            Sink
-              { canPut= canPutC!i
-              , put= \ x -> do
-                  (sinkC!i).put x
-                  tokenC <== constant i
-                  let size :: TLSize = sizeC.val === 0 ? (1 .<<. x.size, sizeC.val)
-                  sizeC <== (size .<=. laneSize .||. inv (hasDataC x.opcode)) ?
-                    (0, size - laneSize)}
+        , channelC= sinkC!i
         , channelD= sourceD{canPeek= canPeekD!i}
         , channelE= sinkE!i}
 

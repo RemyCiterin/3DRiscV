@@ -74,6 +74,13 @@ n2b = tag #NtoB ()
 n2t = tag #NtoT ()
 b2t = tag #BtoT ()
 
+decodeGrow :: Grow -> (TLPerm, TLPerm)
+decodeGrow grow =
+  select
+    [ grow === n2b --> (nothing, branch)
+    , grow === n2t --> (nothing, trunk)
+    , grow === b2t --> (branch, trunk) ]
+
 formatGrow :: Grow -> Format
 formatGrow perm =
   formatCond (perm `isTagged` #NtoB) (fshow "NtoB") <>
@@ -98,6 +105,16 @@ b2b = tag #BtoB ()
 b2n = tag #BtoN ()
 n2n = tag #NtoN ()
 
+decodeReduce :: Reduce -> (TLPerm, TLPerm)
+decodeReduce reduce =
+  select
+    [ reduce === t2t --> (trunk, trunk)
+    , reduce === t2b --> (trunk, branch)
+    , reduce === t2n --> (trunk, nothing)
+    , reduce === b2b --> (branch, branch)
+    , reduce === b2n --> (branch, nothing)
+    , reduce === n2n --> (nothing, nothing) ]
+
 formatReduce :: Reduce -> Format
 formatReduce perm =
   formatCond (perm `isTagged` #TtoB) (fshow "TtoB") <>
@@ -113,6 +130,13 @@ type Cap =
     "B" ::: (),
     "N" ::: ()
   ]
+
+decodeCap :: Cap -> TLPerm
+decodeCap cap =
+  select
+    [ cap `isTagged` #T --> trunk
+    , cap `isTagged` #B --> branch
+    , cap `isTagged` #N --> nothing ]
 
 formatCap :: Cap -> Format
 formatCap perm =

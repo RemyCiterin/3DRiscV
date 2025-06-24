@@ -17,6 +17,7 @@ import Blarney.SourceSink
 import Blarney.Connectable
 import Blarney.ADT
 
+import TileLink.RAM
 import TileLink.Types
 import TileLink.Utils
 import TileLink.AcquireRelease
@@ -392,10 +393,20 @@ testBCacheCore _ = do
   let bconfig =
         BroadcastConfig
           { sources= [0,1]
-          , fileName= Just "Mem.hex"
-          , lowerBound= 0x00000000
+          , logSize= 6
+          , baseSink= 0 }
+  (slave, uncachedMaster) <- makeBroadcast @16 @(TLParams 32 4 4 8 8) bconfig
+
+  let ramconfig =
+        TLRAMConfig
+          { fileName= Just "Mem.hex"
+          , lowerBound= 0x80000000
+          , bypassChannelA= False
+          , bypassChannelD= True
           , sink= 0 }
-  slave <- makeBroadcast @16 @(TLParams 32 4 4 8 8) bconfig
+  uncachedSlave <- makeTLRAM @16 @(TLParams 32 4 4 8 0) ramconfig
+
+  makeConnection uncachedMaster uncachedSlave
 
   makeConnection master slave
   makeConnection master0 slave0
@@ -403,6 +414,13 @@ testBCacheCore _ = do
 
   out0 :: Reg (Bit 32) <- makeReg dontCare
   out1 :: Reg (Bit 32) <- makeReg dontCare
+
+  count0 :: Reg (Bit 32) <- makeReg 0
+  count1 :: Reg (Bit 32) <- makeReg 0
+
+  cycle :: Reg (Bit 32) <- makeReg 0
+  always (cycle <== cycle.val + 1)
+
   let loadWith cache out (key, idx, off) = do
         wait cache.canLookup
         action (cache.lookup idx off (item #Load))
@@ -455,25 +473,40 @@ testBCacheCore _ = do
   let incrWith cache out (index :: Int) mutex addr = do
         acquireWith cache out mutex
         loadWith cache out addr
-        action (display "[" index "] counter: " out.val)
+        action (display "[" index ", " cycle.val "] counter: " out.val)
         storeWith cache out addr ones (out.val + 1)
         releaseWith cache out mutex
 
   let incr0 = incrWith cache0 out0 0
   let incr1 = incrWith cache1 out1 1
 
+  let delay = 100
+
+  let mutex = (0,0,0)
+  let var0 = (0,0,1)
+
+  let prog0 = do
+        while (count0.val =!= 0)  do
+          action (count0 <== count0.val - 1)
+          incr0 mutex var0
+          sequence_ (replicate delay tick)
+
+  let prog1 = do
+        while (count1.val =!= 0)  do
+          action (count1 <== count1.val - 1)
+          incr1 mutex var0
+          sequence_ (replicate delay tick)
+
   runStmt do
-    store0 (0,0,0) ones 0x00
-    store0 (0,0,1) ones 0x00
-    par [incr0 (0,0,0) (0,0,1), incr1 (0,0,0) (0,0,1)]
-    --load0 (0,0,0)
-    --action do
-    --  display "response: " (formatHex 0 out0.val)
-    --load0 (1,0,0)
-    --action do
-    --  display "response: " (formatHex 0 out0.val)
-    --load0 (2,0,0)
-    --action do
-    --  display "response: " (formatHex 0 out0.val)
+    store0 mutex ones 0x00
+    store0 var0 ones 0x00
+    action (count0 <== 10)
+    action (count1 <== 10)
+    par [prog0, prog1]
+    load0 var0
+    action (display "final value: " out0.val " at " cycle.val)
+    action (count0 <== 10)
+    prog0
+    action finish
 
   return master.channelA.canPeek
