@@ -14,11 +14,14 @@ import Blarney.Option
 import Blarney.Sharing
 import Blarney.Arbiter
 import Blarney.SourceSink
+import Blarney.Connectable
 import Blarney.ADT
 
 import TileLink.Types
 import TileLink.Utils
 import TileLink.AcquireRelease
+import TileLink.Interconnect
+import TileLink.Broadcast
 import Utils
 
 storeListRAM :: (Bits a, Bits b, KnownNat idx) => [RAM a b] -> Bit idx -> a -> b -> Action ()
@@ -192,6 +195,7 @@ makeBCacheCoreWith source slave execAtomic = do
   always do
     when ((state.read 1 === st_idle .||. state.read 1 === st_acquire) .&&. probeM.start.canPeek) do
       let (addr, perm) = probeM.start.peek
+      --display "lookup probe 0x" (formatHex 0 addr) " " perm
       let (_,idx,_) = decode @p @kw @iw @ow addr
       state.write 1 st_probe_lookup
       nextState <== state.read 1
@@ -201,6 +205,7 @@ makeBCacheCoreWith source slave execAtomic = do
           p.load idx
           t.load idx
           | (p,t) <- zip permRam keyRam]
+      probeM.start.consume
       cap <== perm
 
     when (state.read 0 === st_probe_lookup .&&. probeM.evict.canPut) do
@@ -216,6 +221,8 @@ makeBCacheCoreWith source slave execAtomic = do
             selectDefault (0, nothing)
               [key === t.out .&&. p.out .>. nothing --> (constant i, p.out)
                 | (t,p,i) <- zip3 keyRam permRam [0..]]
+
+      --display "match probe 0x" (formatHex 0 address.val) " " perm
 
       when (perm === nothing) do
         probeM.evict.put (n2n, none)
@@ -364,56 +371,39 @@ makeBCacheCore source execAtomic = do
 
 testBCacheCore :: Bit 1 -> Module (Bit 1)
 testBCacheCore _ = do
+  let xbarconfig =
+        XBarConfig
+          { bce= True
+          , rootAddr= \ _ -> 0
+          , rootSink= \ _ -> 0
+          , rootSource= \ x -> x === 0 ? (0,1)
+          , sizeChannelA= 2
+          , sizeChannelB= 2
+          , sizeChannelC= 2
+          , sizeChannelD= 2
+          , sizeChannelE= 2 }
+
+  ([master], [slave0,slave1]) <- makeTLXBar @1 @2 @(TLParams 32 4 4 8 8) xbarconfig
+
   -- A cache with atomic swap operation
-  (cache, master) <- makeBCacheCore @1 @20 @6 @4 @(Bit 32) @(TLParams 32 4 4 8 8) 42 (\ x _ -> x)
+  (cache0, master0) <- makeBCacheCore @1 @20 @6 @4 @(Bit 32) @(TLParams 32 4 4 8 8) 0 (\ x _ -> x)
+  (cache1, master1) <- makeBCacheCore @1 @20 @6 @4 @(Bit 32) @(TLParams 32 4 4 8 8) 1 (\ x _ -> x)
 
-  sizeA :: Reg TLSize <- makeReg 0
-  receiveE :: Reg (Bit 1) <- makeReg true
+  let bconfig =
+        BroadcastConfig
+          { sources= [0,1]
+          , fileName= Just "Mem.hex"
+          , lowerBound= 0x00000000
+          , sink= 0 }
+  slave <- makeBroadcast @16 @(TLParams 32 4 4 8 8) bconfig
 
-  sizeC :: Reg TLSize <- makeReg 0
+  makeConnection master slave
+  makeConnection master0 slave0
+  makeConnection master1 slave1
 
-  always do
-    when (master.channelA.canPeek .&&. sizeA.val === 0 .&&. receiveE.val) do
-      display master.channelA.peek
-      master.channelA.consume
-      receiveE <== false
-
-      sizeA <== 1 .<<. master.channelA.peek.size
-
-    when (sizeA.val .>. 0 .&&. master.channelD.canPut) do
-      sizeA <== sizeA.val - 4
-      master.channelD.put
-        ChannelD
-          { opcode= tag #GrantData (item #B)
-          , sink= 0
-          , source= 42
-          , size= 6
-          , lane= 0 }
-
-    when (sizeA.val === 0 .&&. inv receiveE.val .&&. master.channelE.canPeek) do
-      master.channelE.consume
-      receiveE <== true
-
-    when (sizeC.val === 0 .&&. master.channelC.canPeek) do
-      sizeC <== 1 .<<. master.channelC.peek.size
-
-    when (sizeC.val .>. 0 .&&. master.channelC.canPeek .&&. master.channelD.canPut) do
-      display "receive " master.channelC.peek
-      let opcode = master.channelC.peek.opcode
-      master.channelC.consume
-      sizeC <== hasDataC opcode ? (sizeC.val - 4, 0)
-
-      when (sizeC.val === 4 .||. inv (hasDataC opcode)) do
-        master.channelD.put
-          ChannelD
-            { opcode= tag #ReleaseAck ()
-            , source= 42
-            , sink= 0
-            , size= 6
-            , lane= 0 }
-
-  out :: Reg (Bit 32) <- makeReg dontCare
-  let load key idx off = do
+  out0 :: Reg (Bit 32) <- makeReg dontCare
+  out1 :: Reg (Bit 32) <- makeReg dontCare
+  let loadWith cache out (key, idx, off) = do
         wait cache.canLookup
         action (cache.lookup idx off (item #Load))
         wait cache.canMatch
@@ -423,22 +413,67 @@ testBCacheCore _ = do
           out <== cache.loadResponse.peek
           cache.loadResponse.consume
 
-  let store key idx off mask val = do
+  let load0 = loadWith cache0 out0
+  let load1 = loadWith cache1 out1
+
+  let swapWith cache out (key, idx, off) val = do
+        wait cache.canLookup
+        action (cache.lookup idx off (tag #Atomic val))
+        wait cache.canMatch
+        action (cache.match key)
+        wait cache.atomicResponse.canPeek
+        action do
+          out <== cache.atomicResponse.peek
+          cache.atomicResponse.consume
+
+  let swap0 = swapWith cache0 out0
+  let swap1 = swapWith cache1 out1
+
+  let storeWith cache out (key, idx, off) mask val = do
         wait cache.canLookup
         action (cache.lookup idx off (tag #Store (mask,val)))
         wait cache.canMatch
         action (cache.match key)
 
+  let store0 = storeWith cache0 out0
+  let store1 = storeWith cache1 out1
+
+  let acquireWith cache out addr = do
+        action (out <== 1)
+        while (out.val === 1) do
+          swapWith cache out addr 1
+
+  let acquire0 = acquireWith cache0 out0
+  let acquire1 = acquireWith cache1 out1
+
+  let releaseWith cache out addr = do
+        storeWith cache out addr ones 0
+
+  let release0 = releaseWith cache0 out0
+  let release1 = releaseWith cache1 out1
+
+  let incrWith cache out (index :: Int) mutex addr = do
+        acquireWith cache out mutex
+        loadWith cache out addr
+        action (display "[" index "] counter: " out.val)
+        storeWith cache out addr ones (out.val + 1)
+        releaseWith cache out mutex
+
+  let incr0 = incrWith cache0 out0 0
+  let incr1 = incrWith cache1 out1 1
+
   runStmt do
-    store 0 0 0 ones 24
-    load 0 0 0
-    action do
-      display "response: " out.val
-    load 1 0 0
-    action do
-      display "response: " out.val
-    load 2 0 0
-    action do
-      display "response: " out.val
+    store0 (0,0,0) ones 0x00
+    store0 (0,0,1) ones 0x00
+    par [incr0 (0,0,0) (0,0,1), incr1 (0,0,0) (0,0,1)]
+    --load0 (0,0,0)
+    --action do
+    --  display "response: " (formatHex 0 out0.val)
+    --load0 (1,0,0)
+    --action do
+    --  display "response: " (formatHex 0 out0.val)
+    --load0 (2,0,0)
+    --action do
+    --  display "response: " (formatHex 0 out0.val)
 
   return master.channelA.canPeek

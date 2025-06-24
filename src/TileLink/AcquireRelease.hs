@@ -72,6 +72,7 @@ makeAcquireMaster source logSize arbiter ram slave = do
 
       when (msg.opcode `isTagged` #Grant .&&. msg.source === source) do
         let p = untag #Grant msg.opcode
+        display "Master: " msg
         channelD.consume
 
         perm <==
@@ -268,6 +269,7 @@ makeBurstFSM source slave arbiter ram = do
           .&&. (releaseAck .||. inv isRelease)
       , stop= do
           when isRelease do
+            display "Master: " slave.channelD.peek
             slave.channelD.consume
           valid <== false }
 
@@ -329,7 +331,9 @@ makeReleaseMaster source logSize arbiter ram slave = do
               Source
                 { canPeek= canProbe
                 , peek= (message.address, capTo cap)
-                , consume= state <== 1 }
+                , consume= do
+                    display "Master: " message
+                    state <== 1 }
           , evict=
               Sink
                 { canPut= state.val === 1 .&&. burstM.canStart

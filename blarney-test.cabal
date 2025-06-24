@@ -18,6 +18,7 @@ executable blarney-test
     TileLink.CoherentBCache,
     TileLink.AcquireRelease,
     TileLink.Interconnect,
+    TileLink.Broadcast,
     TileLink.Mmio,
     TileLink.Types,
     TileLink.Utils,
