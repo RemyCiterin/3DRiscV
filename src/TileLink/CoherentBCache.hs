@@ -395,7 +395,7 @@ testBCacheCore _ = do
           { sources= [0,1]
           , logSize= 6
           , baseSink= 0 }
-  (slave, uncachedMaster) <- makeBroadcast @16 @(TLParams 32 4 4 8 8) bconfig
+  (slave, uncachedMaster) <- makeBroadcast @(TLParams 32 4 4 8 8) bconfig
 
   let ramconfig =
         TLRAMConfig

@@ -30,12 +30,9 @@ data BroadcastConfig p =
     , logSize :: Int
     , baseSink :: Bit (SinkWidth p) }
 
-makeBroadcast :: forall iw p p'.
-  ( KnownNat iw
-  , p' ~ TLParams (AddrWidth p) (LaneWidth p) (SizeWidth p) (SinkWidth p) 0
-  , KnownTLParams p
-  , KnownNat (AddrWidth p - iw)
-  , iw <= AddrWidth p )
+makeBroadcast :: forall p p'.
+  ( p' ~ TLParams (AddrWidth p) (LaneWidth p) (SizeWidth p) (SinkWidth p) 0
+  , KnownTLParams p )
     => BroadcastConfig p
     -> Module (TLSlave p, TLMaster p')
 makeBroadcast config = do
@@ -156,7 +153,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
   let logSize' = constant $ toInteger logSize
 
   liftNat blockWidth $ \ (_ :: Proxy iw) -> do
-    buffer :: RAM (Bit iw) (Bit (8 * LaneWidth p)) <- makeRAM
+    buffer :: RAM (Bit iw) (Bit (8 * LaneWidth p)) <- makeDualRAMForward
     epochBuf :: RAM (Bit iw) (Bit 1) <- makeRAM -- initialised with zeros
     epoch :: Reg (Bit 1) <- makeReg 0
 
@@ -172,9 +169,9 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
 
     always do
       let idx = doGrant.val ? (index2.val+1, index2.val)
-      index2 <== idx
       epochBuf.load idx
       buffer.load idx
+      index2 <== idx
 
     index1 :: Reg (Bit iw) <- makeReg dontCare
 
@@ -296,7 +293,7 @@ makeReleaseFSM sink logSize metaC channelD = do
   always do
     when canPeek do
       logprint msgC
-      dynamicAssert (msgC.size =!= logSize) "wrong size"
+      dynamicAssert (msgC.size === logSize) "wrong size"
       channelC.consume
       channelD.put
         ChannelD
@@ -318,7 +315,7 @@ makeReleaseFSM sink logSize metaC channelD = do
       , peek= (address, msgC.lane, getLaneMask @p address logSize, metaC.last)
       , consume= do
           logprint msgC
-          dynamicAssert (msgC.size =!= logSize) "wrong size"
+          dynamicAssert (msgC.size === logSize) "wrong size"
           channelC.consume
           when (metaC.last) do
             channelD.put

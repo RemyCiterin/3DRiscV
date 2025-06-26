@@ -16,7 +16,8 @@ import Instr
 import Alu
 
 import TileLink
-import TileLink.UncoherentBCache
+import TileLink.CoherentBCache
+import TileLink.Broadcast
 
 displayAscii :: Bit 8 -> Action ()
 displayAscii term =
@@ -68,6 +69,7 @@ type Training = BPredState HistSize RasSize -> Bit 32 -> Bit 32 -> Option Instr 
 -- 8 bits of source identifier
 -- 8 ibts of sink identifier
 type TLConfig = TLParams 32 4 4 8 8
+type TLConfig' = TLParams 32 4 4 8 0
 
 makeFetch ::
   Stream Redirection ->
@@ -95,7 +97,7 @@ makeFetch redirection = do
   queue :: Queue () <- makePipelineQueue 1
 
   fetchQ :: Queue (Option (Bit 32, Bit 32, BPredState HistSize RasSize, Epoch)) <-
-    makeSizedQueue 4
+    makeSizedQueueCore 4
 
   outputQ :: Queue FetchOutput <- makeQueue
 
@@ -583,11 +585,19 @@ makeFakeTestCore _ = mdo
           , sizeChannelE= 2 }
 
   ([master0,master1], [slave0,slave1]) <- makeTLXBar @2 @2 @TLConfig xbarconfig
-  slave <- withName "mem" $ makeTLRAM @18 @TLConfig config
+  uncoherentSlave <- withName "mem" $ makeTLRAM @18 @TLConfig' config
+
+  let bconfig =
+        BroadcastConfig
+          { sources= [0,1]
+          , logSize= 6
+          , baseSink= 0 }
+  (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
 
   withName "mem" $ makeConnection master0 slave
   withName "mem" $ makeConnection imaster slave0
   withName "mem" $ makeConnection dmaster slave1
+  withName "mem" $ makeConnection uncoherentMaster uncoherentSlave
 
   perf <- makePerfCounter cycle instret
   withName "perf" $ makeConnection master1 perf
