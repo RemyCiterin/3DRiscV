@@ -25,6 +25,8 @@
 
 
 _start:
+  csrr t0, mhartid
+  bnez t0, .init_stack_cpu1
   la t0, bss_start
   la t1, bss_end
   bgeu t0, t1, .bss_zero_loop_end
@@ -34,7 +36,17 @@ _start:
   bltu t0, t1, .bss_zero_loop
 .bss_zero_loop_end:
 
-  la sp, stack_top
+  la sp, stack_top0
+  la t0, bss_init_finish
+  li t1, 1
+  sw t1, 0(t0)
+  j 1f
+.init_stack_cpu1:
+  la t0, bss_init_finish
+  lw t0, 0(t0)
+  beqz t0, .init_stack_cpu1
+  la sp, stack_top1
+1:
   la t0, _reboot
   csrw mtvec, t0
   jal kernel_main
@@ -122,9 +134,19 @@ reboot_message1:
 reboot_message2:
   .string "***\n"
 
+.section .data
+.align 4
+bss_init_finish:
+  .word 0
+
 .section .bss
 .align 4
   .skip 0x1000
-stack_top:
+stack_top0:
+  .skip 0x4
+
+.align 4
+  .skip 0x1000
+stack_top1:
   .skip 0x4
 

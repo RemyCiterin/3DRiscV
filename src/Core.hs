@@ -286,6 +286,7 @@ makeLoadStoreUnit cacheSource mmioSource input commit = do
 
         if (commit.peek) then do
           when (addr === 0x10000000) $ displayAscii (slice @7 @0 beat)
+          --when (addr === 0x10000000 .&&. slice @7 @0 beat === 0) finish
           when (isCached addr) input.consume
           state <== isCached addr ? (0, 2)
           sendStore
@@ -436,13 +437,17 @@ makeRegisterFile = do
       , read= \ x ->
           (regUpdate.active .&&. regUpdate.val.fst === x) ? (regUpdate.val.snd, registers!x)}
 
+data CoreConfig =
+  CoreConfig
+    { fetchSource :: Bit (SourceWidth TLConfig)
+    , dataSource :: Bit (SourceWidth TLConfig)
+    , mmioSource :: Bit (SourceWidth TLConfig)
+    , hartId :: Integer }
+
 makeCore ::
-  Integer
-  -> Bit (SourceWidth TLConfig)
-  -> Bit (SourceWidth TLConfig)
-  -> Bit (SourceWidth TLConfig)
-  -> Module (TLMaster TLConfig, TLMaster TLConfig, Bit 32, Bit 32)
-makeCore hartId fetchSource dataSource mmioSource = do
+  CoreConfig
+  -> Module (TLMaster TLConfig, TLMaster TLConfig)
+makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
   commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
   aluQ :: Queue ExecInput <- withName "alu" $ makeQueue
@@ -465,7 +470,7 @@ makeCore hartId fetchSource dataSource mmioSource = do
   cycleCRSs <- makeCycleCounterCSR
   hartIdCSRs <- makeHartIdCSR (constant hartId)
   (instretCSRs, instret) <- makeInstructionCounterCSR
-  csrUnit <- makeCSRUnit (cycleCRSs ++ instretCSRs)
+  csrUnit <- makeCSRUnit (cycleCRSs ++ instretCSRs ++ hartIdCSRs)
 
   epoch :: Ehr Epoch <- makeEhr 2 0
 
@@ -539,9 +544,6 @@ makeCore hartId fetchSource dataSource mmioSource = do
           display "exec invalid instruction"
 
         when (req.epoch === epoch.read 0) do
-          --when (instr.opcode `is` [FENCE]) do
-          --  display "fence at cycle: " cycle.val " instret: " instret.val
-
           sysResp <-
             whenAction instr.isSystem (execCSR csrUnit systemQ.first)
           let resp = instr.isMemAccess ? (lsu.peek, instr.isSystem ? (sysResp, alu.peek))
@@ -549,15 +551,14 @@ makeCore hartId fetchSource dataSource mmioSource = do
           when (resp.exception) do
             display "exception at pc=0x" (formatHex 0 req.pc)
 
-          --instret <== instret.val + 1
           instret
 
           --display
-          --  "\t[" cycle.val "] retire pc: "
+          --  "\t[" hartId "@" cycle.val "] retire pc: "
           --  (formatHex 8 req.pc) " instr: " (fshow instr)
 
           when (rd =!= 0) do
-            --display "    " (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
+            --display "    " hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
             registers.write rd resp.rd
 
           if (resp.pc =!= req.prediction) then do
@@ -568,7 +569,7 @@ makeCore hartId fetchSource dataSource mmioSource = do
           else do
             trainHit req.bstate req.pc resp.pc (some instr)
 
-  return (imaster, dmaster, cycle.val, 0)
+  return (imaster, dmaster)
 
 
 makePerfCounter :: Bit 32 -> Bit 32 -> Module (TLSlave TLConfig)
@@ -600,34 +601,62 @@ makeFakeTestCore _ = mdo
           { bce= True
           , rootAddr= \ x -> x .>=. 0x80000000 ? (0,1)
           , rootSink= \ x -> x === 0 ? (0,1)
-          , rootSource= \ x -> x === 0 ? (0,1)
+          , rootSource= \ x ->
+              select
+                [ x === 0 --> 0
+                , x === 1 --> 1
+                , x === 2 --> 1
+                , x === 3 --> 2
+                , x === 4 --> 3
+                , x === 5 --> 3 ]
           , sizeChannelA= 2
           , sizeChannelB= 2
           , sizeChannelC= 2
           , sizeChannelD= 2
           , sizeChannelE= 2 }
 
-  ([master0,master1], [slave0,slave1]) <- withName "xbar" $ makeTLXBar @2 @2 @TLConfig xbarconfig
+  ([master0,master1], [slave0,slave1,slave2,slave3]) <-
+    withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
   uncoherentSlave <- withName "memory" $ makeTLRAM @18 @TLConfig' config
+
+  withName "xbar" $ makeConnection master0 slave
+  withName "xbar" $ makeConnection imaster0 slave0
+  withName "xbar" $ makeConnection dmaster0 slave1
+  withName "xbar" $ makeConnection imaster1 slave2
+  withName "xbar" $ makeConnection dmaster1 slave3
+  withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
+
+  perf <- withName "perf" $ makePerfCounter 0 0
+  withName "perf" $ makeConnection master1 perf
+
+  let coreconfig0 =
+        CoreConfig
+          { fetchSource= 0
+          , dataSource= 1
+          , mmioSource= 2
+          , hartId= 0 }
+  (imaster0, dmaster0) <- withName "core" $ makeCore coreconfig0
+
+  let coreconfig1 =
+        CoreConfig
+          { fetchSource= 3
+          , dataSource= 4
+          , mmioSource= 5
+          , hartId= 1 }
+  (imaster1, dmaster1) <- withName "core" $ makeCore coreconfig1
 
   let bconfig =
         BroadcastConfig
-          { sources= [0,1]
+          { sources=
+              [ coreconfig0.fetchSource
+              , coreconfig0.dataSource
+              , coreconfig1.fetchSource
+              , coreconfig1.dataSource ]
           , logSize= 6
           , baseSink= 0 }
   (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
 
-  withName "xbar" $ makeConnection master0 slave
-  withName "xbar" $ makeConnection imaster slave0
-  withName "xbar" $ makeConnection dmaster slave1
-  withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
-
-  perf <- withName "perf" $ makePerfCounter cycle instret
-  withName "perf" $ makeConnection master1 perf
-
-  (imaster, dmaster, cycle, instret) <- withName "core" $ makeCore 0 0 1 2
-
-  return imaster.channelA.canPeek
+  return imaster0.channelA.canPeek
 
 makeTestCore :: Module ()
 makeTestCore = mdo

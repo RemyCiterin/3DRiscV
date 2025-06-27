@@ -72,8 +72,8 @@ makeTLMmio sink confs = do
             { opcode= isPut ? (tag #AccessAck (), tag #AccessAckData ())
             , source= channelA.peek.source
             , size= channelA.peek.size
-            , sink= sink
-            , lane= lane.val }
+            , lane= lane.val
+            , sink= sink }
 
   return
     TLSlave

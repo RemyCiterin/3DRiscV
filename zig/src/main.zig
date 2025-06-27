@@ -55,12 +55,15 @@ pub const std_options = .{
 //      logger.debug("run bar", .{});
 //  }
 // ```
+
+var mutex: u32 = 0;
 pub fn log(
     comptime level: std.log.Level,
     comptime scope: @TypeOf(.EnumLiteral),
     comptime format: []const u8,
     args: anytype,
 ) void {
+    while (@atomicRmw(u32, &mutex, .Xchg, 1, .acq_rel) == 1) {}
     _ = level;
     const cycle: usize = RV.mcycle.read();
 
@@ -70,6 +73,7 @@ pub fn log(
     UART.writer.print(prefix, .{cycle}) catch unreachable;
     UART.writer.print(format, args) catch unreachable;
     UART.writer.print("\n", .{}) catch unreachable;
+    _ = @atomicRmw(u32, &mutex, .Xchg, 0, .acq_rel);
 }
 
 pub inline fn hang() noreturn {
@@ -114,6 +118,15 @@ pub export fn handler(manager: *Manager) callconv(.C) void {
 
 pub export fn kernel_main() align(16) callconv(.C) void {
     const logger = std.log.scoped(.kernel);
+
+    if (RV.mhartid.read() != 0) {
+        logger.info("== Start CPU1 ==", .{});
+
+        while (true) {}
+    } else {
+        logger.info("== Start CPU0 ==", .{});
+    }
+
     logger.info("=== Start DOoOM ===", .{});
 
     logger.info(

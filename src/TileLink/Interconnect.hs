@@ -66,12 +66,65 @@ data XBarConfig n m p =
     , sizeChannelD :: Int
     , sizeChannelE :: Int }
 
--- n is the number of masters, and m the number of slaves
-makeTLXBar :: forall n m p.
+makeTLXBarNoBCE :: forall n m p.
   (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2 n), KnownNat (Log2 m))
     => XBarConfig n m p
     -> Module ([TLMaster p], [TLSlave p])
-makeTLXBar config = do
+makeTLXBarNoBCE config = do
+  queueA :: Queue (ChannelA p) <- buildQueue config.sizeChannelA
+  queueD :: Queue (ChannelD p) <- buildQueue config.sizeChannelD
+
+  let laneSize :: TLSize = constant (toInteger (valueOf @(LaneWidth p)))
+
+  tokenA :: Reg (Bit (Log2 m)) <- makeReg dontCare
+  tokenD :: Reg (Bit (Log2 m)) <- makeReg dontCare
+  sizeA :: Reg TLSize <- makeReg 0
+  sizeD :: Reg TLSize <- makeReg 0
+
+  sinkA <- makeSharedSinkA @p (valueOf @m) (toSink queueA)
+  sinkD <- makeSharedSinkD @p (valueOf @n) (toSink queueD)
+  let sourceA = toSource queueA
+  let sourceD = toSource queueD
+
+  let rootA =
+        [constant i === config.rootAddr sourceA.peek.address
+          | i <- [0..toInteger $ valueOf @n - 1]]
+  let rootD =
+        [constant i === config.rootSource sourceD.peek.source
+          | i <- [0..toInteger $ valueOf @m - 1]]
+
+  let canPeekA = map (sourceA.canPeek .&&.) rootA
+  let canPeekD = map (sourceD.canPeek .&&.) rootD
+
+  return ([
+      TLMaster
+        { channelA= sourceA{canPeek=canPeekA!i}
+        , channelB= nullSink
+        , channelC= nullSource
+        , channelD= sinkD!i
+        , channelE= nullSource}
+
+    | i <- [0..toInteger $ valueOf @n - 1]],[
+      TLSlave
+        { channelA= sinkA!i
+        , channelB= nullSource
+        , channelC= nullSink
+        , channelD= sourceD{canPeek= canPeekD!i}
+        , channelE= nullSink}
+
+    | i <- [0..toInteger $ valueOf @m - 1]])
+  where
+    buildQueue 0 = makeBypassQueue
+    buildQueue 1 = makePipelineQueue 1
+    buildQueue 2 = makeQueue
+    buildQueue n = makeSizedQueueCore n
+
+-- n is the number of masters, and m the number of slaves
+makeTLXBarBCE :: forall n m p.
+  (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2 n), KnownNat (Log2 m))
+    => XBarConfig n m p
+    -> Module ([TLMaster p], [TLSlave p])
+makeTLXBarBCE config = do
   queueA :: Queue (ChannelA p) <- buildQueue config.sizeChannelA
   queueB :: Queue (ChannelB p) <- buildQueue config.sizeChannelB
   queueC :: Queue (ChannelC p) <- buildQueue config.sizeChannelC
@@ -142,3 +195,13 @@ makeTLXBar config = do
     buildQueue 1 = makePipelineQueue 1
     buildQueue 2 = makeQueue
     buildQueue n = makeSizedQueueCore n
+
+makeTLXBar :: forall n m p.
+  (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2 n), KnownNat (Log2 m))
+    => XBarConfig n m p
+    -> Module ([TLMaster p], [TLSlave p])
+makeTLXBar config =
+  if config.bce then
+    makeTLXBarBCE @n @m @p config
+  else
+    makeTLXBarNoBCE @n @m @p config
