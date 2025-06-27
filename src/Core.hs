@@ -72,15 +72,16 @@ type TLConfig = TLParams 32 4 4 8 8
 type TLConfig' = TLParams 32 4 4 8 0
 
 makeFetch ::
+  Bit (SourceWidth TLConfig) ->
   Stream Redirection ->
   Module (TLMaster TLConfig, Stream FetchOutput, Training, Training)
-makeFetch redirection = do
+makeFetch source redirection = do
   bpred :: BranchPredictor HistSize RasSize EpochWidth <-
     withName "bpred" $ makeBranchPredictor 10
 
   key :: Reg (Bit 20) <- makeReg dontCare
   (cache,master) <-
-    withName "icache" $ makeBCacheCore @2 @20 @6 @4 @() @TLConfig 0 (\ _ _ -> dontCare)
+    withName "icache" $ makeBCacheCore @2 @20 @6 @4 @() @TLConfig source (\ _ _ -> dontCare)
   responseQ <- makeSizedQueueCore 4
 
   always do
@@ -159,13 +160,12 @@ makeDecode stream = do
   return (toStream outputQ)
 
 makeLoadStoreUnit ::
+  Bit (SourceWidth TLConfig) ->
+  Bit (SourceWidth TLConfig) ->
   Stream ExecInput ->
   Stream (Bit 1) ->
   Module (TLMaster TLConfig, Stream ExecOutput)
-makeLoadStoreUnit input commit = do
-  let cacheSource = 1
-  let mmioSource = 2
-
+makeLoadStoreUnit cacheSource mmioSource input commit = do
   let xbarconfig =
         XBarConfig
           { bce= True
@@ -436,8 +436,11 @@ makeRegisterFile = do
           (regUpdate.active .&&. regUpdate.val.fst === x) ? (regUpdate.val.snd, registers!x)}
 
 makeCore ::
-  Module (TLMaster TLConfig, TLMaster TLConfig, Bit 32, Bit 32)
-makeCore = do
+  Bit (SourceWidth TLConfig)
+  -> Bit (SourceWidth TLConfig)
+  -> Bit (SourceWidth TLConfig)
+  -> Module (TLMaster TLConfig, TLMaster TLConfig, Bit 32, Bit 32)
+makeCore fetchSource dataSource mmioSource = do
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
   commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
   aluQ :: Queue ExecInput <- withName "alu" $ makeQueue
@@ -447,11 +450,12 @@ makeCore = do
 
   window :: Queue DecodeOutput <- makeSizedQueueCore 5
 
-  (imaster, fetch, trainHit, trainMis) <- withName "fetch" $ makeFetch (toStream redirectQ)
+  (imaster, fetch, trainHit, trainMis) <- withName "fetch" $ makeFetch fetchSource (toStream redirectQ)
   decode <- withName "decode" $ makeDecode fetch
 
   alu <- withName "alu" $ makeAlu (toStream aluQ)
-  (dmaster, lsu) <- withName "lsu" $ makeLoadStoreUnit (toStream lsuQ) (toStream commitQ)
+  (dmaster, lsu) <-
+    withName "lsu" $ makeLoadStoreUnit dataSource mmioSource (toStream lsuQ) (toStream commitQ)
 
   registers <- withName "registers" $ makeRegisterFile
 
@@ -584,8 +588,8 @@ makeFakeTestCore _ = mdo
           , sizeChannelD= 2
           , sizeChannelE= 2 }
 
-  ([master0,master1], [slave0,slave1]) <- makeTLXBar @2 @2 @TLConfig xbarconfig
-  uncoherentSlave <- withName "mem" $ makeTLRAM @18 @TLConfig' config
+  ([master0,master1], [slave0,slave1]) <- withName "xbar" $ makeTLXBar @2 @2 @TLConfig xbarconfig
+  uncoherentSlave <- withName "memory" $ makeTLRAM @08 @TLConfig' config
 
   let bconfig =
         BroadcastConfig
@@ -594,15 +598,15 @@ makeFakeTestCore _ = mdo
           , baseSink= 0 }
   (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
 
-  withName "mem" $ makeConnection master0 slave
-  withName "mem" $ makeConnection imaster slave0
-  withName "mem" $ makeConnection dmaster slave1
-  withName "mem" $ makeConnection uncoherentMaster uncoherentSlave
+  withName "xbar" $ makeConnection master0 slave
+  withName "xbar" $ makeConnection imaster slave0
+  withName "xbar" $ makeConnection dmaster slave1
+  withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
 
-  perf <- makePerfCounter cycle instret
+  perf <- withName "perf" $ makePerfCounter cycle instret
   withName "perf" $ makeConnection master1 perf
 
-  (imaster, dmaster, cycle, instret) <- withName "core" makeCore
+  (imaster, dmaster, cycle, instret) <- withName "core" $ makeCore 0 1 2
 
   return imaster.channelA.canPeek
 

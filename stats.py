@@ -58,6 +58,14 @@ modules = buildModule("inst.",
              ],
          "imem",
          "dmem",
+         "broadcast",
+         "memory",
+         "xbar",
+         "mem",
+         "perf",
+         "Register",
+         "BlockRAM",
+         "ram",
          ]
 )
 
