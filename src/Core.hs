@@ -14,6 +14,7 @@ import Prediction
 import Utils
 import Instr
 import Alu
+import CSR
 
 import TileLink
 import TileLink.CoherentBCache
@@ -436,15 +437,17 @@ makeRegisterFile = do
           (regUpdate.active .&&. regUpdate.val.fst === x) ? (regUpdate.val.snd, registers!x)}
 
 makeCore ::
-  Bit (SourceWidth TLConfig)
+  Integer
+  -> Bit (SourceWidth TLConfig)
   -> Bit (SourceWidth TLConfig)
   -> Bit (SourceWidth TLConfig)
   -> Module (TLMaster TLConfig, TLMaster TLConfig, Bit 32, Bit 32)
-makeCore fetchSource dataSource mmioSource = do
+makeCore hartId fetchSource dataSource mmioSource = do
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
   commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
   aluQ :: Queue ExecInput <- withName "alu" $ makeQueue
   lsuQ :: Queue ExecInput <- withName "lsu" $ makeQueue
+  systemQ :: Queue ExecInput <- withName "system" $ makeQueue
 
   redirectQ :: Queue Redirection <- withName "fetch" $ makeBypassQueue
 
@@ -459,10 +462,15 @@ makeCore fetchSource dataSource mmioSource = do
 
   registers <- withName "registers" $ makeRegisterFile
 
+  cycleCRSs <- makeCycleCounterCSR
+  hartIdCSRs <- makeHartIdCSR (constant hartId)
+  (instretCSRs, instret) <- makeInstructionCounterCSR
+  csrUnit <- makeCSRUnit (cycleCRSs ++ instretCSRs)
+
   epoch :: Ehr Epoch <- makeEhr 2 0
 
   cycle :: Reg (Bit 32) <- makeReg 0
-  instret :: Reg (Bit 32) <- makeReg 0
+  --instret :: Reg (Bit 32) <- makeReg 0
 
   always do
     cycle <== cycle.val + 1
@@ -475,7 +483,7 @@ makeCore fetchSource dataSource mmioSource = do
 
       let rdy =
             registers.ready rs1 .&&. registers.ready rs2 .&&. registers.ready rd .&&.
-            (instr.isMemAccess ? (lsuQ.notFull, aluQ.notFull))
+            (instr.isMemAccess ? (lsuQ.notFull, instr.isSystem ? (systemQ.notFull, aluQ.notFull)))
 
       let input =
             ExecInput{pc=decode.peek.pc, rs1= registers.read rs1, rs2= registers.read rs2, instr}
@@ -487,7 +495,10 @@ makeCore fetchSource dataSource mmioSource = do
         if instr.isMemAccess then do
           lsuQ.enq input
         else do
-          aluQ.enq input
+          if instr.isSystem then do
+            systemQ.enq input
+          else do
+            aluQ.enq input
 
         decode.consume
         window.enq decode.peek
@@ -507,9 +518,9 @@ makeCore fetchSource dataSource mmioSource = do
         commitQ.enq (req.epoch === epoch.read 0)
         doCommit.write 0 true
 
-      let rdy = instr.isMemAccess ? (lsu.canPeek .&&. doCommit.read 1, alu.canPeek)
-
-      let resp = instr.isMemAccess ? (lsu.peek, alu.peek)
+      let rdy =
+            instr.isMemAccess ?
+              (lsu.canPeek .&&. doCommit.read 1, instr.isSystem ? (systemQ.canDeq, alu.canPeek))
 
       when rdy do
         window.deq
@@ -519,19 +530,27 @@ makeCore fetchSource dataSource mmioSource = do
           doCommit.write 1 false
           lsu.consume
         else do
-          alu.consume
+          if instr.isSystem then do
+            systemQ.deq
+          else do
+            alu.consume
 
         when (instr.opcode === 0) do
           display "exec invalid instruction"
 
         when (req.epoch === epoch.read 0) do
-          when (instr.opcode `is` [FENCE]) do
-            display "fence at cycle: " cycle.val " instret: " instret.val
+          --when (instr.opcode `is` [FENCE]) do
+          --  display "fence at cycle: " cycle.val " instret: " instret.val
+
+          sysResp <-
+            whenAction instr.isSystem (execCSR csrUnit systemQ.first)
+          let resp = instr.isMemAccess ? (lsu.peek, instr.isSystem ? (sysResp, alu.peek))
 
           when (resp.exception) do
             display "exception at pc=0x" (formatHex 0 req.pc)
 
-          instret <== instret.val + 1
+          --instret <== instret.val + 1
+          instret
 
           --display
           --  "\t[" cycle.val "] retire pc: "
@@ -549,7 +568,7 @@ makeCore fetchSource dataSource mmioSource = do
           else do
             trainHit req.bstate req.pc resp.pc (some instr)
 
-  return (imaster, dmaster, cycle.val, instret.val)
+  return (imaster, dmaster, cycle.val, 0)
 
 
 makePerfCounter :: Bit 32 -> Bit 32 -> Module (TLSlave TLConfig)
@@ -589,7 +608,7 @@ makeFakeTestCore _ = mdo
           , sizeChannelE= 2 }
 
   ([master0,master1], [slave0,slave1]) <- withName "xbar" $ makeTLXBar @2 @2 @TLConfig xbarconfig
-  uncoherentSlave <- withName "memory" $ makeTLRAM @08 @TLConfig' config
+  uncoherentSlave <- withName "memory" $ makeTLRAM @18 @TLConfig' config
 
   let bconfig =
         BroadcastConfig
@@ -606,7 +625,7 @@ makeFakeTestCore _ = mdo
   perf <- withName "perf" $ makePerfCounter cycle instret
   withName "perf" $ makeConnection master1 perf
 
-  (imaster, dmaster, cycle, instret) <- withName "core" $ makeCore 0 1 2
+  (imaster, dmaster, cycle, instret) <- withName "core" $ makeCore 0 0 1 2
 
   return imaster.channelA.canPeek
 

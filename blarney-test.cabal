@@ -28,6 +28,7 @@ executable blarney-test
     AXI4,
     Utils,
     Alu,
+    CSR,
     Cache,
     CPU,
     Instr,

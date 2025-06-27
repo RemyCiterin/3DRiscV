@@ -7,6 +7,7 @@ import Blarney.Ehr
 
 import Instr
 import Utils
+import CSR
 
 alu :: ExecInput -> ExecOutput
 alu query =
@@ -54,6 +55,31 @@ alu query =
         opcode `is` [SRL] --> rs1 .>>. slice @4 @0 op2,
         opcode `is` [SRA] --> rs1 .>>>. slice @4 @0 op2
       ]
+
+execCSR :: CSRUnit -> ExecInput -> Action ExecOutput
+execCSR unit ExecInput{instr, pc, rs1} = do
+  let doRead = instr.opcode `is` [CSRRW] ? (instr.rd.val =!= 0, true)
+  let doWrite = instr.opcode `is` [CSRRC,CSRRS] ? (instr.rs1.val =!= 0, true)
+  x <- whenAction doRead (unit.csrUnitRead instr.csr)
+
+  let operand = instr.csrI ? (zeroExtend instr.rs1.val, rs1)
+
+  let value =
+        select
+          [ instr.opcode `is` [CSRRW] --> operand
+          , instr.opcode `is` [CSRRS] --> x .|. operand
+          , instr.opcode `is` [CSRRC] --> x .&. inv operand ]
+
+  when doWrite do
+    unit.csrUnitWrite instr.csr value
+
+  return
+    ExecOutput
+      { rd= x
+      , exception= false
+      , cause= 0
+      , tval= 0
+      , pc= pc + 4 }
 
 execAMO :: (MnemonicVec, Bit 32) -> Bit 32 -> Bit 32
 execAMO (opcode, x) y =

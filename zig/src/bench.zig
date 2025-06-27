@@ -22,11 +22,13 @@ noinline fn seed() u32 {
 pub var measureLock = Spinlock{};
 
 pub fn getCycle() u32 {
-    return @as(*volatile u32, @ptrFromInt(0x30000000)).*;
+    //return @as(*volatile u32, @ptrFromInt(0x30000000)).*;
+    return RV.mcycle.read();
 }
 
 pub fn getInstret() u32 {
-    return @as(*volatile u32, @ptrFromInt(0x30000004)).*;
+    //return @as(*volatile u32, @ptrFromInt(0x30000004)).*;
+    return RV.minstret.read();
 }
 
 // Measure the performance of a benchmark test

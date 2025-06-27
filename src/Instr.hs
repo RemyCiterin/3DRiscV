@@ -168,6 +168,7 @@ data Instr =
   , csrI        :: Bit 1
   , accessWidth :: Bit 2
   , isUnsigned  :: Bit 1
+  , isSystem    :: Bit 1
   , isMemAccess :: Bit 1
   , canBranch   :: Bit 1
   , isAcquire   :: Bit 1
@@ -189,6 +190,7 @@ decodeInstr instr =
   , csr = getBitFieldSel selMap "csr" instr
   , csrI = getBitFieldSel selMap "csrI" instr
   , accessWidth = getBitFieldSel selMap "aw" instr
+  , isSystem = opcode `is` [CSRRW,CSRRC,CSRRS]
   , isUnsigned = getBitFieldSel selMap "ul" instr
   , isMemAccess = opcode `is` [LOAD,STORE,FENCE,STOREC,LOADR] .||. isAMO
   , canBranch = opcode `is` [JAL,JALR,BEQ,BNE,BLT,BLTU,BGE,BGEU]
