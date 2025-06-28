@@ -563,21 +563,23 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
               "exception at pc= 0x" (formatHex 0 req.pc)
               " to pc= 0x" (formatHex 0 trapPc)
           else do
-            --display
-            --  "\t[" hartId "@" cycle.val "] retire pc: "
-            --  (formatHex 8 req.pc) " instr: " (fshow instr)
+            --when (if hartId == 0 then true else false) do
+            --  display
+            --    "\t[" hartId "@" cycle.val "] retire pc: "
+            --    (formatHex 8 req.pc) " instr: " (fshow instr)
 
-              when (rd =!= 0) do
-                --display "    " hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
-                registers.write rd resp.rd
+            when (rd =!= 0) do
+              --when (if hartId == 0 then true else false) do
+              --  display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
+              registers.write rd resp.rd
 
-              if (resp.pc =!= req.prediction) then do
-                --display "redirect to pc := 0x" (formatHex 8 resp.pc)
-                redirectQ.enq Redirection{pc= resp.pc, epoch= epoch.read 0 + 1}
-                trainMis req.bstate req.pc resp.pc (some instr)
-                epoch.write 0 (epoch.read 0 + 1)
-              else do
-                trainHit req.bstate req.pc resp.pc (some instr)
+            if (resp.pc =!= req.prediction) then do
+              --display "redirect to pc := 0x" (formatHex 8 resp.pc)
+              redirectQ.enq Redirection{pc= resp.pc, epoch= epoch.read 0 + 1}
+              trainMis req.bstate req.pc resp.pc (some instr)
+              epoch.write 0 (epoch.read 0 + 1)
+            else do
+              trainHit req.bstate req.pc resp.pc (some instr)
 
   return (imaster, dmaster)
 

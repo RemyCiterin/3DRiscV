@@ -201,5 +201,9 @@ makeMstatusCSRs = do
 makeMscratchCSRs :: Module [CSR]
 makeMscratchCSRs = do
   mscratch :: Reg (Bit 32) <- makeReg dontCare
+  cycle :: Reg (Bit 32) <- makeReg 0
+
+  always do
+    cycle <== cycle.val + 1
 
   return [regToCSR 0x340 mscratch]

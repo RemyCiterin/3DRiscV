@@ -94,7 +94,7 @@ pub fn panic(
     hang();
 }
 
-extern var kalloc_buffer: [31 * 1024]u8;
+extern var kalloc_buffer: [128 * 1024]u8;
 
 // Main kernel allocator
 pub var kalloc: Allocator = undefined;
@@ -143,7 +143,7 @@ pub export fn kernel_main() align(16) callconv(.C) void {
         \\  interface for UART, SDRAM, MMC and HDMI
     , .{});
 
-    const kalloc_len = 20 * 1024;
+    const kalloc_len = 64 * 1024;
     var kernel_fba = std.heap.FixedBufferAllocator.init(kalloc_buffer[0..kalloc_len]);
     kalloc = kernel_fba.allocator();
 
@@ -156,7 +156,7 @@ pub export fn kernel_main() align(16) callconv(.C) void {
     //logger.info("user main finish!", .{});
 
     var manager = Manager.init(kalloc);
-    _ = manager.new(@intFromPtr(&user_main), 2048, &malloc) catch unreachable;
+    _ = manager.new(@intFromPtr(&user_main), 4096, &malloc) catch unreachable;
 
     RV.mstatus.modify(.{ .MPIE = 1 });
     RV.mie.modify(.{ .MEIE = 0, .MTIE = 1 });
@@ -177,8 +177,8 @@ pub export fn user_main(pid: usize, alloc: *Allocator) callconv(.C) noreturn {
 
     logger.info("start process {}", .{pid});
 
-    Syscall.yield();
-    //Syscall.exec(@intFromPtr(&user_main), 512, &malloc);
+    //Syscall.yield();
+    Syscall.exec(@intFromPtr(&user_main), 512, &malloc);
 
     logger.info("Binary Search:", .{});
     for (1..11) |i| {

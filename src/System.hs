@@ -128,6 +128,6 @@ makeSystem hartId inputs = do
             some $ unpack $ binaryEncode (firstHot ready)
           else
             none
-      , exception= \ epc cause tval -> execException epc true (pack cause) tval
-      , interrupt= \ epc cause tval -> execException epc false (pack cause) tval
+      , exception= \ epc cause tval -> execException epc false (pack cause) tval
+      , interrupt= \ epc cause tval -> execException epc true (pack cause) tval
       , instret }
