@@ -92,6 +92,7 @@ makeSystem hartId inputs = do
           else if input.instr.opcode `is` [MRET] then do
             mstatus.mie <== mstatus.mpie.val
             mstatus.mpie <== false
+            display "mret to 0x" (formatHex 0 trap.mepc.val)
             return
               ExecOutput
                 { cause= dontCare

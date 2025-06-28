@@ -44,6 +44,7 @@ makeCSRUnit csrs = do
           rdId <== id
           return rdVal.val
       , csrUnitWrite= \ id value -> do
+          --display "write csr " (formatHex 0 id) " := " (formatHex 0 value)
           wrVal <== value
           wrId <== id }
 
@@ -119,7 +120,7 @@ makeTrapCSRs = do
         [ regToCSR 0x341 mepc
         , regToCSR 0x305 mtvec
         , readOnlyCSR 0x343 mtval.val
-        , readOnlyCSR 0x342 mcause.val]
+        , readOnlyCSR 0x342 mcause.val ]
 
   let regs =
         TrapCSRs

@@ -11,6 +11,7 @@ import Blarney.ADT
 
 
 import Prediction
+import System
 import Utils
 import Instr
 import Alu
@@ -467,15 +468,18 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
 
   registers <- withName "registers" makeRegisterFile
 
-  cycleCRSs <- makeCycleCounterCSR
-  hartIdCSRs <- makeHartIdCSR (constant hartId)
-  (instretCSRs, instret) <- makeInstructionCounterCSR
-  csrUnit <- makeCSRUnit (cycleCRSs ++ instretCSRs ++ hartIdCSRs)
+  systemUnit <-
+    withName "system" $
+      makeSystem
+        hartId
+        SystemInputs
+          { softwareInterrupt= false
+          , externalInterrupt= false
+          , timerInterrupt= false }
 
   epoch :: Ehr Epoch <- makeEhr 2 0
 
   cycle :: Reg (Bit 32) <- makeReg 0
-  --instret :: Reg (Bit 32) <- makeReg 0
 
   always do
     cycle <== cycle.val + 1
@@ -541,33 +545,39 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
             alu.consume
 
         when (instr.opcode === 0) do
-          display "exec invalid instruction"
+          display "exec invalid instruction at pc= 0x" (formatHex 0 req.pc)
 
         when (req.epoch === epoch.read 0) do
           sysResp <-
-            whenAction instr.isSystem (execCSR csrUnit systemQ.first)
+            whenAction instr.isSystem (systemUnit.exec systemQ.first)
           let resp = instr.isMemAccess ? (lsu.peek, instr.isSystem ? (sysResp, alu.peek))
 
-          when (resp.exception) do
-            display "exception at pc=0x" (formatHex 0 req.pc)
+          systemUnit.instret
 
-          instret
-
-          --display
-          --  "\t[" hartId "@" cycle.val "] retire pc: "
-          --  (formatHex 8 req.pc) " instr: " (fshow instr)
-
-          when (rd =!= 0) do
-            --display "    " hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
-            registers.write rd resp.rd
-
-          if (resp.pc =!= req.prediction) then do
-            --display "redirect to pc := 0x" (formatHex 8 resp.pc)
-            redirectQ.enq Redirection{pc= resp.pc, epoch= epoch.read 0 + 1}
-            trainMis req.bstate req.pc resp.pc (some instr)
+          if resp.exception then do
+            trapPc <- systemUnit.exception req.pc resp.cause resp.tval
+            redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
             epoch.write 0 (epoch.read 0 + 1)
+
+            display
+              "exception at pc= 0x" (formatHex 0 req.pc)
+              " to pc= 0x" (formatHex 0 trapPc)
           else do
-            trainHit req.bstate req.pc resp.pc (some instr)
+            --display
+            --  "\t[" hartId "@" cycle.val "] retire pc: "
+            --  (formatHex 8 req.pc) " instr: " (fshow instr)
+
+              when (rd =!= 0) do
+                --display "    " hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
+                registers.write rd resp.rd
+
+              if (resp.pc =!= req.prediction) then do
+                --display "redirect to pc := 0x" (formatHex 8 resp.pc)
+                redirectQ.enq Redirection{pc= resp.pc, epoch= epoch.read 0 + 1}
+                trainMis req.bstate req.pc resp.pc (some instr)
+                epoch.write 0 (epoch.read 0 + 1)
+              else do
+                trainHit req.bstate req.pc resp.pc (some instr)
 
   return (imaster, dmaster)
 

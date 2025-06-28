@@ -143,7 +143,7 @@ pub export fn kernel_main() align(16) callconv(.C) void {
         \\  interface for UART, SDRAM, MMC and HDMI
     , .{});
 
-    const kalloc_len = 10 * 1024;
+    const kalloc_len = 20 * 1024;
     var kernel_fba = std.heap.FixedBufferAllocator.init(kalloc_buffer[0..kalloc_len]);
     kalloc = kernel_fba.allocator();
 
@@ -151,12 +151,12 @@ pub export fn kernel_main() align(16) callconv(.C) void {
     var user_alloc = UserAlloc.init(user_fba.allocator());
     malloc = user_alloc.allocator();
 
-    logger.info("call user main!", .{});
-    user_main(0, &malloc);
-    logger.info("user main finish!", .{});
+    //logger.info("call user main!", .{});
+    //user_main(0, &malloc);
+    //logger.info("user main finish!", .{});
 
     var manager = Manager.init(kalloc);
-    _ = manager.new(@intFromPtr(&user_main), 4096, &malloc) catch unreachable;
+    _ = manager.new(@intFromPtr(&user_main), 2048, &malloc) catch unreachable;
 
     RV.mstatus.modify(.{ .MPIE = 1 });
     RV.mie.modify(.{ .MEIE = 0, .MTIE = 1 });
@@ -164,7 +164,7 @@ pub export fn kernel_main() align(16) callconv(.C) void {
     Clint.setNextTimerInterrupt();
 
     while (true) {
-        //logger.info("run pc={}", .{manager.current});
+        logger.info("run pc={}", .{manager.current});
         manager.run();
         handler(&manager);
     }
@@ -172,43 +172,13 @@ pub export fn kernel_main() align(16) callconv(.C) void {
     @panic("unreachable");
 }
 
-pub const Position = struct {
-    u: usize = 0,
-    v: usize = 0,
-
-    const logger = std.log.scoped(.pos);
-
-    pub fn left(self: *Position) void {
-        logger.info("left", .{});
-        if (self.u == 0) {
-            self.u = 319;
-        } else self.u -= 1;
-    }
-
-    pub fn right(self: *Position) void {
-        logger.info("right", .{});
-        if (self.u == 319) {
-            self.u = 0;
-        } else self.u += 1;
-    }
-
-    pub fn up(self: *Position) void {
-        logger.info("up", .{});
-        if (self.v == 0) {
-            self.v = 239;
-        } else self.v -= 1;
-    }
-
-    pub fn down(self: *Position) void {
-        logger.info("down", .{});
-        if (self.v == 239) {
-            self.v = 0;
-        } else self.v += 1;
-    }
-};
-
 pub export fn user_main(pid: usize, alloc: *Allocator) callconv(.C) noreturn {
     const logger = std.log.scoped(.user);
+
+    logger.info("start process {}", .{pid});
+
+    Syscall.yield();
+    //Syscall.exec(@intFromPtr(&user_main), 512, &malloc);
 
     logger.info("Binary Search:", .{});
     for (1..11) |i| {
@@ -287,6 +257,5 @@ pub export fn user_main(pid: usize, alloc: *Allocator) callconv(.C) noreturn {
     const pixel = Screen.Pixel{ .blue = 0b10, .red = 0b100 };
     pixel.fillRectangle(100, 0, 100, 240 - 1);
     pixel.fillRectangle(0, 100, 320 - 1, 100);
-    _ = pid;
     hang();
 }
