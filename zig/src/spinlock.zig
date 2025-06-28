@@ -1,27 +1,16 @@
-const Syscall = @import("syscall.zig");
-const RV = @import("riscv.zig");
-const std = @import("std");
-
-locked: bool = false,
+locked: u32 = 0,
 
 pub const Self = @This();
 
 pub fn unlock(self: *Self) void {
-    self.locked = false;
+    _ = @atomicRmw(u32, &self.locked, .Xchg, 0, .acq_rel);
 }
 
 pub fn tryLock(self: *Self) bool {
-    const MIE = RV.mstatus.read().MIE;
-    RV.mstatus.modify(.{ .MIE = 0 });
-    defer RV.mstatus.modify(.{ .MIE = MIE });
-
-    if (self.locked) return false;
-
-    self.locked = true;
-    return true;
+    const busy = @atomicRmw(u32, &self.locked, .Xchg, 1, .acq_rel);
+    return busy == 0;
 }
 
 pub fn lock(self: *Self) void {
-    while (!self.tryLock())
-        Syscall.yield();
+    while (!self.tryLock()) {}
 }

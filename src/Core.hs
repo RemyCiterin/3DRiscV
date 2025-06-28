@@ -277,7 +277,7 @@ makeLoadStoreUnit cacheSource mmioSource input commit = do
     when (input.canPeek .&&. opcode `is` [STORE]) do
 
       when (state.val === 0 .&&. outputQ.notFull) do
-        outputQ.enq out{ cause= 6 }
+        outputQ.enq out{ cause= store_amo_address_misaligned }
 
         state <== 1
 
@@ -309,7 +309,7 @@ makeLoadStoreUnit cacheSource mmioSource input commit = do
           sendLoad op
           state <== 1
         else do
-          outputQ.enq out{cause=4}
+          outputQ.enq out{cause=load_address_misalilgned}
           state <== 2
 
       when (state.val === 1 .&&. canReceiveLoad .&&. outputQ.notFull) do
@@ -352,7 +352,7 @@ makeLoadStoreUnit cacheSource mmioSource input commit = do
           state <== 1
         else do
           state <== 2
-          outputQ.enq out{cause=6}
+          outputQ.enq out{cause=store_amo_address_misaligned}
 
       when (state.val === 2 .&&. commit.canPeek) do
         -- abort an unaligned atomic operation
@@ -449,12 +449,12 @@ makeCore ::
   -> Module (TLMaster TLConfig, TLMaster TLConfig)
 makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
-  commitQ :: Queue (Bit 1) <- withName "lsu" $ makeQueue
-  aluQ :: Queue ExecInput <- withName "alu" $ makeQueue
-  lsuQ :: Queue ExecInput <- withName "lsu" $ makeQueue
-  systemQ :: Queue ExecInput <- withName "system" $ makeQueue
+  commitQ :: Queue (Bit 1) <- withName "lsu" makeQueue
+  aluQ :: Queue ExecInput <- withName "alu" makeQueue
+  lsuQ :: Queue ExecInput <- withName "lsu" makeQueue
+  systemQ :: Queue ExecInput <- withName "system" makeQueue
 
-  redirectQ :: Queue Redirection <- withName "fetch" $ makeBypassQueue
+  redirectQ :: Queue Redirection <- withName "fetch" makeBypassQueue
 
   window :: Queue DecodeOutput <- makeSizedQueueCore 5
 
@@ -465,7 +465,7 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
   (dmaster, lsu) <-
     withName "lsu" $ makeLoadStoreUnit dataSource mmioSource (toStream lsuQ) (toStream commitQ)
 
-  registers <- withName "registers" $ makeRegisterFile
+  registers <- withName "registers" makeRegisterFile
 
   cycleCRSs <- makeCycleCounterCSR
   hartIdCSRs <- makeHartIdCSR (constant hartId)

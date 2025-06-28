@@ -21,7 +21,7 @@ alu query =
     off = query.instr.off
     pc = query.pc
 
-    cause = 1
+    cause = instruction_address_misaligned
 
     exception = slice @1 @0 newPc =!= 0
 
@@ -77,7 +77,7 @@ execCSR unit ExecInput{instr, pc, rs1} = do
     ExecOutput
       { rd= x
       , exception= false
-      , cause= 0
+      , cause= dontCare
       , tval= 0
       , pc= pc + 4 }
 

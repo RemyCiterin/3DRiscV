@@ -41,6 +41,8 @@ pub const std_options = .{
     .logFn = log,
 };
 
+var logSpinlock = Spinlock{};
+
 // Log informations provided by the kernel. As example:
 // ```zig
 //  const logger = std.log.scoped(.my_scope);
@@ -55,25 +57,26 @@ pub const std_options = .{
 //      logger.debug("run bar", .{});
 //  }
 // ```
-
-var mutex: u32 = 0;
 pub fn log(
     comptime level: std.log.Level,
     comptime scope: @TypeOf(.EnumLiteral),
     comptime format: []const u8,
     args: anytype,
 ) void {
-    while (@atomicRmw(u32, &mutex, .Xchg, 1, .acq_rel) == 1) {}
+    logSpinlock.lock();
+    defer logSpinlock.unlock();
+
+    const id = RV.mhartid.read();
+
     _ = level;
     const cycle: usize = RV.mcycle.read();
 
     const prefix =
-        "[" ++ @tagName(scope) ++ " at time {}] ";
+        "[cpu {}: " ++ @tagName(scope) ++ " at cycle {}] ";
 
-    UART.writer.print(prefix, .{cycle}) catch unreachable;
+    UART.writer.print(prefix, .{ id, cycle }) catch unreachable;
     UART.writer.print(format, args) catch unreachable;
     UART.writer.print("\n", .{}) catch unreachable;
-    _ = @atomicRmw(u32, &mutex, .Xchg, 0, .acq_rel);
 }
 
 pub inline fn hang() noreturn {
@@ -139,14 +142,6 @@ pub export fn kernel_main() align(16) callconv(.C) void {
         \\  25kHz, use a 8kB 2-ways cache and has an
         \\  interface for UART, SDRAM, MMC and HDMI
     , .{});
-
-    var x: u32 = 0x30;
-    var y = @atomicRmw(u32, &x, .Nand, 0x33, .acq_rel);
-    logger.info("x := 0x{x} y := 0x{x}", .{ x, y });
-
-    x = 0x30;
-    y = @atomicRmw(u32, &x, .And, 0x33, .acq_rel);
-    logger.info("x := 0x{x} y := 0x{x}", .{ x, y });
 
     const kalloc_len = 10 * 1024;
     var kernel_fba = std.heap.FixedBufferAllocator.init(kalloc_buffer[0..kalloc_len]);

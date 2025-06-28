@@ -71,6 +71,8 @@ data Mnemonic =
   | STORE
   | FENCE
   | ECALL
+  | MRET
+  | WFI
   | EBREAK
   | CSRRW
   | CSRRS
@@ -137,6 +139,8 @@ decodeTable =
   , "off[12] off[10:5] rs2<5> rs1<5> 111 off[4:1] off[11] 1100011" --> BGEU
   , "000000000000 <5> 000 <5> 1110011" --> ECALL
   , "000000000001 <5> 000 <5> 1110011" --> EBREAK
+  , "001100000010 <5> 000 <5> 1110011" --> MRET
+  , "000100000101 <5> 000 <5> 1110011" --> WFI
   , "fence<4> pred<4> succ<4> rs1<5> 000 00000 0001111" --> FENCE
   , "csr[11:0] rs1<5> csrI<1> 01 rd<5> 1110011" --> CSRRW
   , "csr[11:0] rs1<5> csrI<1> 10 rd<5> 1110011" --> CSRRS
@@ -190,7 +194,7 @@ decodeInstr instr =
   , csr = getBitFieldSel selMap "csr" instr
   , csrI = getBitFieldSel selMap "csrI" instr
   , accessWidth = getBitFieldSel selMap "aw" instr
-  , isSystem = opcode `is` [CSRRW,CSRRC,CSRRS]
+  , isSystem = opcode `is` [CSRRW,CSRRC,CSRRS,MRET,WFI,ECALL] .||. opcode === 0
   , isUnsigned = getBitFieldSel selMap "ul" instr
   , isMemAccess = opcode `is` [LOAD,STORE,FENCE,STOREC,LOADR] .||. isAMO
   , canBranch = opcode `is` [JAL,JALR,BEQ,BNE,BLT,BLTU,BGE,BGEU]
@@ -301,6 +305,35 @@ instance FShow Instr where
       formatLR opcode = formatOp opcode <> formatAcquire <> formatRelease <>
         fshow " " <> rd <> fshow ", (" <> rs1 <> fshow ")"
 
+data CauseException =
+  CauseException (Bit 4)
+  deriving(Bits, Generic,FShow)
+
+instruction_address_misaligned = CauseException 0
+instruction_access_fault = CauseException 1
+illegal_instruction = CauseException 2
+breakpoint = CauseException 3
+load_address_misalilgned = CauseException 4
+load_access_fault = CauseException 5
+store_amo_address_misaligned = CauseException 6
+store_amo_access_fault = CauseException 7
+ecall_from_u = CauseException 8
+ecall_from_s = CauseException 9
+ecall_from_m = CauseException 11
+instruction_page_fault = CauseException 12
+load_page_fault = CauseException 13
+store_amo_page_fault = CauseException 15
+
+data CauseInterrupt =
+  CauseInterrupt (Bit 4)
+  deriving(Bits, Generic,FShow)
+
+superviser_software_interrupt = CauseInterrupt 1
+machine_software_interrupt = CauseInterrupt 3
+superviser_timer_interrupt = CauseInterrupt 5
+machine_timer_interrupt = CauseInterrupt 7
+superviser_external_interrupt = CauseInterrupt 9
+machine_external_interrupt = CauseInterrupt 11
 
 data ExecInput = ExecInput
   { instr :: Instr
@@ -311,7 +344,7 @@ data ExecInput = ExecInput
 
 data ExecOutput = ExecOutput
   { exception :: Bit 1
-  , cause :: Bit 4
+  , cause :: CauseException
   , tval :: Bit 32
   , rd :: Bit 32
   , pc :: Bit 32}

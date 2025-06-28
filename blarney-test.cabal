@@ -23,7 +23,7 @@ executable blarney-test
     TileLink.Types,
     TileLink.Utils,
     TileLink.GetPut,
-    TileLink.RAM
+    TileLink.RAM,
     TileLink,
     AXI4,
     Utils,
@@ -35,6 +35,7 @@ executable blarney-test
     Uart,
     Core,
     Prediction,
+    System,
     Spi
   hs-source-dirs: src
   build-depends:
