@@ -38,7 +38,7 @@ iverilog:
 
 
 simulate:
-	iverilog -s top_sim src/SimTop.v simulation/mt48lc16m16a2.v Verilog/*.v -o Verilog/SimTop.vvp
+	iverilog -s top_sim src/SimTop.v simulation/mt48lc16m16a2.v simulation/BlockRAMDual.v Verilog/*.v -o Verilog/SimTop.vvp
 	vvp Verilog/SimTop.vvp
 
 run:
