@@ -7,7 +7,7 @@ import Blarney.BitScan
 import Blarney.Option
 import Blarney.ADT
 
-import Utils
+import Blarney.Utils
 
 type RegId = Bit 5
 

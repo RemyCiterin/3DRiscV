@@ -12,6 +12,7 @@ executable blarney-test
   other-modules:
     Blarney.Sharing,
     Blarney.Arbiter,
+    Blarney.Utils,
     Blarney.Ehr,
     Blarney.ADT,
     TileLink.UncoherentBCache,
@@ -26,7 +27,6 @@ executable blarney-test
     TileLink.RAM,
     TileLink,
     AXI4,
-    Utils,
     Alu,
     CSR,
     Cache,

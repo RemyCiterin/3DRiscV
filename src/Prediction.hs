@@ -1,11 +1,11 @@
 module Prediction where
 
 import Instr
-import Utils
 import Blarney
 import Blarney.Ehr
 import Blarney.Queue
 import Blarney.Option
+import Blarney.Utils
 import Data.Proxy
 import Blarney.ADT
 

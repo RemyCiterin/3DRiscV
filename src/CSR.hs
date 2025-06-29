@@ -1,7 +1,7 @@
 module CSR where
 
 import Blarney
-import Utils
+import Blarney.Utils
 import Instr
 
 data CSR =

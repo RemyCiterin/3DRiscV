@@ -2,11 +2,11 @@ module Alu where
 
 import Blarney
 import Blarney.Option
+import Blarney.Utils
 import Blarney.ADT
 import Blarney.Ehr
 
 import Instr
-import Utils
 import CSR
 
 alu :: ExecInput -> ExecOutput

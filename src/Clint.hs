@@ -4,7 +4,7 @@ import Blarney
 import TileLink
 import TileLink.Mmio
 
-import Utils
+import Blarney.Utils
 
 data ClintIfc =
   ClintIfc

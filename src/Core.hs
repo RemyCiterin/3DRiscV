@@ -7,12 +7,12 @@ import Blarney.Option
 import Blarney.Stream
 import Blarney.SourceSink
 import Blarney.Connectable
+import Blarney.Utils
 import Blarney.ADT
 
 
 import Prediction
 import System
-import Utils
 import Instr
 import Clint
 import Alu

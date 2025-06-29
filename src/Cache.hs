@@ -9,7 +9,7 @@ import Blarney.SourceSink
 import Blarney.Stream
 import Blarney.Stmt
 import Blarney.Arbiter
-import Utils
+import Blarney.Utils
 
 -- address of a cache line
 type Addr = Bit 32

@@ -3,10 +3,10 @@ import Blarney.Queue
 import Blarney.Option
 import System.Environment
 import Blarney.Arbiter
+import Blarney.Utils
 import Blarney.Ehr
 import Blarney.ADT
 
-import Utils
 
 
 import TileLink

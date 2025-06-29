@@ -17,7 +17,7 @@ import Blarney.SourceSink
 import Blarney.ADT
 import Blarney.Ehr
 
-import Utils
+import Blarney.Utils
 
 data Mmio p =
   Mmio

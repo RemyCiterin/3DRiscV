@@ -15,6 +15,7 @@ import Blarney.Sharing
 import Blarney.Arbiter
 import Blarney.SourceSink
 import Blarney.Connectable
+import Blarney.Utils
 import Blarney.ADT
 
 import TileLink.RAM
@@ -23,7 +24,6 @@ import TileLink.Utils
 import TileLink.AcquireRelease
 import TileLink.Interconnect
 import TileLink.Broadcast
-import Utils
 
 storeListRAM :: (Bits a, Bits b, KnownNat idx) => [RAM a b] -> Bit idx -> a -> b -> Action ()
 storeListRAM rams index k v =

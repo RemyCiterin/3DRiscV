@@ -1,7 +1,4 @@
-{-# Language FunctionalDependencies #-}
-{-# Language UndecidableInstances #-}
-
-module Utils where
+module Blarney.Utils where
 
 import Blarney
 import Blarney.Option
