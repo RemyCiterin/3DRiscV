@@ -15,6 +15,7 @@ import TileLink.GetPut
 import CPU
 import qualified Spi
 import qualified Instr
+import qualified Sdram
 
 import qualified Uart
 import qualified Cache
@@ -127,3 +128,4 @@ main = do
         --writeVerilogModule testBCacheCore "TestCore" "Verilog/"
         --writeVerilogModule makeTestGetPut "TestCore" "Verilog/"
         writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"
+        writeVerilogModule Sdram.makeTestSdram "TestSdram" "Verilog/"

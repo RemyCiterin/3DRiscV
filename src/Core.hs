@@ -64,7 +64,8 @@ data Redirection = Redirection {
     pc :: Bit 32
   } deriving(Bits, Generic)
 
-type Training = BPredState HistSize RasSize -> Bit 32 -> Bit 32 -> Option Instr -> Action ()
+type Training =
+  BPredState HistSize RasSize -> Bit 32 -> Bit 32 -> Option Instr -> Action ()
 
 -- 32 bit of address
 -- 4 bytes of data
@@ -83,8 +84,8 @@ makeFetch source redirection = do
     withName "bpred" $ makeBranchPredictor 10
 
   key :: Reg (Bit 20) <- makeReg dontCare
-  (cache,master) <-
-    withName "icache" $ makeBCacheCore @2 @20 @6 @4 @() @TLConfig source (\ _ _ -> dontCare)
+  (cache,master) <- withName "icache" $
+    makeBCacheCore @2 @20 @6 @4 @() @TLConfig source (\ _ _ -> dontCare)
   responseQ <- makeSizedQueueCore 4
 
   always do

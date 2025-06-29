@@ -31,6 +31,7 @@ executable blarney-test
     CSR,
     Cache,
     Clint,
+    Sdram,
     CPU,
     Instr,
     Uart,
