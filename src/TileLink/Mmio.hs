@@ -1,6 +1,9 @@
 module TileLink.Mmio
   ( Mmio(..)
   , makeTLMmio
+  , readOnlyMmio
+  , writeOnlyMmio
+  , regToMmio
   ) where
 
 import TileLink.Utils
@@ -14,11 +17,30 @@ import Blarney.SourceSink
 import Blarney.ADT
 import Blarney.Ehr
 
+import Utils
+
 data Mmio p =
   Mmio
     { address :: Bit (AddrWidth p)
     , read :: Bit (8 * LaneWidth p)
     , write :: Bit (8 * LaneWidth p) -> Bit (LaneWidth p) -> Action () }
+
+readOnlyMmio :: forall p. Bit (AddrWidth p) -> Bit (8 * LaneWidth p) -> Mmio p
+readOnlyMmio address read = Mmio { address, read, write= \ _ _ -> pure () }
+
+writeOnlyMmio :: forall p.
+  (KnownTLParams p)
+    => Bit (AddrWidth p) -> (Bit (8 * LaneWidth p) -> Bit (LaneWidth p) -> Action ()) -> Mmio p
+writeOnlyMmio address write = Mmio { address, read= dontCare, write }
+
+regToMmio :: forall p.
+  (KnownTLParams p)
+    => Bit (AddrWidth p) -> Reg (Bit (8 * LaneWidth p)) -> Mmio p
+regToMmio address r =
+  Mmio
+    { address
+    , read= r.val
+    , write= \ value mask -> r <== mergeBE value r.val mask }
 
 -- Generate a RAM controller using a lower bound and a file name
 makeTLMmio :: forall p.

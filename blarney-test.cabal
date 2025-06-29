@@ -30,6 +30,7 @@ executable blarney-test
     Alu,
     CSR,
     Cache,
+    Clint,
     CPU,
     Instr,
     Uart,

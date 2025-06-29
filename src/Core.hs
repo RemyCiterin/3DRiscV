@@ -14,6 +14,7 @@ import Prediction
 import System
 import Utils
 import Instr
+import Clint
 import Alu
 import CSR
 
@@ -447,8 +448,9 @@ data CoreConfig =
 
 makeCore ::
   CoreConfig
+  -> SystemInputs
   -> Module (TLMaster TLConfig, TLMaster TLConfig)
-makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
+makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = do
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
   commitQ :: Queue (Bit 1) <- withName "lsu" makeQueue
   aluQ :: Queue ExecInput <- withName "alu" makeQueue
@@ -468,14 +470,7 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
 
   registers <- withName "registers" makeRegisterFile
 
-  systemUnit <-
-    withName "system" $
-      makeSystem
-        hartId
-        SystemInputs
-          { softwareInterrupt= false
-          , externalInterrupt= false
-          , timerInterrupt= false }
+  systemUnit <- withName "system" $ makeSystem hartId systemInputs
 
   epoch :: Ehr Epoch <- makeEhr 2 0
 
@@ -562,6 +557,12 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} = do
             display
               "exception at pc= 0x" (formatHex 0 req.pc)
               " to pc= 0x" (formatHex 0 trapPc)
+          else if systemUnit.canInterrupt.valid .&&. inv instr.isMemAccess then do
+            let cause = systemUnit.canInterrupt.val
+            trapPc <- systemUnit.interrupt req.pc cause dontCare
+
+            redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
+            epoch.write 0 (epoch.read 0 + 1)
           else do
             --when (if hartId == 0 then true else false) do
             --  display
@@ -638,8 +639,20 @@ makeFakeTestCore _ = mdo
   withName "xbar" $ makeConnection dmaster1 slave3
   withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
 
-  perf <- withName "perf" $ makePerfCounter 0 0
-  withName "perf" $ makeConnection master1 perf
+  (clintSlave, clint) <- withName "clint" $ makeClint @TLConfig 1 0x30000000
+  withName "clint" $ makeConnection master1 clintSlave
+
+  let systemInputs0 =
+        SystemInputs
+          { softwareInterrupt= clint.softwareInterrupt
+          , timerInterrupt= clint.timerInterrupt
+          , externalInterrupt= false }
+
+  let systemInputs1 =
+        SystemInputs
+          { softwareInterrupt= false
+          , timerInterrupt= false
+          , externalInterrupt= false }
 
   let coreconfig0 =
         CoreConfig
@@ -647,7 +660,7 @@ makeFakeTestCore _ = mdo
           , dataSource= 1
           , mmioSource= 2
           , hartId= 0 }
-  (imaster0, dmaster0) <- withName "core" $ makeCore coreconfig0
+  (imaster0, dmaster0) <- withName "core" $ makeCore coreconfig0 systemInputs0
 
   let coreconfig1 =
         CoreConfig
@@ -655,7 +668,7 @@ makeFakeTestCore _ = mdo
           , dataSource= 4
           , mmioSource= 5
           , hartId= 1 }
-  (imaster1, dmaster1) <- withName "core" $ makeCore coreconfig1
+  (imaster1, dmaster1) <- withName "core" $ makeCore coreconfig1 systemInputs1
 
   let bconfig =
         BroadcastConfig

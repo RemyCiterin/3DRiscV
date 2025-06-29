@@ -41,6 +41,8 @@ pub const std_options = .{
     .logFn = log,
 };
 
+// TODO: if their is a timer interrupt during log, then spinlock is busy
+// and their is a dead-lock if the kernel try to log something
 var logSpinlock = Spinlock{};
 
 // Log informations provided by the kernel. As example:
@@ -111,9 +113,10 @@ pub export fn handler(manager: *Manager) callconv(.C) void {
         manager.write(pid, .pc, manager.read(pid, .pc) + 4);
         manager.syscall() catch unreachable;
     } else if (RV.mip.read().MTIP == 1) {
-        //try UART.writer.print("timmer interrupt\n", .{});
+        try UART.writer.print("timmer interrupt\n", .{});
         Clint.setNextTimerInterrupt();
         manager.next();
+        logger.info("x", .{});
     } else {
         RV.mip.modify(.{ .MEIP = 0 });
     }

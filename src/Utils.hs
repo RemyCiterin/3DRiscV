@@ -59,3 +59,27 @@ concatReg lhs rhs =
     , writeReg= \x -> do
         lhs <== truncateLSBCast x
         rhs <== truncateCast x }
+
+toByteList :: forall n. (KnownNat n) => Bit (8*n) -> [Bit 8]
+toByteList bytes = go 0
+  where
+    go :: Int -> [Bit 8]
+    go x
+      | x == valueOf @n = []
+      | otherwise = unsafeSlice (8*x+7,8*x) bytes : go (x+1)
+
+fromByteList :: forall n. (KnownNat n) => [Bit 8] -> Bit (8 * n)
+fromByteList bs = FromBV $ foldr1 concatBV (reverse (fmap toBV bs))
+
+mergeBE :: forall n.
+  (KnownNat n, KnownNat (8*n))
+    => Bit (8*n)
+    -> Bit (8*n)
+    -> Bit n
+    -> Bit (8*n)
+mergeBE new old mask =
+  fromByteList (go (toByteList new) (toByteList old) (toBitList mask))
+  where
+    go (x:xs) (y:ys) (m:ms) =
+      (m ? (x,y)) : go xs ys ms
+    go [] [] [] = []

@@ -15,7 +15,7 @@ data SystemInputs =
     { softwareInterrupt :: Bit 1
     , timerInterrupt :: Bit 1
     , externalInterrupt :: Bit 1 }
-  deriving(Generic, Bits)
+  deriving(Generic, Bits, Interface)
 
 -- only one procedure in `exec,exception,interrupt` can be used per cycle
 -- except if `exec` fail (in this case you must call exception)
