@@ -17,7 +17,7 @@ data SdramFabric =
     , sdram_casn :: Bit 1               -- operation: precharge, autorefresh,
     , sdram_wen :: Bit 1                -- read, write, modeset, nop, activate...
     , sdram_a :: Bit 13                 -- row/column address
-    , sdram_ba :: Bit 2                 -- back address
+    , sdram_ba :: Bit 2                 -- bank address
     , sdram_dqm :: Bit 2                -- byte select
     , sdram_din :: Bit 16 -> Action ()  -- input data
     , sdram_dout :: Bit 16              -- output data
@@ -28,13 +28,44 @@ data SdramCmd =
   SdramCmd (Bit 4)
   deriving(Generic, Bits)
 
+-- NO Operation
 nop_cmd = SdramCmd 0b1000
+
+-- Open a bank with a row given by
+-- the address bus
+activate_cmd = SdramCmd 0b0101
+
+-- Close a bank, or all the banks if
+-- the bit 10 of the address bus is high
 precharge_cmd = SdramCmd 0b0001
+
+-- Refresh all the banks
 autorefresh_cmd = SdramCmd 0b0100
+
+-- Configure the SDRAM, the configuration is
+-- given by the address bus
 modeset_cmd = SdramCmd 0b0000
+
+-- Read the value of a column of the currently
+-- opened bank given by the address bus, the
+-- bit 10 of this bus can be selected to
+-- automatically close this bank after the
+-- read. The value will be available tCL cycles
+-- after the read (2 or 3 depending of the
+-- configuration), and DQM must be clear two
+-- cycles before the read value is returned.
 read_cmd = SdramCmd 0b0110
 write_cmd = SdramCmd 0b0010
-activate_cmd = SdramCmd 0b0101
+
+instance FShow SdramCmd where
+  fshow c =
+    formatCond (c === nop_cmd) (fshow "NOP") <>
+    formatCond (c === precharge_cmd) (fshow "PRECHARGE") <>
+    formatCond (c === autorefresh_cmd) (fshow "AUTOREFRESH") <>
+    formatCond (c === modeset_cmd) (fshow "MODESET") <>
+    formatCond (c === read_cmd) (fshow "READ") <>
+    formatCond (c === write_cmd) (fshow "WRITE") <>
+    formatCond (c === activate_cmd) (fshow "ACTIVATE")
 
 type NumBank = 4
 type Bank = Bit (Log2 NumBank)
@@ -50,6 +81,9 @@ data BusController =
 
 makeBusController :: Module (BusController, SdramFabric)
 makeBusController = do
+  cycle :: Reg (Bit 32) <- makeReg 0
+  always (cycle <== cycle.val + 1)
+
   address :: Reg (Bit 13) <- makeReg 0
   cmd :: Reg SdramCmd <- makeDReg nop_cmd
   dqm :: Reg (Bit 2) <- makeReg 0
@@ -106,7 +140,6 @@ data SdramConfig =
     , tRCD :: Integer  -- activation time
     , tRC :: Integer   -- auto refresh time
     , tCL :: Integer } -- column update time
-
 
 idle_st, refresh1_st, refresh2_st, config_st :: Bit 3
 rdwr_st, readready_st, wait_st, write1_st :: Bit 3
@@ -401,7 +434,6 @@ makeBankController config bank arbiter bus delays = do
   doRead0 :: Wire (Bit 1) <- makeWire false
   doRead1 :: Wire (Bit 1) <- makeWire false
   doWrite0 :: Wire (Bit 1) <- makeWire false
-  doWrite1 :: Wire (Bit 1) <- makeWire false
   doActivate :: Wire (Bit 1) <- makeWire false
   doPrecharge :: Wire (Bit 1) <- makeWire false
 
@@ -419,9 +451,6 @@ makeBankController config bank arbiter bus delays = do
           when (state.val === 3 .&&. delays.write.canPut) do
             doWrite0 <== true
             arbiter.request
-
-          when (state.val === 4) do
-            doWrite1 <== true
 
         else do
           doPrecharge <== true
@@ -451,15 +480,15 @@ makeBankController config bank arbiter bus delays = do
         bus.write (lower lane.val) (lower mask.val)
         bus.command write_cmd bank (0 # col.val)
         delays.write.put (2-1)
+        local.put (tCL-2)
         state <== 4
 
     when doRead1.val do
       outputQ.enq bus.read
       state <== 0
 
-    when doWrite1.val do
+    when (state.val === 4) do
       bus.write (upper lane.val) (upper mask.val)
-      local.put (tCL-1)
       state <== 0
 
   return
@@ -595,6 +624,10 @@ makeTestSdram = do
   cycle :: Reg (Bit 32) <- makeReg 0
   always (cycle <== cycle.val + 1)
 
+  let hash :: Bit 23 -> Bit 32 = \ x ->
+        let y :: Bit 32 = zeroExtend x in
+        (y .<<. (20 :: Bit 5)) .^. y
+
   let config =
         SdramConfig
           { tRP = 3
@@ -615,7 +648,7 @@ makeTestSdram = do
       wait inputs.notFull
       action do
         address <== address.val + 1
-        inputs.enq (address.val, zeroExtend address.val, 0b1111)
+        inputs.enq (address.val, hash address.val, 0b1111)
 
     action (address <== 0)
 
@@ -628,12 +661,14 @@ makeTestSdram = do
 
   always do
     when (outputs.canPeek .&&. addressQ.canDeq) do
-      display cycle.val " extected: " addressQ.first " actual: " outputs.peek
+      display
+        cycle.val " counter: " addressQ.first
+        " value: 0x" (formatHex 8 outputs.peek)
       outputs.consume
       addressQ.deq
 
       dynamicAssert
-        (zeroExtend addressQ.first === outputs.peek)
+        (hash addressQ.first === outputs.peek)
         "unexpected value"
 
       when (addressQ.first + 1 === numTests) do
