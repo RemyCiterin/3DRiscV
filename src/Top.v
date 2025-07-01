@@ -14,8 +14,16 @@ module mkTop (
 );
 
 
-  TestCore inst (
-    .out(ftdi_rxd),
+  //TestCore inst (
+  //  .out(ftdi_rxd),
+  //  .in0(ftdi_txd),
+  //  .clock(CLK),
+  //  .reset(!RST_N)
+  //);
+
+  Uart inst (
+    .out_tx(ftdi_rxd),
+    .out_led(led),
     .in0(ftdi_txd),
     .clock(CLK),
     .reset(!RST_N)

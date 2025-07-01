@@ -15,6 +15,7 @@ import Prediction
 import System
 import Instr
 import Clint
+import Uart
 import Alu
 import CSR
 
@@ -585,20 +586,22 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
 
   return (imaster, dmaster)
 
+makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, Bit 1, [Mmio TLConfig])
+makeUartMmio cycles rx = do
+  inputs <- makeRxUart cycles rx
 
-makePerfCounter :: Bit 32 -> Bit 32 -> Module (TLSlave TLConfig)
-makePerfCounter cycle instret = do
-  let cycleMmio =
-        Mmio
-          { address= 0x30000000
-          , read= cycle
-          , write= \ _ _ -> pure () }
-  let instretMmio =
-        Mmio
-          { address= 0x30000004
-          , read= instret
-          , write= \ _ _ -> pure () }
-  makeTLMmio 1 [cycleMmio, instretMmio]
+  outputQ :: Queue (Bit 8) <- makeQueue
+  tx <- makeTxUart cycles (toSource outputQ)
+
+  let canPeek :: Reg (Bit 8) = readOnlyReg (zeroExtend inputs.canPeek)
+  let canPut :: Reg (Bit 8) = readOnlyReg (zeroExtend outputQ.notFull)
+
+  let value :: Reg (Bit 8) =
+        Reg
+          { readReg= inputs.peek
+          , writeReg= when outputQ.notFull . outputQ.enq }
+
+  return (tx, inputs.canPeek, [])
 
 makeFakeTestCore :: Bit 1 -> Module (Bit 1)
 makeFakeTestCore _ = mdo
@@ -640,19 +643,21 @@ makeFakeTestCore _ = mdo
   withName "xbar" $ makeConnection dmaster1 slave3
   withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
 
-  (clintSlave, clint) <- withName "clint" $ makeClint @TLConfig 1 0x30000000
+  (clintMmio0, clint0) <- withName "clint" $ makeClint @TLConfig 0x30000000
+  (clintMmio1, clint1) <- withName "clint" $ makeClint @TLConfig 0x30010000
+  clintSlave <- makeTLMmio @TLConfig 1 (clintMmio0 ++ clintMmio1)
   withName "clint" $ makeConnection master1 clintSlave
 
   let systemInputs0 =
         SystemInputs
-          { softwareInterrupt= clint.softwareInterrupt
-          , timerInterrupt= clint.timerInterrupt
+          { softwareInterrupt= clint0.softwareInterrupt
+          , timerInterrupt= clint0.timerInterrupt
           , externalInterrupt= false }
 
   let systemInputs1 =
         SystemInputs
-          { softwareInterrupt= false
-          , timerInterrupt= false
+          { softwareInterrupt= clint1.softwareInterrupt
+          , timerInterrupt= clint1.timerInterrupt
           , externalInterrupt= false }
 
   let coreconfig0 =

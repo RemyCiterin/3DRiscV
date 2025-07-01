@@ -1,7 +1,7 @@
 
 LIB = \
 			src/Top.v \
-			simulation/*v \
+			simulation/Block*v \
 			Verilog/*.v
 
 compile:

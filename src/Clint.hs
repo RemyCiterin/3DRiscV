@@ -16,10 +16,9 @@ makeClint :: forall p.
   , 32 ~ 8*(LaneWidth p)
   , 4 ~ (LaneWidth p)
   , KnownTLParams p)
-    => Bit (SinkWidth p)
-    -> Bit (AddrWidth p)
-    -> Module (TLSlave p, ClintIfc)
-makeClint sink base = do
+    => Bit (AddrWidth p)
+    -> Module ([Mmio p], ClintIfc)
+makeClint base = do
   mtimecmp :: Reg (Bit 64) <- makeReg 0
   mtime :: Reg (Bit 64) <- makeReg 0
   msip :: Reg (Bit 1) <- makeReg 0
@@ -29,7 +28,7 @@ makeClint sink base = do
 
   let msipMmio =
         Mmio
-          { read= zeroExtend msip.val
+          { read= const (pure (zeroExtend msip.val))
           , write= \ lane mask -> do
               when (at @0 mask === 1) do
                 msip <== at @0 lane
@@ -41,18 +40,16 @@ makeClint sink base = do
   let mtimeMmio = readOnlyMmio (base + 0xbff8) (lower mtime.val)
   let mtimehMmio = readOnlyMmio (base + 0xbffc) (upper mtime.val)
 
-  slave <-
-    makeTLMmio @p
-      sink
-      [ msipMmio
-      , mtimeMmio
-      , mtimehMmio
-      , mtimecmpMmio
-      , mtimecmphMmio ]
+  let mmioList =
+        [ msipMmio
+        , mtimeMmio
+        , mtimehMmio
+        , mtimecmpMmio
+        , mtimecmphMmio ]
 
   let ifc =
         ClintIfc
           { timerInterrupt= mtime.val .>=. mtimecmp.val
           , softwareInterrupt= msip.val }
 
-  return (slave, ifc)
+  return (mmioList, ifc)

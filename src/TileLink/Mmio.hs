@@ -19,19 +19,21 @@ import Blarney.Ehr
 
 import Blarney.Utils
 
+-- - `read` take the mask as argument to allow reads with effect
+--   with a granularity of one byte
 data Mmio p =
   Mmio
     { address :: Bit (AddrWidth p)
-    , read :: Bit (8 * LaneWidth p)
+    , read :: Bit (LaneWidth p) -> Action (Bit (8 * LaneWidth p))
     , write :: Bit (8 * LaneWidth p) -> Bit (LaneWidth p) -> Action () }
 
 readOnlyMmio :: forall p. Bit (AddrWidth p) -> Bit (8 * LaneWidth p) -> Mmio p
-readOnlyMmio address read = Mmio { address, read, write= \ _ _ -> pure () }
+readOnlyMmio address read = Mmio { address, read= const (pure read), write= \ _ _ -> pure () }
 
 writeOnlyMmio :: forall p.
   (KnownTLParams p)
     => Bit (AddrWidth p) -> (Bit (8 * LaneWidth p) -> Bit (LaneWidth p) -> Action ()) -> Mmio p
-writeOnlyMmio address write = Mmio { address, read= dontCare, write }
+writeOnlyMmio address write = Mmio { address, read= const (pure dontCare), write }
 
 regToMmio :: forall p.
   (KnownTLParams p)
@@ -39,7 +41,7 @@ regToMmio :: forall p.
 regToMmio address r =
   Mmio
     { address
-    , read= r.val
+    , read= const (pure r.val)
     , write= \ value mask -> r <== mergeBE value r.val mask }
 
 -- Generate a RAM controller using a lower bound and a file name
@@ -79,7 +81,8 @@ makeTLMmio sink confs = do
             mmio.write channelA.peek.lane channelA.peek.mask
           else do
             --display "read " mmio.read " at 0x" (formatHex 0 mmio.address)
-            lane <== mmio.read
+            x <- mmio.read channelA.peek.mask
+            lane <== x
           | mmio <- confs]
 
       size <== sz .>. laneSize ? (sz - laneSize, 0)
