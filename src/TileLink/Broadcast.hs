@@ -24,6 +24,15 @@ import Data.Proxy
 logprint :: FShow a => a -> Action ()
 logprint = \ _ -> pure () -- display "Slave: "
 
+-- Define a broadcast cache coherency controller. This controller is named
+-- a broadcast controller because it just send a probe request to all the
+-- caches agants it known each times it receive an acquire requets
+-- This controller supports:
+--    - Acquire and Release requests of size `logSize`, knowning that
+--      `logSize` must be bigger than `Log2 (LaneWidth p)`
+--    - PutData and Get requests of size less than `Log2 (LaneWidth p)`
+--      (one burst requests)
+
 data BroadcastConfig p =
   BroadcastConfig
     { sources :: [Bit (SourceWidth p)]
@@ -35,7 +44,9 @@ makeBroadcast :: forall p p'.
   , KnownTLParams p )
     => BroadcastConfig p
     -> Module (TLSlave p, TLMaster p')
-makeBroadcast config = do
+makeBroadcast config
+  | config.logSize < log2 (valueOf @(LaneWidth p)) = error "unsuported block size"
+  | otherwise = do
   let laneSize :: TLSize = constant $ toInteger $ valueOf @(LaneWidth p)
   let laneLogSize :: TLSize = constant $ toInteger $ log2 $ valueOf @(LaneWidth p)
 
@@ -97,6 +108,11 @@ makeBroadcast config = do
         dynamicAssert (queueA.first.size === logSize) "wrong size"
         acquire.start
 
+      -- wait for all the releases to finish before an acquire: ensure data is not corrupted
+      when (queueA.canDeq .&&. queueA.first.opcode `isTagged` #AcquirePerms .&&. inv acquire.active) do
+        dynamicAssert (queueA.first.size === logSize) "wrong size"
+        acquire.start
+
       -- write one value at a time (to optimize)
       when (release.canPeek .&&. slaveA2.canPut) do
         let (addr, lane, mask, last) = release.peek
@@ -127,6 +143,42 @@ makeBroadcast config = do
         , channelD= toSink slaveD
         , channelE= nullSource } )
 
+data GrantFSM (iw :: Nat) p =
+  GrantFSM
+    { start :: Bit iw -> Action ()
+    , write :: Bit iw -> Bit (8 * LaneWidth p) -> Action ()
+    , read :: Source (Bit (8 * LaneWidth p)) }
+
+makeGrantFSM :: forall iw p. (KnownTLParams p, KnownNat iw) => Module (GrantFSM iw p)
+makeGrantFSM = do
+  buffer :: RAM (Bit iw) (Bit (8 * LaneWidth p)) <- makeDualRAMForward
+  epochBuf :: RAM (Bit iw) (Bit 1) <- makeDualRAMForward -- initialised with zeros
+  epoch :: Reg (Bit 1) <- makeReg 0
+
+  index :: Reg (Bit iw) <- makeReg 0
+
+  doRead :: Wire (Bit 1) <- makeWire false
+
+  always do
+    let newIdx = doRead.val ? (index.val+1, index.val)
+    when doRead.val (index <== index.val + 1)
+    epochBuf.load newIdx
+    buffer.load newIdx
+
+  return
+    GrantFSM
+      { start= \ idx -> do
+          epoch <== inv epoch.val
+          index <== idx
+      , write= \ idx lane -> do
+          epochBuf.store idx epoch.val
+          buffer.store idx lane
+      , read=
+          Source
+            { peek= buffer.out
+            , canPeek= epochBuf.out === epoch.val
+            , consume= doRead <== true }}
+
 data AcquireFSM p =
   AcquireFSM
     { address :: Bit (AddrWidth p)
@@ -146,32 +198,24 @@ makeAcquireFSM :: forall p.
     -> TLSlave (TLParams (AddrWidth p) (LaneWidth p) (SizeWidth p) (SinkWidth p) 0)
     -> Module (AcquireFSM p)
 makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE slave = do
-  -- TODO ensure this work if a cache burst is smaller than a data lane
   let blockWidth = logSize - log2 (valueOf @(LaneWidth p))
   let laneSize :: TLSize = constant $ toInteger $ valueOf @(LaneWidth p)
   let laneLogSize :: TLSize = constant $ toInteger $ log2 $ valueOf @(LaneWidth p)
   let logSize' = constant $ toInteger logSize
 
+
   liftNat blockWidth $ \ (_ :: Proxy iw) -> do
-    buffer :: RAM (Bit iw) (Bit (8 * LaneWidth p)) <- makeDualRAMForward
-    epochBuf :: RAM (Bit iw) (Bit 1) <- makeRAM -- initialised with zeros
-    epoch :: Reg (Bit 1) <- makeReg 0
+    let getIndex :: Bit (AddrWidth p) -> Bit iw = \ addr ->
+          unsafeSlice (logSize-1, log2 (valueOf @(LaneWidth p))) addr
+
+    buffer <- makeGrantFSM @iw @p
 
     probe :: ProbeFSM iw p <- makeProbeFSM sink logSize' channelB metaC sources
 
     msg :: Reg (ChannelA p) <- makeReg dontCare
     valid :: Reg (Bit 1) <- makeReg false
 
-    index2 :: Reg (Bit iw) <- makeReg 0
     size :: Reg TLSize <- makeReg 0
-
-    doGrant :: Wire (Bit 1) <- makeWire false
-
-    always do
-      let idx = doGrant.val ? (index2.val+1, index2.val)
-      epochBuf.load idx
-      buffer.load idx
-      index2 <== idx
 
     index1 :: Reg (Bit iw) <- makeReg dontCare
 
@@ -184,9 +228,10 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
       when (probe.write.canPeek .&&. slave.channelA.canPut) do
         dynamicAssert (inv waitAck.val) "receive two ProbeAckData"
         let (index, lane, mask, last) = probe.write.peek
-        epochBuf.store index epoch.val
-        buffer.store index lane
         probe.write.consume
+
+        when (inv (msg.val.opcode `isTagged` #AcquirePerms)) do
+          buffer.write index lane
 
         slave.channelA.put
           ChannelA
@@ -203,8 +248,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
       -- Read response
       let sresp = slave.channelD.peek
       when (slave.channelD.canPeek .&&. sresp.source === sink .&&. sresp.opcode `isTagged` #AccessAckData) do
-        buffer.store index1.val sresp.lane
-        epochBuf.store index1.val epoch.val
+        buffer.write index1.val sresp.lane
         slave.channelD.consume
 
         index1 <== index1.val + 1
@@ -221,26 +265,68 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
         when (inv probe.hasData) do
           slave.channelA.put
             ChannelA
-              { mask= getLaneMask @p msg.val.address logSize'
+              { mask= ones
               , address= msg.val.address
               , opcode= item #Get
               , lane= dontCare
               , size= logSize'
               , source= sink }
 
-      when (channelD.canPut .&&. grant.val .&&. epochBuf.out === epoch.val .&&. size.val =!= 0) do
-        doGrant <== true
+      if (msg.val.opcode `isTagged` #PutData) then do
+        let trigger =
+              channelA.canPeek .&&. channelD.canPut
+              .&&. grant.val .&&. size.val =!= 0
+              .&&. slave.channelA.canPut
+              .&&. inv waitAck.val
+        when trigger do
+          size <== size.val .>. laneSize ? (size.val - laneSize, 0)
 
-        size <== size.val .>. laneSize ? (size.val - laneSize, 0)
+          channelD.put
+            ChannelD
+              { opcode= item #AccessAck
+              , source= msg.val.source
+              , size= msg.val.size
+              , lane= dontCare
+              , sink }
 
-        let cap = probe.exclusive ? (item #T, item #B)
-        channelD.put
-          ChannelD
-            { opcode= tag #GrantData cap
-            , source= msg.val.source
-            , lane= buffer.out
-            , size= logSize'
-            , sink }
+          slave.channelA.put
+            ChannelA
+              { opcode= item #PutData
+              , address= msg.val.address
+              , lane= channelA.peek.lane
+              , mask= channelA.peek.mask
+              , size= msg.val.size
+              , source= sink }
+          channelA.consume
+
+          when (size.val .<=. laneSize) do
+            valid <== false
+            grant <== false
+      else do
+        when (channelD.canPut .&&. grant.val .&&. buffer.read.canPeek .&&. size.val =!= 0) do
+          when (inv (msg.val.opcode `isTagged` #AcquirePerms)) do
+            buffer.read.consume
+
+          let cap = probe.exclusive ? (item #T, item #B)
+          let opcode =
+                select
+                  [ msg.val.opcode `isTagged` #AcquirePerms --> tag #Grant cap
+                  , msg.val.opcode `isTagged` #AcquireBlock --> tag #GrantData cap
+                  , msg.val.opcode `isTagged` #Get --> item #AccessAckData ]
+
+          size <== (size.val .>. laneSize .&&. hasDataD opcode) ? (size.val - laneSize, 0)
+
+          channelD.put
+            ChannelD
+              { opcode
+              , lane= buffer.read.peek
+              , source= msg.val.source
+              , size= msg.val.size
+              , sink }
+
+          when (msg.val.opcode `isTagged` #Get .&&. size.val .<=. laneSize) do
+            valid <== false
+            grant <== false
 
       when (channelE.canPeek .&&. size.val === 0 .&&. channelE.peek.sink === sink) do
         dynamicAssert grant.val "receive GrantAck without being in grant state"
@@ -254,20 +340,29 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
         { active= valid.val .||. waitAck.val
         , address= msg.val.address
         , start= do
+            let acquire = channelA.peek
             dynamicAssert (inv valid.val) "invalid state"
             dynamicAssert (inv waitAck.val) "invalid state"
             dynamicAssert (index1.val === 0) "invalid state"
-            dynamicAssert (index2.val === 0) "invalid state"
 
-            let acquire = channelA.peek
+            when (acquire.opcode `isTagged` #AcquireBlock) do
+              dynamicAssert (acquire.address .&. ((1 .<<. logSize') - 1) === 0) "unaligned access"
+            when (acquire.opcode `isTagged` #AcquirePerms) do
+              dynamicAssert (acquire.address .&. ((1 .<<. logSize') - 1) === 0) "unaligned access"
+
             let owners = [src =!= acquire.source | src <- sources]
             let perm = (decodeGrow (untag #AcquireBlock acquire.opcode)).snd
-            let opcode = perm === trunk ? (tag #ProbeBlock (item #N), tag #ProbeBlock (item #B))
+            let opcode =
+                  channelA.peek.opcode `isTagged` #AcquirePerms ?
+                  ( perm === trunk ? (tag #ProbePerms (item #N), tag #ProbePerms (item #B))
+                  , perm === trunk ? (tag #ProbeBlock (item #N), tag #ProbeBlock (item #B)))
             probe.start.put (opcode, 0, acquire.address, owners)
-            size <== 1 .<<. logSize'
+            size <== 1 .<<. acquire.size
 
-            epoch <== inv epoch.val
-            channelA.consume
+            when (inv (acquire.opcode `isTagged` #AcquirePerms)) do
+              buffer.start (getIndex acquire.address)
+            when (inv (acquire.opcode `isTagged` #PutData)) do
+              channelA.consume
             msg <== acquire
             valid <== true
             logprint acquire }
@@ -312,7 +407,7 @@ makeReleaseFSM sink logSize metaC channelD = do
   return
     Source
       { canPeek= canPeekData
-      , peek= (address, msgC.lane, getLaneMask @p address logSize, metaC.last)
+      , peek= (address, msgC.lane, ones, metaC.last)
       , consume= do
           logprint msgC
           dynamicAssert (msgC.size === logSize) "wrong size"
@@ -415,7 +510,7 @@ makeProbeFSM sink logSize channelB metaC sources = do
                 .&&. channelC.canPeek
                 .&&. msgC.address === address.val
                 .&&. msgC.opcode `isTagged` #ProbeAckData
-            , peek= (index.val, msgC.lane, getLaneMask @p address.val logSize, metaC.last)
+            , peek= (index.val, msgC.lane, ones, metaC.last)
             , consume= do
                 dynamicAssert (inv hasData.val) "receive two ProbeAckData"
                 let reduce = untag #ProbeAckData msgC.opcode

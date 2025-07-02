@@ -32,6 +32,7 @@ makeSystem ::
   -> SystemInputs
   -> Module SystemIfc
 makeSystem hartId inputs = do
+  let priv :: Priv = machine_priv
 
   let mvendoridCSRs = [readOnlyCSR 0xf11 0]
   let marchidCSRs = [readOnlyCSR 0xf12 0]
@@ -119,7 +120,7 @@ makeSystem hartId inputs = do
                 , pc= dontCare
                 , rd= dontCare }
           else do
-            execCSR csrUnit input
+            execCSR priv csrUnit input
       , canInterrupt=
           let ready :: Bit 16 = lower mip.all .&. lower mie.all in
           let enabled = mstatus.mie.val in

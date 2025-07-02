@@ -337,6 +337,7 @@ machine_external_interrupt = CauseInterrupt 11
 
 data ExecInput = ExecInput
   { instr :: Instr
+  , rawInstr :: Bit 32
   , rs1 :: Bit 32
   , rs2 :: Bit 32
   , pc  :: Bit 32}

@@ -55,6 +55,7 @@ data FetchOutput = FetchOutput {
 data DecodeOutput = DecodeOutput {
     bstate :: BPredState HistSize RasSize,
     prediction :: Bit 32,
+    rawInstr :: Bit 32,
     instr :: Instr,
     epoch :: Epoch,
     pc :: Bit 32
@@ -154,12 +155,13 @@ makeDecode stream = do
   always do
     when (stream.canPeek .&&. outputQ.notFull) do
       let req = stream.peek
-      outputQ.enq DecodeOutput{
-        instr= decodeInstr req.instr,
-        prediction= req.prediction,
-        bstate= req.bstate,
-        epoch= req.epoch,
-        pc=req.pc}
+      outputQ.enq DecodeOutput
+        { instr= decodeInstr req.instr
+        , prediction= req.prediction
+        , rawInstr= req.instr
+        , bstate= req.bstate
+        , epoch= req.epoch
+        , pc=req.pc }
       stream.consume
 
   return (toStream outputQ)
@@ -483,6 +485,7 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
 
     when (decode.canPeek .&&. window.notFull) do
       let instr :: Instr = decode.peek.instr
+      let rawInstr :: Bit 32 = decode.peek.rawInstr
       let rs1 :: RegId = instr.rs1.valid ? (instr.rs1.val, 0)
       let rs2 :: RegId = instr.rs2.valid ? (instr.rs2.val, 0)
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
@@ -492,7 +495,12 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
             (instr.isMemAccess ? (lsuQ.notFull, instr.isSystem ? (systemQ.notFull, aluQ.notFull)))
 
       let input =
-            ExecInput{pc=decode.peek.pc, rs1= registers.read rs1, rs2= registers.read rs2, instr}
+            ExecInput
+              { pc=decode.peek.pc
+              , rs1= registers.read rs1
+              , rs2= registers.read rs2
+              , rawInstr
+              , instr }
 
       when (decode.peek.epoch =!= epoch.read 1) do
         decode.consume

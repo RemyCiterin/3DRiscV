@@ -4,6 +4,119 @@ import Blarney
 import Blarney.Utils
 import Instr
 
+--Reminder:
+--    | ustatus          | 000 |
+--    | uie              | 004 |
+--    | utvec            | 005 |
+--    | uscratch         | 040 |
+--    | uepc             | 041 |
+--    | ucause           | 042 |
+--    | ubadaddr         | 043 |
+--    | uip              | 044 |
+--    | fflags           | 001 |
+--    | frm              | 002 |
+--    | fcsr             | 003 |
+--    | cycle            | c00 |
+--    | time             | c01 |
+--    | instret          | c02 |
+--    | cycleh           | c80 |
+--    | timeh            | c81 |
+--    | instreth         | c82 |
+--    | sstatus          | 100 |
+--    | sedeleg          | 102 |
+--    | sideleg          | 103 |
+--    | sie              | 104 |
+--    | stvec            | 105 |
+--    | sscratch         | 140 |
+--    | sepc             | 141 |
+--    | scause           | 142 |
+--    | sbadaddr         | 143 |
+--    | sip              | 144 |
+--    | sptbr            | 180 |
+--    | scycle           | d00 |
+--    | stime            | d01 |
+--    | sinstret         | d02 |
+--    | scycleh          | d80 |
+--    | stimeh           | d81 |
+--    | sinstreth        | d82 |
+--    | hstatus          | 200 |
+--    | hedeleg          | 202 |
+--    | hideleg          | 203 |
+--    | hie              | 204 |
+--    | htvec            | 205 |
+--    | hscratch         | 240 |
+--    | hepc             | 241 |
+--    | hcause           | 242 |
+--    | hbadaddr         | 243 |
+--    | hcycle           | e00 |
+--    | htime            | e01 |
+--    | hinstret         | e02 |
+--    | hcycleh          | e80 |
+--    | htimeh           | e81 |
+--    | hinstreth        | e82 |
+--    | misa             | f10 |
+--    | mvendorid        | f11 |
+--    | marchid          | f12 |
+--    | mimpid           | f13 |
+--    | mhartid          | f14 |
+--    | mstatus          | 300 |
+--    | medeleg          | 302 |
+--    | mideleg          | 303 |
+--    | mie              | 304 |
+--    | mtvec            | 305 |
+--    | mscratch         | 340 |
+--    | mepc             | 341 |
+--    | mcause           | 342 |
+--    | mtval            | 343 |
+--    | mip              | 344 |
+--    | mbase            | 380 |
+--    | mbound           | 381 |
+--    | mibase           | 382 |
+--    | mibound          | 383 |
+--    | mdbase           | 384 |
+--    | mdbound          | 385 |
+--    | mcycle           | b00 |
+--    | mtime            | f01 |
+--    | minstret         | b02 |
+--    | mcycleh          | b80 |
+--    | mtimeh           | f81 |
+--    | minstreth        | b82 |
+--    | mucounteren      | 310 |
+--    | mscounteren      | 311 |
+--    | mhcounteren      | 312 |
+--    | mucycle_delta    | 700 |
+--    | mutime_delta     | 701 |
+--    | muinstret_delta  | 702 |
+--    | mscycle_delta    | 704 |
+--    | mstime_delta     | 705 |
+--    | msinstret_delta  | 706 |
+--    | mhcycle_delta    | 708 |
+--    | mhtime_delta     | 709 |
+--    | mhinstret_delta  | 70a |
+--    | mucycle_deltah   | 780 |
+--    | mutime_deltah    | 781 |
+--    | muinstret_deltah | 782 |
+--    | mscycle_deltah   | 784 |
+--    | mstime_deltah    | 785 |
+--    | msinstret_deltah | 786 |
+--    | mhcycle_deltah   | 788 |
+--    | mhtime_deltah    | 789 |
+--    | mhinstret_deltah | 78a |
+
+data Priv =
+  Priv (Bit 2)
+  deriving(Bits, Generic, Cmp)
+
+user_priv = Priv 0
+supervisor_priv = Priv 1
+machine_priv = Priv 3
+
+minPrivCSR :: Bit 12 -> Priv
+minPrivCSR id = Priv (slice @9 @8 id)
+
+isReadOnlyCSR :: Bit 12 -> Bit 1
+isReadOnlyCSR id = slice @11 @10 id === 0b11
+
 data CSR =
   CSR
     { csrId :: Bit 12

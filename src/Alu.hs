@@ -56,11 +56,17 @@ alu query =
         opcode `is` [SRA] --> rs1 .>>>. slice @4 @0 op2
       ]
 
-execCSR :: CSRUnit -> ExecInput -> Action ExecOutput
-execCSR unit ExecInput{instr, pc, rs1} = do
+execCSR :: Priv -> CSRUnit -> ExecInput -> Action ExecOutput
+execCSR currentPriv unit ExecInput{instr, rawInstr, pc, rs1} = do
   let doRead = instr.opcode `is` [CSRRW] ? (instr.rd.val =!= 0, true)
   let doWrite = instr.opcode `is` [CSRRC,CSRRS] ? (instr.rs1.val =!= 0, true)
-  x <- whenAction doRead (unit.csrUnitRead instr.csr)
+  let readOnly = isReadOnlyCSR instr.csr
+
+  let legal =
+        inv (doWrite .&&. readOnly)
+        .&&. currentPriv .>=. minPrivCSR instr.csr
+
+  x <- whenAction (doRead .&&. legal) (unit.csrUnitRead instr.csr)
 
   let operand = instr.csrI ? (zeroExtend instr.rs1.val, rs1)
 
@@ -70,15 +76,15 @@ execCSR unit ExecInput{instr, pc, rs1} = do
           , instr.opcode `is` [CSRRS] --> x .|. operand
           , instr.opcode `is` [CSRRC] --> x .&. inv operand ]
 
-  when doWrite do
+  when (legal .&&. doWrite) do
     unit.csrUnitWrite instr.csr value
 
   return
     ExecOutput
       { rd= x
-      , exception= false
-      , cause= dontCare
-      , tval= 0
+      , exception= inv legal
+      , cause= illegal_instruction
+      , tval= rawInstr
       , pc= pc + 4 }
 
 execAMO :: (MnemonicVec, Bit 32) -> Bit 32 -> Bit 32
