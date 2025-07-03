@@ -57,7 +57,7 @@ alu query =
       ]
 
 execCSR :: Priv -> CSRUnit -> ExecInput -> Action ExecOutput
-execCSR currentPriv unit ExecInput{instr, rawInstr, pc, rs1} = do
+execCSR currentPriv unit ExecInput{instr, pc, rs1} = do
   let doRead = instr.opcode `is` [CSRRW] ? (instr.rd.val =!= 0, true)
   let doWrite = instr.opcode `is` [CSRRC,CSRRS] ? (instr.rs1.val =!= 0, true)
   let readOnly = isReadOnlyCSR instr.csr
@@ -84,7 +84,7 @@ execCSR currentPriv unit ExecInput{instr, rawInstr, pc, rs1} = do
       { rd= x
       , exception= inv legal
       , cause= illegal_instruction
-      , tval= rawInstr
+      , tval= instr.raw
       , pc= pc + 4 }
 
 execAMO :: (MnemonicVec, Bit 32) -> Bit 32 -> Bit 32

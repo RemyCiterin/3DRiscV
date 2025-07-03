@@ -105,7 +105,7 @@ import Instr
 
 data Priv =
   Priv (Bit 2)
-  deriving(Bits, Generic, Cmp)
+  deriving(Bits, Generic, Cmp, FShow)
 
 user_priv = Priv 0
 supervisor_priv = Priv 1
@@ -217,23 +217,17 @@ makeHartIdCSR id = do
 
 data DelegCSRs =
   DelegCSRs
-    { sedeleg :: Reg (Bit 32)
-    , sideleg :: Reg (Bit 32)
-    , medeleg :: Reg (Bit 32)
+    { medeleg :: Reg (Bit 32)
     , mideleg :: Reg (Bit 32) }
 
-makeDelegCSR :: Module ([CSR], DelegCSRs)
-makeDelegCSR = do
+makeDelegCSRs :: Module ([CSR], DelegCSRs)
+makeDelegCSRs = do
   medeleg <- makeReg 0
   mideleg <- makeReg 0
-  sedeleg <- makeReg 0
-  sideleg <- makeReg 0
 
   let csrs =
         [ regToCSR 0x302 medeleg
-        , regToCSR 0x303 mideleg
-        , regToCSR 0x102 sedeleg
-        , regToCSR 0x103 sideleg ]
+        , regToCSR 0x303 mideleg ]
 
   let regs = DelegCSRs{ .. }
 
@@ -374,18 +368,20 @@ makeInterruptPendingCSRs = do
 
   return ([regToCSR 0x344 mip, regToCSR 0x144 sip], csrs)
 
-data MstatusCSRs=
-  MstatusCSRs
+data StatusCSRs=
+  StatusCSRs
     { mie :: Reg (Bit 1)
     , mpie :: Reg (Bit 1)
     , priv :: Reg Priv
+    , mpp :: Reg (Bit 2)
+    , spp :: Reg (Bit 1)
     , mxr :: Reg (Bit 1)
     , sum :: Reg (Bit 1)
     , spie :: Reg (Bit 1)
     , sie :: Reg (Bit 1) }
 
-makeMstatusCSRs :: Module ([CSR], MstatusCSRs)
-makeMstatusCSRs = do
+makeStatusCSRs :: Module ([CSR], StatusCSRs)
+makeStatusCSRs = do
   priv :: Reg Priv <- makeReg machine_priv
 
   let tsr :: Reg (Bit 1) = readOnlyReg 0
@@ -394,15 +390,15 @@ makeMstatusCSRs = do
   mxr :: Reg (Bit 1) <- makeReg 0 -- Make eXecutable Readable
   sum :: Reg (Bit 1) <- makeReg 0 -- Supervisor User Memory
   mprv :: Reg (Bit 1) <- makeReg 0 -- Modify PRiVilege
-  let xs :: Reg (Bit 2) = readOnlyReg 0 -- eXtensions State
-  let fs :: Reg (Bit 2) = readOnlyReg 0 -- Floadting points State
-  let mpp :: Reg (Bit 2) = readOnlyReg (pack priv.val) -- Privilege (up to M)
-  let vs :: Reg (Bit 2) = readOnlyReg 0 -- Vector extension State
-  let spp :: Reg (Bit 1) = readOnlyReg (priv.val .>. user_priv) -- Privilege (up to S)
-  mpie :: Reg (Bit 1) <- makeReg 0
-  spie :: Reg (Bit 1) <- makeReg 0
-  mie :: Reg (Bit 1) <- makeReg 0
-  sie :: Reg (Bit 1) <- makeReg 0
+  let xs :: Reg (Bit 2) = readOnlyReg 0 -- eXtensions State (no accelerators)
+  let fs :: Reg (Bit 2) = readOnlyReg 0 -- Floadting points State (no floats)
+  mpp :: Reg (Bit 2) <- makeReg 0b11 -- Privilege (up to M)
+  let vs :: Reg (Bit 2) = readOnlyReg 0 -- Vector extension State (no vector extension)
+  spp :: Reg (Bit 1) <- makeReg 1 -- Privilege (up to S)
+  mpie :: Reg (Bit 1) <- makeReg 0 -- Machine prev interrupt enabled
+  spie :: Reg (Bit 1) <- makeReg 0 -- Supervisor prev interrupt enabled
+  mie :: Reg (Bit 1) <- makeReg 0 -- Machine Interrupt Enabled
+  sie :: Reg (Bit 1) <- makeReg 0 -- Supervisor Interrupt Enabled
   let sd :: Reg (Bit 1) = readOnlyReg (xs.val === 0b11 .||. fs.val === 0b11)
 
   let mstatus :: Reg (Bit 32) =
@@ -444,7 +440,7 @@ makeMstatusCSRs = do
         `concatReg` sie
         `concatReg` readOnlyReg @1 0
 
-  return ([regToCSR 0x300 mstatus, regToCSR 0x100 sstatus], MstatusCSRs{ .. })
+  return ([regToCSR 0x300 mstatus, regToCSR 0x100 sstatus], StatusCSRs{ .. })
 
 makeMscratchCSRs :: Module [CSR]
 makeMscratchCSRs = do
@@ -457,3 +453,10 @@ makeSscratchCSRs = do
   sscratch :: Reg (Bit 32) <- makeReg dontCare
 
   return [regToCSR 0x140 sscratch]
+
+makeSatpCSRs :: Module ([CSR], Reg (Bit 32))
+makeSatpCSRs = do
+  satp :: Reg (Bit 32) <- makeReg 0
+  let csrs = [regToCSR 0x180 satp]
+
+  return (csrs, satp)

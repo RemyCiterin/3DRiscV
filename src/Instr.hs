@@ -72,6 +72,7 @@ data Mnemonic =
   | FENCE
   | ECALL
   | MRET
+  | SRET
   | WFI
   | EBREAK
   | CSRRW
@@ -140,6 +141,7 @@ decodeTable =
   , "000000000000 <5> 000 <5> 1110011" --> ECALL
   , "000000000001 <5> 000 <5> 1110011" --> EBREAK
   , "001100000010 <5> 000 <5> 1110011" --> MRET
+  , "000100000010 <5> 000 <5> 1110011" --> SRET
   , "000100000101 <5> 000 <5> 1110011" --> WFI
   , "fence<4> pred<4> succ<4> rs1<5> 000 00000 0001111" --> FENCE
   , "csr[11:0] rs1<5> csrI<1> 01 rd<5> 1110011" --> CSRRW
@@ -161,8 +163,9 @@ decodeTable =
   ]
 
 data Instr =
-  Instr {
-    rd          :: Option RegId
+  Instr
+  { raw         :: Bit 32
+  , rd          :: Option RegId
   , rs1         :: Option RegId
   , rs2         :: Option RegId
   , imm         :: Option (Bit 32)
@@ -184,8 +187,9 @@ data Instr =
 
 decodeInstr :: Bit 32 -> Instr
 decodeInstr instr =
-  Instr {
-    rd = Option (hasBitField fieldMap "rd" .&&. regDest =!= 0) regDest
+  Instr
+  { raw = instr
+  , rd = Option (hasBitField fieldMap "rd" .&&. regDest =!= 0) regDest
   , rs1 = Option (hasBitField fieldMap "rs1") (getBitFieldSel selMap "rs1" instr)
   , rs2 = Option (hasBitField fieldMap "rs2") (getBitFieldSel selMap "rs2" instr)
   , imm = getBitField fieldMap "imm"
@@ -194,7 +198,7 @@ decodeInstr instr =
   , csr = getBitFieldSel selMap "csr" instr
   , csrI = getBitFieldSel selMap "csrI" instr
   , accessWidth = getBitFieldSel selMap "aw" instr
-  , isSystem = opcode `is` [CSRRW,CSRRC,CSRRS,MRET,WFI,ECALL] .||. opcode === 0
+  , isSystem = opcode `is` [CSRRW,CSRRC,CSRRS,MRET,SRET,WFI,ECALL] .||. opcode === 0
   , isUnsigned = getBitFieldSel selMap "ul" instr
   , isMemAccess = opcode `is` [LOAD,STORE,FENCE,STOREC,LOADR] .||. isAMO
   , canBranch = opcode `is` [JAL,JALR,BEQ,BNE,BLT,BLTU,BGE,BGEU]
@@ -337,7 +341,6 @@ machine_external_interrupt = CauseInterrupt 11
 
 data ExecInput = ExecInput
   { instr :: Instr
-  , rawInstr :: Bit 32
   , rs1 :: Bit 32
   , rs2 :: Bit 32
   , pc  :: Bit 32}
