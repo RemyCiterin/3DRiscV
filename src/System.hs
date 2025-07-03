@@ -38,14 +38,15 @@ makeSystem hartId inputs = do
   let marchidCSRs = [readOnlyCSR 0xf12 0]
   let mimpidCSRs = [readOnlyCSR 0xf13 0]
 
-  (mieCSRs, mie) <- makeMieCSRs
-  (mipCSRs, mip) <- makeMipCSRs
+  (mieCSRs, mie) <- makeInterruptEnableCSRs
+  (mipCSRs, mip) <- makeInterruptPendingCSRs
   cycleCRSs <- makeCycleCounterCSR
   (mstatusCSRs, mstatus) <- makeMstatusCSRs
   hartIdCSRs <- makeHartIdCSR (constant hartId)
   (instretCSRs, instret) <- makeInstructionCounterCSR
   (trapCSRs, trap) <- makeTrapCSRs
   mscratchCSRs <- makeMscratchCSRs
+  sscratchCSRs <- makeSscratchCSRs
 
   always do
     mip.meip <== inputs.externalInterrupt
@@ -59,6 +60,7 @@ makeSystem hartId inputs = do
       ++ hartIdCSRs
       ++ mvendoridCSRs
       ++ mscratchCSRs
+      ++ sscratchCSRs
       ++ marchidCSRs
       ++ mstatusCSRs
       ++ mimpidCSRs

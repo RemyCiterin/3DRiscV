@@ -32,7 +32,7 @@ import Instr
 --    | scause           | 142 |
 --    | sbadaddr         | 143 |
 --    | sip              | 144 |
---    | sptbr            | 180 |
+--    | satp             | 180 |
 --    | scycle           | d00 |
 --    | stime            | d01 |
 --    | sinstret         | d02 |
@@ -215,12 +215,41 @@ makeHartIdCSR :: Bit 32 -> Module [CSR]
 makeHartIdCSR id = do
   return [readOnlyCSR 0xf14 id]
 
+data DelegCSRs =
+  DelegCSRs
+    { sedeleg :: Reg (Bit 32)
+    , sideleg :: Reg (Bit 32)
+    , medeleg :: Reg (Bit 32)
+    , mideleg :: Reg (Bit 32) }
+
+makeDelegCSR :: Module ([CSR], DelegCSRs)
+makeDelegCSR = do
+  medeleg <- makeReg 0
+  mideleg <- makeReg 0
+  sedeleg <- makeReg 0
+  sideleg <- makeReg 0
+
+  let csrs =
+        [ regToCSR 0x302 medeleg
+        , regToCSR 0x303 mideleg
+        , regToCSR 0x102 sedeleg
+        , regToCSR 0x103 sideleg ]
+
+  let regs = DelegCSRs{ .. }
+
+  return (csrs,regs)
+
+
 data TrapCSRs =
   TrapCSRs
     { mepc :: Reg (Bit 32)
     , mcause :: Reg (Bit 32)
     , mtvec :: Reg (Bit 32)
-    , mtval :: Reg (Bit 32) }
+    , mtval :: Reg (Bit 32)
+    , sepc :: Reg (Bit 32)
+    , scause :: Reg (Bit 32)
+    , stvec :: Reg (Bit 32)
+    , stval :: Reg (Bit 32) }
 
 makeTrapCSRs :: Module ([CSR], TrapCSRs)
 makeTrapCSRs = do
@@ -228,91 +257,203 @@ makeTrapCSRs = do
   mcause :: Reg (Bit 32) <- makeReg dontCare
   mtvec :: Reg (Bit 32) <- makeReg dontCare
   mtval :: Reg (Bit 32) <- makeReg dontCare
+  sepc :: Reg (Bit 32) <- makeReg dontCare
+  scause :: Reg (Bit 32) <- makeReg dontCare
+  stvec :: Reg (Bit 32) <- makeReg dontCare
+  stval :: Reg (Bit 32) <- makeReg dontCare
 
   let csrs =
         [ regToCSR 0x341 mepc
         , regToCSR 0x305 mtvec
-        , readOnlyCSR 0x343 mtval.val
-        , readOnlyCSR 0x342 mcause.val ]
+        , regToCSR 0x343 mtval
+        , regToCSR 0x342 mcause
+        , regToCSR 0x141 sepc
+        , regToCSR 0x105 stvec
+        , regToCSR 0x143 stval
+        , regToCSR 0x142 scause ]
 
-  let regs =
-        TrapCSRs
-          { mepc
-          , mcause
-          , mtvec
-          , mtval }
+  let regs = TrapCSRs{ .. }
 
   return (csrs, regs)
 
-data MieCSRs =
-  MieCSRs
+data InterruptEnableCSRs =
+  InterruptEnableCSRs
     { meie :: Reg (Bit 1)
     , mtie :: Reg (Bit 1)
     , msie :: Reg (Bit 1)
+    , seie :: Reg (Bit 1)
+    , stie :: Reg (Bit 1)
+    , ssie :: Reg (Bit 1)
     , all :: Bit 32 }
 
-makeMieCSRs :: Module ([CSR], MieCSRs)
-makeMieCSRs = do
+makeInterruptEnableCSRs :: Module ([CSR], InterruptEnableCSRs)
+makeInterruptEnableCSRs = do
   meie :: Reg (Bit 1) <- makeReg false
   mtie :: Reg (Bit 1) <- makeReg false
   msie :: Reg (Bit 1) <- makeReg false
+  seie :: Reg (Bit 1) <- makeReg false
+  stie :: Reg (Bit 1) <- makeReg false
+  ssie :: Reg (Bit 1) <- makeReg false
 
   let mie :: Reg (Bit 32) =
         readOnlyReg @20 0
         `concatReg` meie
-        `concatReg` readOnlyReg @3 0
+        `concatReg` readOnlyReg @1 0
+        `concatReg` seie
+        `concatReg` readOnlyReg @1 0
         `concatReg` mtie
-        `concatReg` readOnlyReg @3 0
+        `concatReg` readOnlyReg @1 0
+        `concatReg` stie
+        `concatReg` readOnlyReg @1 0
         `concatReg` msie
+        `concatReg` readOnlyReg @1 0
+        `concatReg` ssie
+        `concatReg` readOnlyReg @1 0
+
+  let sie :: Reg (Bit 32) =
+        readOnlyReg @22 0
+        `concatReg` seie
         `concatReg` readOnlyReg @3 0
+        `concatReg` stie
+        `concatReg` readOnlyReg @3 0
+        `concatReg` ssie
+        `concatReg` readOnlyReg @1 0
 
-  return ([regToCSR 0x304 mie], MieCSRs{meie, mtie, msie, all= mie.val})
+  let csrs =
+        InterruptEnableCSRs
+          { all= mie.val, .. }
 
-data MipCSRs =
-  MipCSRs
+  return ([regToCSR 0x304 mie, regToCSR 0x104 sie], csrs)
+
+data InterruptPendingCSRs =
+  InterruptPendingCSRs
     { meip :: Reg (Bit 1)
     , mtip :: Reg (Bit 1)
     , msip :: Reg (Bit 1)
+    , seip :: Reg (Bit 1)
+    , stip :: Reg (Bit 1)
+    , ssip :: Reg (Bit 1)
     , all :: Bit 32 }
 
-makeMipCSRs :: Module ([CSR], MipCSRs)
-makeMipCSRs = do
+makeInterruptPendingCSRs :: Module ([CSR], InterruptPendingCSRs)
+makeInterruptPendingCSRs = do
   meip :: Reg (Bit 1) <- makeReg false
   mtip :: Reg (Bit 1) <- makeReg false
   msip :: Reg (Bit 1) <- makeReg false
+  seip :: Reg (Bit 1) <- makeReg false
+  stip :: Reg (Bit 1) <- makeReg false
+  ssip :: Reg (Bit 1) <- makeReg false
 
   let mip :: Reg (Bit 32) =
         readOnlyReg @20 0
         `concatReg` meip
-        `concatReg` readOnlyReg @3 0
+        `concatReg` readOnlyReg @1 0
+        `concatReg` seip
+        `concatReg` readOnlyReg @1 0
         `concatReg` mtip
-        `concatReg` readOnlyReg @3 0
+        `concatReg` readOnlyReg @1 0
+        `concatReg` stip
+        `concatReg` readOnlyReg @1 0
         `concatReg` msip
-        `concatReg` readOnlyReg @3 0
+        `concatReg` readOnlyReg @1 0
+        `concatReg` ssip
+        `concatReg` readOnlyReg @1 0
 
-  return ([readOnlyCSR 0x344 mip.val], MipCSRs{meip, mtip, msip, all= mip.val})
+  let sip :: Reg (Bit 32) =
+        readOnlyReg @22 0
+        `concatReg` seip
+        `concatReg` readOnlyReg @3 0
+        `concatReg` stip
+        `concatReg` readOnlyReg @3 0
+        `concatReg` ssip
+        `concatReg` readOnlyReg @1 0
+
+  let csrs =
+        InterruptPendingCSRs
+          { all= mip.val, .. }
+
+  return ([regToCSR 0x344 mip, regToCSR 0x144 sip], csrs)
 
 data MstatusCSRs=
   MstatusCSRs
     { mie :: Reg (Bit 1)
-    , mpie :: Reg (Bit 1) }
+    , mpie :: Reg (Bit 1)
+    , priv :: Reg Priv
+    , mxr :: Reg (Bit 1)
+    , sum :: Reg (Bit 1)
+    , spie :: Reg (Bit 1)
+    , sie :: Reg (Bit 1) }
 
 makeMstatusCSRs :: Module ([CSR], MstatusCSRs)
 makeMstatusCSRs = do
-  mie :: Reg (Bit 1) <- makeReg false
-  mpie :: Reg (Bit 1) <- makeReg false
+  priv :: Reg Priv <- makeReg machine_priv
+
+  let tsr :: Reg (Bit 1) = readOnlyReg 0
+  let tw :: Reg (Bit 1) = readOnlyReg 0
+  let tmv :: Reg (Bit 1) = readOnlyReg 0
+  mxr :: Reg (Bit 1) <- makeReg 0 -- Make eXecutable Readable
+  sum :: Reg (Bit 1) <- makeReg 0 -- Supervisor User Memory
+  mprv :: Reg (Bit 1) <- makeReg 0 -- Modify PRiVilege
+  let xs :: Reg (Bit 2) = readOnlyReg 0 -- eXtensions State
+  let fs :: Reg (Bit 2) = readOnlyReg 0 -- Floadting points State
+  let mpp :: Reg (Bit 2) = readOnlyReg (pack priv.val) -- Privilege (up to M)
+  let vs :: Reg (Bit 2) = readOnlyReg 0 -- Vector extension State
+  let spp :: Reg (Bit 1) = readOnlyReg (priv.val .>. user_priv) -- Privilege (up to S)
+  mpie :: Reg (Bit 1) <- makeReg 0
+  spie :: Reg (Bit 1) <- makeReg 0
+  mie :: Reg (Bit 1) <- makeReg 0
+  sie :: Reg (Bit 1) <- makeReg 0
+  let sd :: Reg (Bit 1) = readOnlyReg (xs.val === 0b11 .||. fs.val === 0b11)
 
   let mstatus :: Reg (Bit 32) =
-        readOnlyReg @24 0
+        readOnlyReg @9 0
+        `concatReg` tsr
+        `concatReg` tw
+        `concatReg` tmv
+        `concatReg` mxr
+        `concatReg` sum
+        `concatReg` mprv
+        `concatReg` xs
+        `concatReg` fs
+        `concatReg` mpp
+        `concatReg` vs
+        `concatReg` spp
         `concatReg` mpie
-        `concatReg` readOnlyReg @3 0
+        `concatReg` readOnlyReg @1 0
+        `concatReg` spie
+        `concatReg` readOnlyReg @1 0
         `concatReg` mie
-        `concatReg` readOnlyReg @3 0
+        `concatReg` readOnlyReg @1 0
+        `concatReg` sie
+        `concatReg` readOnlyReg @1 0
 
-  return ([regToCSR 0x300 mstatus], MstatusCSRs{mie, mpie})
+  let sstatus :: Reg (Bit 32) =
+        sd
+        `concatReg` readOnlyReg @11 0
+        `concatReg` mxr
+        `concatReg` sum
+        `concatReg` readOnlyReg @1 0
+        `concatReg` xs
+        `concatReg` fs
+        `concatReg` readOnlyReg @2 0
+        `concatReg` vs
+        `concatReg` spp
+        `concatReg` readOnlyReg @2 0
+        `concatReg` spie
+        `concatReg` readOnlyReg @3 0
+        `concatReg` sie
+        `concatReg` readOnlyReg @1 0
+
+  return ([regToCSR 0x300 mstatus, regToCSR 0x100 sstatus], MstatusCSRs{ .. })
 
 makeMscratchCSRs :: Module [CSR]
 makeMscratchCSRs = do
   mscratch :: Reg (Bit 32) <- makeReg dontCare
 
   return [regToCSR 0x340 mscratch]
+
+makeSscratchCSRs :: Module [CSR]
+makeSscratchCSRs = do
+  sscratch :: Reg (Bit 32) <- makeReg dontCare
+
+  return [regToCSR 0x140 sscratch]

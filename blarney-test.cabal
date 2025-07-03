@@ -50,6 +50,7 @@ executable blarney-test
   default-language: GHC2021
   default-extensions:
     BlockArguments
+    RecordWildCards
     DatatypeContexts
     DataKinds
     DeriveAnyClass
