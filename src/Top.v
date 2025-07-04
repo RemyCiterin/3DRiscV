@@ -14,20 +14,20 @@ module mkTop (
 );
 
 
-  //TestCore inst (
-  //  .out(ftdi_rxd),
-  //  .in0(ftdi_txd),
-  //  .clock(CLK),
-  //  .reset(!RST_N)
-  //);
-
-  Uart inst (
-    .out_tx(ftdi_rxd),
-    .out_led(led),
+  TestCore inst (
+    .out(ftdi_rxd),
     .in0(ftdi_txd),
     .clock(CLK),
     .reset(!RST_N)
   );
+
+  //Uart inst (
+  //  .out_tx(ftdi_rxd),
+  //  .out_led(led),
+  //  .in0(ftdi_txd),
+  //  .clock(CLK),
+  //  .reset(!RST_N)
+  //);
 
   //TestSpi inst (
   //  .out_0(ftdi_rxd),

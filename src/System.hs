@@ -37,6 +37,7 @@ makeSystem ::
   -> SystemInputs
   -> Module SystemIfc
 makeSystem hartId inputs = do
+  let misaCSRs = [readOnlyCSR 0xf10 0b01000000000101000000000100000001]
   let mvendoridCSRs = [readOnlyCSR 0xf11 0]
   let marchidCSRs = [readOnlyCSR 0xf12 0]
   let mimpidCSRs = [readOnlyCSR 0xf13 0]
@@ -72,13 +73,14 @@ makeSystem hartId inputs = do
       ++ statusCSRs
       ++ mimpidCSRs
       ++ delegCSRs
+      ++ misaCSRs
       ++ satpCSRs
       ++ trapCSRs
       ++ mieCSRs
       ++ mipCSRs
 
   let canInterrupt :: Option CauseInterrupt = -- DONE
-        let ready :: Bit 16 = lower mip.all .&. lower mie.all in
+        let ready :: Bit 16 = lower (mip.all .&. mie.all) in
         -- Machine mode
         let machine_mask :: Bit 16 =
               ready .&. inv (lower deleg.mideleg.val) in
@@ -91,9 +93,8 @@ makeSystem hartId inputs = do
               (status.sie.val .&&. priv.val === supervisor_priv) .||. priv.val .<. supervisor_priv in
 
         let mask :: Bit 16 =
-              selectDefault 0
-                [ machine_enabled --> machine_mask
-                , supervisor_enabled --> supervisor_mask ]
+              (machine_enabled ? (machine_mask, 0))
+              .|. (supervisor_enabled ? (supervisor_mask, 0))
         in
 
         if mask =!= 0 then
@@ -102,20 +103,30 @@ makeSystem hartId inputs = do
           none
 
   let execException = \ epc interrupt cause tval -> do
-        -- TODO privilege gestion
-        trap.mepc <== epc
+        let toS :: Bit 1 =
+              priv.val .<=. supervisor_priv .&&.
+                lower ((interrupt ? (deleg.mideleg.val, deleg.medeleg.val)) .>>.cause)
+        let newPriv = toS ? (supervisor_priv, machine_priv)
         let cause_msb = interrupt ? (2^31, 0)
-        trap.mcause <== cause_msb .|. zeroExtend cause
-        trap.mtval <== tval
 
-        status.mpp <== pack priv.val
-        status.spp <== priv.val =!= user_priv
+        if toS then do
+          trap.scause <== cause_msb .|. zeroExtend cause
+          status.spp <== priv.val =!= user_priv
+          status.spie <== status.sie.val
+          status.sie <== false
+          trap.stval <== tval
+          trap.sepc <== epc
+        else do
+          trap.mcause <== cause_msb .|. zeroExtend cause
+          status.mpie <== status.mie.val
+          status.mpp <== pack priv.val
+          status.mie <== false
+          trap.mtval <== tval
+          trap.mepc <== epc
 
-        status.mpie <== status.mie.val
-        status.mie <== false
-
-        let base = trap.mtvec.val .&. inv 0b11
-        let vec = slice @1 @0 trap.mtvec.val === 0b01
+        let tvec = toS ? (trap.stvec.val, trap.mtvec.val)
+        let base = tvec .&. inv 0b11
+        let vec = slice @1 @0 tvec === 0b01
         return $ (vec .&&. interrupt) ? (base + zeroExtend cause * 4, base)
 
   return
@@ -131,12 +142,12 @@ makeSystem hartId inputs = do
                 , rd= dontCare }
           else if input.instr.opcode `is` [MRET] then do
             if priv.val === machine_priv then do
-              let next_priv = Priv status.mpp.val
+              let newPriv = Priv status.mpp.val
               status.mpie <== false
-              priv <== next_priv
+              priv <== newPriv
               status.mpp <== 0
 
-              if next_priv === machine_priv then do
+              if newPriv === machine_priv then do
                 status.mie <== status.mpie.val
               else do
                 status.sie <== status.mpie.val
@@ -158,12 +169,12 @@ makeSystem hartId inputs = do
                   , rd= dontCare }
           else if input.instr.opcode `is` [SRET] then do
             if priv.val === supervisor_priv then do
-              let next_priv =
+              let newPriv =
                     status.spp.val === 1 ?
                     (supervisor_priv, user_priv)
               status.sie <== status.spie.val
               status.spie <== false
-              priv <== next_priv
+              priv <== newPriv
               status.spp <== 0
 
               display "sret to 0x" (formatHex 0 trap.mepc.val)
