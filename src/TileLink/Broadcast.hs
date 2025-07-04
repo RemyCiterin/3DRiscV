@@ -104,13 +104,8 @@ makeBroadcast config
 
     else do
       -- wait for all the releases to finish before an acquire: ensure data is not corrupted
-      when (queueA.canDeq .&&. queueA.first.opcode `isTagged` #AcquireBlock .&&. inv acquire.active) do
-        dynamicAssert (queueA.first.size === logSize) "wrong size"
-        acquire.start
-
-      -- wait for all the releases to finish before an acquire: ensure data is not corrupted
-      when (queueA.canDeq .&&. queueA.first.opcode `isTagged` #AcquirePerms .&&. inv acquire.active) do
-        dynamicAssert (queueA.first.size === logSize) "wrong size"
+      when (queueA.canDeq .&&. inv acquire.active) do
+        dynamicAssert (queueA.first.size .<=. logSize) "wrong size"
         acquire.start
 
       -- write one value at a time (to optimize)
@@ -142,6 +137,7 @@ makeBroadcast config
         , channelC= nullSource
         , channelD= toSink slaveD
         , channelE= nullSource } )
+
 
 data GrantFSM (iw :: Nat) p =
   GrantFSM
@@ -217,6 +213,8 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
 
     size :: Reg TLSize <- makeReg 0
 
+    fill :: Reg (Bit 1) <- makeReg 0
+
     index1 :: Reg (Bit iw) <- makeReg dontCare
 
     waitAck :: Reg (Bit 1) <- makeReg false
@@ -224,7 +222,22 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
     grant :: Reg (Bit 1) <- makeReg false
 
     always do
-      -- write request
+      -- Request to Fill the buffer
+      when (slave.channelA.canPut .&&. probe.stop.canPeek) do
+        probe.stop.consume
+        grant <== true
+
+        when (inv fill.val) do
+          slave.channelA.put
+            ChannelA
+              { mask= ones
+              , address= msg.val.address
+              , opcode= item #Get
+              , lane= dontCare
+              , size= logSize'
+              , source= sink }
+
+      -- Fill the buffer using a Probe response
       when (probe.write.canPeek .&&. slave.channelA.canPut) do
         dynamicAssert (inv waitAck.val) "receive two ProbeAckData"
         let (index, lane, mask, last) = probe.write.peek
@@ -244,33 +257,24 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
 
         when last do
           waitAck <== true
+          fill <== true
 
-      -- Read response
+      -- Fill the buffer using a Get response
       let sresp = slave.channelD.peek
-      when (slave.channelD.canPeek .&&. sresp.source === sink .&&. sresp.opcode `isTagged` #AccessAckData) do
-        buffer.write index1.val sresp.lane
-        slave.channelD.consume
+      when (slave.channelD.canPeek .&&. sresp.source === sink) do
 
-        index1 <== index1.val + 1
+        when (sresp.opcode `isTagged` #AccessAckData) do
+          buffer.write index1.val sresp.lane
+          slave.channelD.consume
 
-      -- Write response corresponding to a probe
-      when (slave.channelD.canPeek .&&. sresp.source === sink .&&. sresp.opcode `isTagged` #AccessAck) do
-        slave.channelD.consume
-        waitAck <== false
+          index1 <== index1.val + 1
+          when (index1.val + 1 === 0) do
+            fill <== true
 
-      when (slave.channelA.canPut .&&. probe.stop.canPeek) do
-        probe.stop.consume
-        grant <== true
-
-        when (inv probe.hasData) do
-          slave.channelA.put
-            ChannelA
-              { mask= ones
-              , address= msg.val.address
-              , opcode= item #Get
-              , lane= dontCare
-              , size= logSize'
-              , source= sink }
+        -- Write response corresponding to a probe or a putdata
+        when (sresp.opcode `isTagged` #AccessAck) do
+          slave.channelD.consume
+          waitAck <== false
 
       if (msg.val.opcode `isTagged` #PutData) then do
         let trigger =
@@ -278,16 +282,9 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
               .&&. grant.val .&&. size.val =!= 0
               .&&. slave.channelA.canPut
               .&&. inv waitAck.val
+              .&&. fill.val
         when trigger do
           size <== size.val .>. laneSize ? (size.val - laneSize, 0)
-
-          channelD.put
-            ChannelD
-              { opcode= item #AccessAck
-              , source= msg.val.source
-              , size= msg.val.size
-              , lane= dontCare
-              , sink }
 
           slave.channelA.put
             ChannelA
@@ -297,9 +294,19 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
               , mask= channelA.peek.mask
               , size= msg.val.size
               , source= sink }
+          --logprint channelA.peek
           channelA.consume
 
           when (size.val .<=. laneSize) do
+            channelD.put
+              ChannelD
+                { opcode= item #AccessAck
+                , source= msg.val.source
+                , size= msg.val.size
+                , lane= dontCare
+                , sink }
+
+            waitAck <== true
             valid <== false
             grant <== false
       else do
@@ -337,7 +344,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
 
     return
       AcquireFSM
-        { active= valid.val .||. waitAck.val
+        { active= valid.val .||. waitAck.val .||. index1.val =!= 0
         , address= msg.val.address
         , start= do
             let acquire = channelA.peek
@@ -346,9 +353,11 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
             dynamicAssert (index1.val === 0) "invalid state"
 
             when (acquire.opcode `isTagged` #AcquireBlock) do
-              dynamicAssert (acquire.address .&. ((1 .<<. logSize') - 1) === 0) "unaligned access"
+              dynamicAssert
+                (acquire.address .&. ((1 .<<. logSize') - 1) === 0) "unaligned access"
             when (acquire.opcode `isTagged` #AcquirePerms) do
-              dynamicAssert (acquire.address .&. ((1 .<<. logSize') - 1) === 0) "unaligned access"
+              dynamicAssert
+                (acquire.address .&. ((1 .<<. logSize') - 1) === 0) "unaligned access"
 
             let owners = [src =!= acquire.source | src <- sources]
             let perm = (decodeGrow (untag #AcquireBlock acquire.opcode)).snd
@@ -365,6 +374,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
               channelA.consume
             msg <== acquire
             valid <== true
+            fill <== false
             logprint acquire }
 
 makeReleaseFSM :: forall p.
