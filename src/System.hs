@@ -139,6 +139,7 @@ makeSystem hartId inputs = do
                 , exception= true
                 , tval=input.pc
                 , pc= dontCare
+                , flush= false
                 , rd= dontCare }
           else if input.instr.opcode `is` [MRET] then do
             if priv.val === machine_priv then do
@@ -158,6 +159,7 @@ makeSystem hartId inputs = do
                   , exception= false
                   , pc= trap.mepc.val
                   , tval= dontCare
+                  , flush= false
                   , rd= dontCare }
             else do
               return
@@ -166,6 +168,7 @@ makeSystem hartId inputs = do
                   , tval= input.instr.raw
                   , exception= true
                   , pc= dontCare
+                  , flush= false
                   , rd= dontCare }
           else if input.instr.opcode `is` [SRET] then do
             if priv.val === supervisor_priv then do
@@ -184,6 +187,7 @@ makeSystem hartId inputs = do
                   , exception= false
                   , pc= trap.mepc.val
                   , tval= dontCare
+                  , flush= false
                   , rd= dontCare }
             else do
               return
@@ -191,6 +195,7 @@ makeSystem hartId inputs = do
                   { cause= illegal_instruction
                   , tval= input.instr.raw
                   , exception= true
+                  , flush= false
                   , pc= dontCare
                   , rd= dontCare }
           else if input.instr.opcode `is` [WFI] then do
@@ -198,6 +203,7 @@ makeSystem hartId inputs = do
               ExecOutput
                 { cause= dontCare
                 , exception= false
+                , flush= false
                 , pc=
                     (status.mie.val .&&. (mip.all .&. mie.all =!= 0)) ?
                       (input.pc + 4, input.pc)
@@ -209,6 +215,16 @@ makeSystem hartId inputs = do
                 { cause= ecall_from_m
                 , exception= true
                 , tval= input.pc
+                , flush= false
+                , pc= dontCare
+                , rd= dontCare }
+          else if input.instr.opcode `is` [FENCE_I] then do
+            return
+              ExecOutput
+                { cause= dontCare
+                , exception= false
+                , tval= dontCare
+                , flush= true
                 , pc= dontCare
                 , rd= dontCare }
           else do

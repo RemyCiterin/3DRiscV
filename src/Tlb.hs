@@ -57,7 +57,8 @@ data PtwRequest =
     , store :: Bit 1 -- is the access a store
     , instr :: Bit 1 -- is the access an ifetch
     , mxr :: Bit 1
-    , sum :: Bit 1 }
+    , sum :: Bit 1
+    , width :: Bit 2 }
   deriving(Generic, Bits)
 
 isLegalAccess :: PtwRequest -> PTE -> Bit 1
@@ -118,9 +119,10 @@ makePtwFSM :: forall p.
     -> Source PtwRequest
     -> Source ()
     -> TLSlave p
-    -> Module (Server PtwRequest PtwResponse)
+    -> Module (Server PtwRequest PtwResponse, Source ())
 makePtwFSM source flush inputs  slave = do
   outputs :: Queue PtwResponse <- makeBypassQueue
+  flushAck :: Queue () <- makeQueue
 
   input :: Reg PtwRequest <- makeReg dontCare
   let virt = input.val.virtual
@@ -134,6 +136,12 @@ makePtwFSM source flush inputs  slave = do
   way :: Reg (Bit 3) <- makeReg dontCare
   hit :: Reg (Bit 1) <- makeReg dontCare
 
+  let aligned =
+        select
+          [ input.val.width === 0b00 --> true
+          , input.val.width === 0b01 --> slice @0 @0 virt.offset === 0
+          , input.val.width === 0b10 --> slice @1 @0 virt.offset === 0 ]
+
   let pf_cause =
         selectDefault load_page_fault
           [ input.val.store --> store_amo_page_fault
@@ -143,6 +151,11 @@ makePtwFSM source flush inputs  slave = do
         selectDefault load_access_fault
           [ input.val.store --> store_amo_access_fault
           , input.val.instr --> instruction_access_fault ]
+
+  let align_cause =
+        selectDefault load_address_misaligned
+          [ input.val.store --> store_amo_address_misaligned
+          , input.val.instr --> instruction_address_misaligned ]
 
   let tval = pack virt
 
@@ -160,6 +173,13 @@ makePtwFSM source flush inputs  slave = do
           , rd= pack virt
           , tval }
 
+  let align_output =
+        PtwResponse
+          { cause= align_cause
+          , success= true
+          , rd= pack virt
+          , tval }
+
   let tlbSearch :: VirtAddr -> (Bit 3, Bit 1) = \ x ->
         selectDefault (counter.val, false)
           [ r.val.valid .&&. tlbMatch x r.val.val --> (lit i, true)
@@ -171,6 +191,9 @@ makePtwFSM source flush inputs  slave = do
   abort :: Reg (Bit 1) <- makeReg false
   stop :: Reg (Bit 1) <- makeReg false
 
+  let align_fail :: Action () = do
+        outputs.enq align_output{success=false}
+        idle.write 1 true
   let af_fail :: Action () = do
         outputs.enq af_output{success=false}
         idle.write 1 true
@@ -209,7 +232,10 @@ makePtwFSM source flush inputs  slave = do
     while true do
       wait (inv (idle.read 0) .&&. outputs.notFull)
 
-      if priv === machine_priv .||. inv satp.useSv32 then do
+      if inv aligned then do
+        action align_fail
+
+      else if priv === machine_priv .||. inv satp.useSv32 then do
         action pf_fail
 
       else do
@@ -272,24 +298,28 @@ makePtwFSM source flush inputs  slave = do
             action pf_fail
 
   always do
-    when (flush.canPeek .&&. idle.read 0 .&&. idle.read 1) do
+    when (flush.canPeek .&&. idle.read 0 .&&. idle.read 1 .&&. flushAck.notFull) do
       forM_ tlb \ r -> do
-        r <== none
+        let pte = r.val.val.pte
+        when (pte.globalPTE) do
+          r <== none
+      flushAck.enq ()
       flush.consume
 
   return
-    Server
-      { reqs=
-          Sink
-            { canPut= idle.read 1 .&&. inv flush.canPeek
-            , put= \ x -> do
-                let (w,h) = tlbSearch x.virtual
-                addr <== satp.ppn # x.virtual.vpn1 # (0b00 :: Bit 2)
-                idle.write 1 false
-                abort <== false
-                stop <== false
-                input <== x
-                index <== 1
-                way <== w
-                hit <== h }
-      , resps= toSource outputs}
+    ( Server
+        { reqs=
+            Sink
+              { canPut= idle.read 1 .&&. inv flush.canPeek
+              , put= \ x -> do
+                  let (w,h) = tlbSearch x.virtual
+                  addr <== satp.ppn # x.virtual.vpn1 # (0b00 :: Bit 2)
+                  idle.write 1 false
+                  abort <== false
+                  stop <== false
+                  input <== x
+                  index <== 1
+                  way <== w
+                  hit <== h }
+        , resps= toSource outputs}
+    , toSource flushAck)

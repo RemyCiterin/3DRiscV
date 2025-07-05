@@ -11,7 +11,7 @@ import CSR
 
 alu :: ExecInput -> ExecOutput
 alu query =
-  ExecOutput {rd, exception, cause, pc= newPc, tval= newPc}
+  ExecOutput {rd, exception, cause, pc= newPc, tval= newPc, flush= false}
   where
     rs1 = query.rs1
     rs2 = query.rs2
@@ -85,6 +85,7 @@ execCSR currentPriv unit ExecInput{instr, pc, rs1} = do
       , exception= inv legal
       , cause= illegal_instruction
       , tval= instr.raw
+      , flush= unit.csrUnitFlush
       , pc= pc + 4 }
 
 execAMO :: (MnemonicVec, Bit 32) -> Bit 32 -> Bit 32

@@ -71,6 +71,8 @@ data Mnemonic =
   | LOAD
   | STORE
   | FENCE
+  | FENCE_I
+  | SFENCE_VMA
   | ECALL
   | MRET
   | SRET
@@ -145,6 +147,8 @@ decodeTable =
   , "000100000010 <5> 000 <5> 1110011" --> SRET
   , "000100000101 <5> 000 <5> 1110011" --> WFI
   , "fence<4> pred<4> succ<4> rs1<5> 000 00000 0001111" --> FENCE
+  , "000000000000 <5> 001 <5> 0001111" --> FENCE_I
+  , "0001001 rs2<5> rs1<5> 000 00000 1110011" --> SFENCE_VMA
   , "csr[11:0] rs1<5> csrI<1> 01 rd<5> 1110011" --> CSRRW
   , "csr[11:0] rs1<5> csrI<1> 10 rd<5> 1110011" --> CSRRS
   , "csr[11:0] rs1<5> csrI<1> 11 rd<5> 1110011" --> CSRRC
@@ -199,7 +203,7 @@ decodeInstr instr =
   , csr = getBitFieldSel selMap "csr" instr
   , csrI = getBitFieldSel selMap "csrI" instr
   , accessWidth = getBitFieldSel selMap "aw" instr
-  , isSystem = opcode `is` [CSRRW,CSRRC,CSRRS,MRET,SRET,WFI,ECALL] .||. opcode === 0
+  , isSystem = opcode `is` [CSRRW,CSRRC,CSRRS,MRET,SRET,WFI,ECALL,FENCE_I] .||. opcode === 0
   , isUnsigned = getBitFieldSel selMap "ul" instr
   , isMemAccess = opcode `is` [LOAD,STORE,FENCE,STOREC,LOADR] .||. isAMO
   , canBranch = opcode `is` [JAL,JALR,BEQ,BNE,BLT,BLTU,BGE,BGEU]
@@ -318,7 +322,7 @@ instruction_address_misaligned = CauseException 0
 instruction_access_fault = CauseException 1
 illegal_instruction = CauseException 2
 breakpoint = CauseException 3
-load_address_misalilgned = CauseException 4
+load_address_misaligned = CauseException 4
 load_access_fault = CauseException 5
 store_amo_address_misaligned = CauseException 6
 store_amo_access_fault = CauseException 7
@@ -350,6 +354,7 @@ data ExecInput = ExecInput
 data ExecOutput = ExecOutput
   { exception :: Bit 1
   , cause :: CauseException
+  , flush :: Bit 1
   , tval :: Bit 32
   , rd :: Bit 32
   , pc :: Bit 32}

@@ -119,13 +119,15 @@ isReadOnlyCSR id = slice @11 @10 id === 0b11
 
 data CSR =
   CSR
-    { csrId :: Bit 12
+    { csrFlush :: Bit 1
+    , csrId :: Bit 12
     , csrRead :: Maybe (Action (Bit 32))
     , csrWrite :: Maybe (Bit 32 -> Action ()) }
 
 data CSRUnit =
   CSRUnit
-    { csrUnitRead :: Bit 12 -> Action (Bit 32)
+    { csrUnitFlush :: Bit 1
+    , csrUnitRead :: Bit 12 -> Action (Bit 32)
     , csrUnitWrite :: Bit 12 -> Bit 32 -> Action () }
 
 makeCSRUnit :: [CSR] -> Module CSRUnit
@@ -135,6 +137,7 @@ makeCSRUnit csrs = do
 
   rdVal :: Wire (Bit 32) <- makeWire dontCare
   wrVal :: Wire (Bit 32) <- makeWire dontCare
+  flush :: Wire (Bit 1) <- makeWire false
 
   always do
     forM_ csrs \ csr -> do
@@ -142,6 +145,7 @@ makeCSRUnit csrs = do
         Nothing -> return ()
         Just write -> do
           when (wrId.active .&&. wrId.val === csr.csrId) do
+            flush <== csr.csrFlush
             write wrVal.val
 
       case csr.csrRead of
@@ -153,11 +157,11 @@ makeCSRUnit csrs = do
 
   return
     CSRUnit
-      { csrUnitRead= \ id -> do
+      { csrUnitFlush= flush.val
+      , csrUnitRead= \ id -> do
           rdId <== id
           return rdVal.val
       , csrUnitWrite= \ id value -> do
-          --display "write csr " (formatHex 0 id) " := " (formatHex 0 value)
           wrVal <== value
           wrId <== id }
 
@@ -165,19 +169,22 @@ nullCSRUnit :: CSRUnit
 nullCSRUnit =
   CSRUnit
     { csrUnitRead= \ _ -> return 0
-    , csrUnitWrite= \ _ _ -> return () }
+    , csrUnitWrite= \ _ _ -> return ()
+    , csrUnitFlush= false }
 
 readOnlyCSR :: Bit 12 -> Bit 32 -> CSR
 readOnlyCSR id value =
   CSR
-    { csrId= id
+    { csrFlush= false
+    , csrId= id
     , csrRead= Just (return value)
     , csrWrite= Nothing }
 
 writeOnlyCSR :: Bit 12 -> (Bit 32 -> Action ()) -> CSR
 writeOnlyCSR id upd =
   CSR
-    { csrId= id
+    { csrFlush= false
+    , csrId= id
     , csrRead= Nothing
     , csrWrite= Just upd }
 
@@ -185,6 +192,7 @@ readWriteCSR :: Bit 12 -> Bit 32 -> (Bit 32 -> Action ()) -> CSR
 readWriteCSR id value upd =
   CSR
     { csrId= id
+    , csrFlush= false
     , csrRead= Just (return value)
     , csrWrite= Just upd }
 
@@ -440,7 +448,9 @@ makeStatusCSRs = do
         `concatReg` sie
         `concatReg` readOnlyReg @1 0
 
-  return ([regToCSR 0x300 mstatus, regToCSR 0x100 sstatus], StatusCSRs{ .. })
+  let mstatusCSRs = (regToCSR 0x300 mstatus){csrFlush= true}
+  let sstatusCSRs = (regToCSR 0x100 sstatus){csrFlush= true}
+  return ([mstatusCSRs, sstatusCSRs], StatusCSRs{ .. })
 
 makeMscratchCSRs :: Module [CSR]
 makeMscratchCSRs = do
