@@ -20,18 +20,18 @@ instance Connectable (TLMaster p) (TLSlave p) where
 
 hasDataA :: OpcodeA -> Bit 1
 hasDataA opcode =
-  opcode `isTagged` #PutData
+  opcode.isPutData
 
 hasDataB :: OpcodeB -> Bit 1
 hasDataB opcode = false
 
 hasDataC :: OpcodeC -> Bit 1
 hasDataC opcode =
-  opcode `isTagged` #ProbeAckData .||. opcode `isTagged` #ReleaseData
+  opcode.isProbeAckData .||. opcode.isReleaseData
 
 hasDataD :: OpcodeD -> Bit 1
 hasDataD opcode =
-  opcode `isTagged` #GrantData .||. opcode `isTagged` #AccessAckData
+  opcode.isGrantData .||. opcode.isAccessAckData
 
 instance KnownNat_ChannelA aw dw sw ow => FShow (ChannelA_Flit aw dw sw ow) where
   fshow msg =

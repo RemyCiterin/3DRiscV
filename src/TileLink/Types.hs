@@ -152,16 +152,37 @@ type OpcodeA =
     "Get" ::: ()
   ]
 
+instance HasField "grow" OpcodeA Grow where
+  getField opcode =
+    select
+      [ opcode `isTagged` #AcquirePerms --> untag #AcquirePerms opcode
+      , opcode `isTagged` #AcquireBlock --> untag #AcquireBlock opcode ]
+
+instance HasField "isAcquire" OpcodeA (Bit 1) where
+  getField opcode = opcode `isTagged` #AcquirePerms .||. opcode `isTagged` #AcquireBlock
+
+instance HasField "isAcquirePerms" OpcodeA (Bit 1) where
+  getField opcode = opcode `isTagged` #AcquirePerms
+
+instance HasField "isAcquireBlock" OpcodeA (Bit 1) where
+  getField opcode = opcode `isTagged` #AcquireBlock
+
+instance HasField "isPutData" OpcodeA (Bit 1) where
+  getField opcode = opcode `isTagged` #PutData
+
+instance HasField "isGet" OpcodeA (Bit 1) where
+  getField opcode = opcode `isTagged` #Get
+
 formatOpcodeA :: OpcodeA -> Format
 formatOpcodeA opcode =
   formatCond (opcode `isTagged` #Get) (fshow "Get") <>
   formatCond (opcode `isTagged` #PutData) (fshow "PutData") <>
   formatCond
     (opcode `isTagged` #AcquireBlock)
-    (fshow "AcquireBlock<" <> formatGrow (untag #AcquireBlock opcode) <> fshow ">") <>
+    (fshow "AcquireBlock<" <> formatGrow opcode.grow <> fshow ">") <>
   formatCond
     (opcode `isTagged` #AcquirePerms)
-    (fshow "AcquirePerms<" <> formatGrow (untag #AcquirePerms opcode) <> fshow ">")
+    (fshow "AcquirePerms<" <> formatGrow opcode.grow <> fshow ">")
 
 type OpcodeB =
   TaggedUnion [
@@ -169,15 +190,26 @@ type OpcodeB =
     "ProbeBlock" ::: Cap
   ]
 
+instance HasField "cap" OpcodeB Cap where
+  getField opcode =
+    select
+      [ opcode `isTagged` #ProbePerms --> untag #ProbePerms opcode
+      , opcode `isTagged` #ProbeBlock --> untag #ProbeBlock opcode ]
+
+instance HasField "isProbeBlock" OpcodeB (Bit 1) where
+  getField opcode = opcode `isTagged` #ProbeBlock
+
+instance HasField "isProbePerms" OpcodeB (Bit 1) where
+  getField opcode = opcode `isTagged` #ProbePerms
 
 formatOpcodeB :: OpcodeB -> Format
 formatOpcodeB opcode =
   formatCond
     (opcode `isTagged` #ProbePerms)
-    (fshow "ProbePerms<" <> formatCap (untag #ProbePerms opcode) <> fshow ">") <>
+    (fshow "ProbePerms<" <> formatCap opcode.cap <> fshow ">") <>
   formatCond
     (opcode `isTagged` #ProbeBlock)
-    (fshow "ProbeBlock<" <> formatCap (untag #ProbeBlock opcode) <> fshow ">")
+    (fshow "ProbeBlock<" <> formatCap opcode.cap <> fshow ">")
 
 type OpcodeC =
   TaggedUnion [
@@ -186,6 +218,26 @@ type OpcodeC =
     "Release" ::: Reduce,
     "ReleaseData" ::: Reduce
   ]
+
+instance HasField "reduce" OpcodeC Reduce where
+  getField opcode =
+    select
+      [ opcode `isTagged` #ProbeAck --> untag #ProbeAck opcode
+      , opcode `isTagged` #ProbeAckData --> untag #ProbeAckData opcode
+      , opcode `isTagged` #Release --> untag #Release opcode
+      , opcode `isTagged` #ReleaseData --> untag #ReleaseData opcode ]
+
+instance HasField "isRelease" OpcodeC (Bit 1) where
+  getField opcode = opcode `isTagged` #Release
+
+instance HasField "isReleaseData" OpcodeC (Bit 1) where
+  getField opcode = opcode `isTagged` #ReleaseData
+
+instance HasField "isProbeAck" OpcodeC (Bit 1) where
+  getField opcode = opcode `isTagged` #ProbeAck
+
+instance HasField "isProbeAckData" OpcodeC (Bit 1) where
+  getField opcode = opcode `isTagged` #ProbeAckData
 
 formatOpcodeC :: OpcodeC -> Format
 formatOpcodeC opcode =
@@ -210,6 +262,27 @@ type OpcodeD =
     "AccessAckData" ::: (),
     "AccessAck" ::: ()
   ]
+
+instance HasField "cap" OpcodeD Cap where
+  getField opcode =
+    select
+      [ opcode `isTagged` #Grant --> untag #Grant opcode
+      , opcode `isTagged` #GrantData --> untag #GrantData opcode ]
+
+instance HasField "isGrant" OpcodeD (Bit 1) where
+  getField opcode = opcode `isTagged` #Grant
+
+instance HasField "isGrantData" OpcodeD (Bit 1) where
+  getField opcode = opcode `isTagged` #GrantData
+
+instance HasField "isReleaseAck" OpcodeD (Bit 1) where
+  getField opcode = opcode `isTagged` #ReleaseAck
+
+instance HasField "isAccessAckData" OpcodeD (Bit 1) where
+  getField opcode = opcode `isTagged` #AccessAckData
+
+instance HasField "isAccessAck" OpcodeD (Bit 1) where
+  getField opcode = opcode `isTagged` #AccessAck
 
 formatOpcodeD :: OpcodeD -> Format
 formatOpcodeD opcode =

@@ -45,7 +45,7 @@ makeGetMaster source arbiter ram slave = do
   always do
     when (channelD.canPeek) do
       let msg = channelD.peek
-      when (msg.opcode `isTagged` #AccessAckData .&&. msg.source === source) do
+      when (msg.opcode.isAccessAck .&&. msg.source === source) do
         arbiter.request
 
       when (arbiter.grant) do
@@ -146,7 +146,7 @@ makePutMaster source arbiter ram slave = do
         valid <== false
     , canPut= inv valid.val .&&. inv queue.canDeq
     , canPutAck=
-        channelD.canPeek .&&. channelD.peek.opcode `isTagged` #AccessAck .&&.
+        channelD.canPeek .&&. channelD.peek.opcode.isAccessAck .&&.
         channelD.peek.source === source .&&. size.val === 0
     , active= valid.val
     , address= let (_,b,_) = request.val in b

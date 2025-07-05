@@ -98,7 +98,7 @@ makeBroadcast config
     if waitAck.val then do
 
       let sresp = slaveD.first
-      when (slaveD.canDeq .&&. sresp.opcode `isTagged` #AccessAck .&&. sresp.source === config.baseSink) do
+      when (slaveD.canDeq .&&. sresp.opcode.isAccessAck .&&. sresp.source === config.baseSink) do
         waitAck <== false
         slaveD.deq
 
@@ -243,7 +243,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
         let (index, lane, mask, last) = probe.write.peek
         probe.write.consume
 
-        when (inv (msg.val.opcode `isTagged` #AcquirePerms)) do
+        when (inv msg.val.opcode.isAcquirePerms) do
           buffer.write index lane
 
         slave.channelA.put
@@ -263,7 +263,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
       let sresp = slave.channelD.peek
       when (slave.channelD.canPeek .&&. sresp.source === sink) do
 
-        when (sresp.opcode `isTagged` #AccessAckData) do
+        when sresp.opcode.isAccessAckData do
           buffer.write index1.val sresp.lane
           slave.channelD.consume
 
@@ -272,11 +272,11 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
             fill <== true
 
         -- Write response corresponding to a probe or a putdata
-        when (sresp.opcode `isTagged` #AccessAck) do
+        when sresp.opcode.isAccessAck do
           slave.channelD.consume
           waitAck <== false
 
-      if (msg.val.opcode `isTagged` #PutData) then do
+      if msg.val.opcode.isPutData then do
         let trigger =
               channelA.canPeek .&&. channelD.canPut
               .&&. grant.val .&&. size.val =!= 0
@@ -311,15 +311,15 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
             grant <== false
       else do
         when (channelD.canPut .&&. grant.val .&&. buffer.read.canPeek .&&. size.val =!= 0) do
-          when (inv (msg.val.opcode `isTagged` #AcquirePerms)) do
+          when (inv msg.val.opcode.isAcquirePerms) do
             buffer.read.consume
 
           let cap = probe.exclusive ? (item #T, item #B)
           let opcode =
                 select
-                  [ msg.val.opcode `isTagged` #AcquirePerms --> tag #Grant cap
-                  , msg.val.opcode `isTagged` #AcquireBlock --> tag #GrantData cap
-                  , msg.val.opcode `isTagged` #Get --> item #AccessAckData ]
+                  [ msg.val.opcode.isAcquirePerms --> tag #Grant cap
+                  , msg.val.opcode.isAcquireBlock --> tag #GrantData cap
+                  , msg.val.opcode.isGet --> item #AccessAckData ]
 
           size <== (size.val .>. laneSize .&&. hasDataD opcode) ? (size.val - laneSize, 0)
 
@@ -331,7 +331,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
               , size= msg.val.size
               , sink }
 
-          when (msg.val.opcode `isTagged` #Get .&&. size.val .<=. laneSize) do
+          when (msg.val.opcode.isGet .&&. size.val .<=. laneSize) do
             valid <== false
             grant <== false
 
@@ -352,25 +352,25 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
             dynamicAssert (inv waitAck.val) "invalid state"
             dynamicAssert (index1.val === 0) "invalid state"
 
-            when (acquire.opcode `isTagged` #AcquireBlock) do
+            when acquire.opcode.isAcquireBlock do
               dynamicAssert
                 (acquire.address .&. ((1 .<<. logSize') - 1) === 0) "unaligned access"
-            when (acquire.opcode `isTagged` #AcquirePerms) do
+            when acquire.opcode.isAcquirePerms do
               dynamicAssert
                 (acquire.address .&. ((1 .<<. logSize') - 1) === 0) "unaligned access"
 
             let owners = [src =!= acquire.source | src <- sources]
-            let perm = (decodeGrow (untag #AcquireBlock acquire.opcode)).snd
+            let perm = (decodeGrow acquire.opcode.grow).snd
             let opcode =
-                  channelA.peek.opcode `isTagged` #AcquirePerms ?
+                  channelA.peek.opcode.isAcquirePerms ?
                   ( perm === trunk ? (tag #ProbePerms (item #N), tag #ProbePerms (item #B))
                   , perm === trunk ? (tag #ProbeBlock (item #N), tag #ProbeBlock (item #B)))
             probe.start.put (opcode, 0, acquire.address, owners)
             size <== 1 .<<. acquire.size
 
-            when (inv (acquire.opcode `isTagged` #AcquirePerms)) do
+            when (inv acquire.opcode.isAcquirePerms) do
               buffer.start (getIndex acquire.address)
-            when (inv (acquire.opcode `isTagged` #PutData)) do
+            when (inv acquire.opcode.isPutData) do
               channelA.consume
             msg <== acquire
             valid <== true
@@ -393,7 +393,7 @@ makeReleaseFSM sink logSize metaC channelD = do
   let canPeek =
         channelC.canPeek
         .&&. channelD.canPut
-        .&&. msgC.opcode `isTagged` #Release
+        .&&. msgC.opcode.isRelease
 
   always do
     when canPeek do
@@ -411,7 +411,7 @@ makeReleaseFSM sink logSize metaC channelD = do
 
   let canPeekData =
         channelC.canPeek
-        .&&. msgC.opcode `isTagged` #ReleaseData
+        .&&. msgC.opcode.isReleaseData
         .&&. (channelD.canPut .||. inv metaC.last)
 
   return
@@ -486,7 +486,7 @@ makeProbeFSM sink logSize channelB metaC sources = do
           valid.val
           .&&. channelC.canPeek
           .&&. msgC.address === address.val
-          .&&. msgC.opcode `isTagged` #ProbeAck
+          .&&. msgC.opcode.isProbeAck
 
     when (trigger) do
       let reduce = untag #ProbeAck msgC.opcode
@@ -518,8 +518,8 @@ makeProbeFSM sink logSize channelB metaC sources = do
             { canPeek=
                 valid.val
                 .&&. channelC.canPeek
+                .&&. msgC.opcode.isProbeAckData
                 .&&. msgC.address === address.val
-                .&&. msgC.opcode `isTagged` #ProbeAckData
             , peek= (index.val, msgC.lane, ones, metaC.last)
             , consume= do
                 dynamicAssert (inv hasData.val) "receive two ProbeAckData"

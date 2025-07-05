@@ -54,7 +54,7 @@ makeAcquireMaster source logSize arbiter ram slave = do
   always do
     when (channelD.canPeek) do
       let msg = channelD.peek
-      when (msg.opcode `isTagged` #GrantData .&&. msg.source === source) do
+      when (msg.opcode.isGrantData .&&. msg.source === source) do
         arbiter.request
 
       when (arbiter.grant) do
@@ -74,16 +74,15 @@ makeAcquireMaster source logSize arbiter ram slave = do
         last <== metaD.last
         sink <== msg.sink
 
-      when (msg.opcode `isTagged` #Grant .&&. msg.source === source) do
-        let p = untag #Grant msg.opcode
+      when (msg.opcode.isGrant .&&. msg.source === source) do
         logprint msg
         channelD.consume
 
         perm <==
           select [
-            p `isTagged` #N --> nothing,
-            p `isTagged` #B --> branch,
-            p `isTagged` #T --> trunk
+            msg.opcode.cap `isTagged` #N --> nothing,
+            msg.opcode.cap `isTagged` #B --> branch,
+            msg.opcode.cap `isTagged` #T --> trunk
           ]
 
         last <== metaD.last
@@ -226,11 +225,11 @@ makeBurstFSM source slave arbiter ram = do
   valid :: Reg (Bit 1) <- makeReg false
 
   let isRelease =
-        opcode `isTagged` #ReleaseData .||. opcode `isTagged` #Release
+        opcode.isReleaseData .||. opcode.isRelease
 
   let releaseAck =
         slave.channelD.canPeek
-        .&&. slave.channelD.peek.opcode `isTagged` #ReleaseAck
+        .&&. slave.channelD.peek.opcode.isReleaseAck
         .&&. slave.channelD.peek.source === source
 
   -- queue between stage 1 and 2
@@ -306,10 +305,6 @@ makeReleaseMaster source logSize arbiter ram slave = do
         slave.channelB.canPeek .&&. message.source === source .&&. state.val === 0
 
   let opcode :: OpcodeB = message.opcode
-  let cap :: Cap =
-        select
-          [ opcode `isTagged` #ProbePerms --> untag #ProbePerms opcode
-          , opcode `isTagged` #ProbeBlock --> untag #ProbeBlock opcode ]
 
   let releaseM =
         ReleaseMaster
@@ -334,7 +329,7 @@ makeReleaseMaster source logSize arbiter ram slave = do
           { start=
               Source
                 { canPeek= canProbe
-                , peek= (message.address, capTo cap)
+                , peek= (message.address, capTo opcode.cap)
                 , consume= do
                     logprint message
                     state <== 1 }
@@ -343,7 +338,7 @@ makeReleaseMaster source logSize arbiter ram slave = do
                 { canPut= state.val === 1 .&&. burstM.canStart
                 , put= \ (reduce, index) -> do
                     let op =
-                          (index.valid .&&. opcode `isTagged` #ProbeBlock) ?
+                          (index.valid .&&. opcode.isProbeBlock) ?
                             (tag #ProbeAckData reduce, tag #ProbeAck reduce)
                     burstM.start op index.val message.address logSize
                     state <== 2 }

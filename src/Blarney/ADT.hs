@@ -21,5 +21,10 @@ infix 8 `is`
 class HasIs a b where
   is :: a -> b -> Bit 1
 
+-- Sadly none of those tentatives works
+
 instance (IsTaggedUnion u, KnownSymbol name) => HasIs u (TagName name) where
   is = isTagged
+
+--instance (IsTaggedUnion u, KnownSymbol name) => HasField "is" u (TagName name) where
+--  getField = isTagged

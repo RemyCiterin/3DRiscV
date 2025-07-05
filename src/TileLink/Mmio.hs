@@ -68,10 +68,10 @@ makeTLMmio sink confs = do
   always do
     when (channelA.canPeek .&&. channelD.canPut) do
       dynamicAssert
-        (channelA.peek.opcode `isTagged` #PutData .||. channelA.peek.opcode `isTagged` #Get)
+        (inv channelA.peek.opcode.isAcquire)
         "makeTLMmio only allow PutData and Get requests"
 
-      let isPut = channelA.peek.opcode `isTagged` #PutData
+      let isPut = channelA.peek.opcode.isPutData
       let sz = size.val === 0 ? (1 .<<. channelA.peek.size, size.val)
       let addr = size.val === 0 ? (channelA.peek.address, address.val)
 
