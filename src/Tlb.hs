@@ -22,13 +22,6 @@ data VirtAddr =
     , vpn1 :: Bit 10 }
   deriving(Generic, Bits)
 
-data Satp =
-  Satp
-    { useSv32 :: Bit 1
-    , asid :: Bit 9
-    , ppn :: Bit 22 }
-  deriving(Bits, Generic, Interface, FShow)
-
 -- Nodes:
 --    - A supervisor software can access to a user PTE if SUM is set
 data PTE =

@@ -18,6 +18,14 @@ data SystemInputs =
     , externalInterrupt :: Bit 1 }
   deriving(Generic, Bits, Interface)
 
+data VMInfo =
+  VMInfo
+    { satp :: Satp
+    , priv :: Priv
+    , mxr :: Bit 1
+    , sum :: Bit 1 }
+  deriving(Bits, Generic)
+
 -- only one procedure in `exec,exception,interrupt` can be used per cycle
 -- except if `exec` fail (in this case you must call exception)
 data SystemIfc =
@@ -27,10 +35,7 @@ data SystemIfc =
     , exception :: Bit 32 -> CauseException -> Bit 32 -> Action (Bit 32)
     , interrupt :: Bit 32 -> CauseInterrupt -> Bit 32 -> Action (Bit 32)
     , canInterrupt :: Option CauseInterrupt
-    , satp :: Bit 32
-    , mxr :: Bit 1
-    , sum :: Bit 1
-    , priv :: Priv }
+    , vmInfo :: VMInfo }
 
 makeSystem ::
   Integer
@@ -231,9 +236,11 @@ makeSystem hartId inputs = do
             execCSR priv.val csrUnit input
       , exception= \ epc cause tval -> execException epc false (pack cause) tval
       , interrupt= \ epc cause tval -> execException epc true (pack cause) tval
-      , mxr= status.mxr.val
-      , sum= status.sum.val
-      , satp= satp.val
-      , priv= priv.val
+      , vmInfo=
+          VMInfo
+            { mxr= status.mxr.val
+            , sum= status.sum.val
+            , satp= satp.val
+            , priv= priv.val }
       , canInterrupt
       , instret }

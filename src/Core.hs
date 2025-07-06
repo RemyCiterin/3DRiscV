@@ -2,6 +2,7 @@ module Core where
 
 import Blarney
 import Blarney.Ehr
+import Blarney.Stmt
 import Blarney.Queue
 import Blarney.Option
 import Blarney.Stream
@@ -83,12 +84,13 @@ type TLConfig = TLParams 32 4 4 8 8
 type TLConfig' = TLParams 32 4 4 8 0
 
 makeICache ::
-  TLSlave TLConfig -- cache slave
+  VMInfo
+  -> TLSlave TLConfig -- cache slave
   -> TLSlave TLConfig -- ptw slave
   -> Bit (SourceWidth TLConfig) -- cache source
   -> Bit (SourceWidth TLConfig) -- ptw source
-  -> Module (Server (Bit 32) PtwResponse)
-makeICache cacheSlave ptwSlave cacheSource ptwSource = do
+  -> Module (Server (Bit 32) PtwResponse, Action ())
+makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
   cache <-
     withName "icache" $
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
@@ -116,10 +118,10 @@ makeICache cacheSlave ptwSlave cacheSource ptwSource = do
               ptwIn.put
                 PtwRequest
                   { virtual= unpack x
-                  , satp= unpack 0
-                  , priv= machine_priv
-                  , sum= dontCare
-                  , mxr= dontCare
+                  , satp= vminfo.satp
+                  , priv= vminfo.priv
+                  , sum= vminfo.sum
+                  , mxr= vminfo.mxr
                   , atomic= false
                   , store= false
                   , instr= true
@@ -134,14 +136,15 @@ makeICache cacheSlave ptwSlave cacheSource ptwSource = do
                 cache.loadResponse.consume
               tagQ.deq }
 
-  return Server{reqs, resps}
+  return (Server{reqs, resps}, tlbFlush)
 
 makeFetch ::
+  VMInfo ->
   Bit (SourceWidth TLConfig) ->
   Bit (SourceWidth TLConfig) ->
   Stream Redirection ->
-  Module (TLMaster TLConfig, Stream FetchOutput, Training, Training)
-makeFetch fetchSource ptwSource redirection = do
+  Module (TLMaster TLConfig, Stream FetchOutput, Training, Training, Action ())
+makeFetch vminfo fetchSource ptwSource redirection = do
   bpred :: BranchPredictor HistSize RasSize EpochWidth <-
     withName "bpred" $ makeBranchPredictor 10
 
@@ -162,7 +165,7 @@ makeFetch fetchSource ptwSource redirection = do
 
   ([master], [cacheSlave,ptwSlave]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
 
-  cache <- makeICache cacheSlave ptwSlave fetchSource ptwSource
+  (cache, flush) <- makeICache vminfo cacheSlave ptwSlave fetchSource ptwSource
 
   pc :: Ehr (Bit 32) <- makeEhr 2 0x80000000
   epoch :: Ehr Epoch <- makeEhr 2 0
@@ -220,7 +223,7 @@ makeFetch fetchSource ptwSource redirection = do
       epoch.write 0 redirection.peek.epoch
       redirection.consume
 
-  return (master, toStream outputQ, bpred.trainHit, bpred.trainMis)
+  return (master, toStream outputQ, bpred.trainHit, bpred.trainMis, flush)
 
 makeDecode :: Stream FetchOutput -> Module (Stream DecodeOutput)
 makeDecode stream = do
@@ -242,13 +245,14 @@ makeDecode stream = do
   return (toStream outputQ)
 
 makeLoadStoreUnit ::
+  VMInfo ->
   Bit (SourceWidth TLConfig) ->
   Bit (SourceWidth TLConfig) ->
   Bit (SourceWidth TLConfig) ->
   Stream ExecInput ->
   Stream (Bit 1) ->
-  Module (TLMaster TLConfig, Stream ExecOutput)
-makeLoadStoreUnit cacheSource mmioSource ptwSource input commit = do
+  Module (TLMaster TLConfig, Stream ExecOutput, Action ())
+makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
   let xbarconfig =
         XBarConfig
           { bce= True
@@ -269,82 +273,72 @@ makeLoadStoreUnit cacheSource mmioSource ptwSource input commit = do
 
   outputQ :: Queue ExecOutput <- makeQueue
 
-  key :: Reg (Bit 20) <- makeReg dontCare
   cache <-
     withName "dcache" $
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
-  (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <-
-    withName "DTLB" $ makeDummyPtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
+  (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <- withName "DTLB" $
+    makeDummyPtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
+  let phys :: Bit 32 = ptwOut.peek.rd
 
   always do
     when (cache.canMatch) do
-      cache.match key.val
+      cache.match (upper phys)
 
   state :: Reg (Bit 4) <- makeReg 0
 
   let req = input.peek
   let instr = req.instr
   let opcode = instr.opcode
-  let addr = req.rs1 + req.instr.imm.val
+  let virt = req.rs1 + req.instr.imm.val
 
   let isWord = instr.accessWidth === 0b10
   let isHalf = instr.accessWidth === 0b01
   let isByte = instr.accessWidth === 0b00
 
-  let aligned =
-        selectDefault false [
-          opcode `is` [LOAD,STORE] .&&. isByte --> true,
-          opcode `is` [LOAD,STORE] .&&. isHalf .&&. at @0 addr === 0 --> true,
-          opcode `is` [LOAD,STORE] .&&. isWord .&&. slice @1 @0 addr === 0 --> true,
-          opcode `is` [STOREC,LOADR] .&&. slice @1 @0 addr === 0 .&&. isCached addr --> true,
-          instr.isAMO .&&. slice @1 @0 addr === 0 .&&. isCached addr --> true
-        ]
-
-  let beat = req.rs2 .<<. ((slice @1 @0 addr) # (0b000 :: Bit 3))
+  let beat = req.rs2 .<<. ((slice @1 @0 virt) # (0b000 :: Bit 3))
   let mask :: Bit 4 =
         select [
           isByte --> 0b0001,
           isHalf --> 0b0011,
           isWord --> 0b1111
-        ] .<<. (slice @1 @0 addr)
+        ] .<<. (slice @1 @0 virt)
 
   -- no speculative MMIO loads, other accessses can start loads before commit
-  let canLoad = isCached addr ? (cache.canLookup, mmioSlave.channelA.canPut .&&. commit.canPeek)
+  let canLoad = isCached phys ? (cache.canLookup, mmioSlave.channelA.canPut .&&. commit.canPeek)
   let canStore = cache.canLookup .&&. mmioSlave.channelA.canPut
 
   let lookup op = do
-        cache.lookup (slice @11 @6 addr) (slice @5 @2 addr) op
-        key <== truncateLSB addr
+        cache.lookup (slice @11 @6 phys) (slice @5 @2 phys) op
 
   let mmioRequest :: ChannelA TLConfig =
         ChannelA
           { opcode= dontCare
           , source= mmioSource
           , size= zeroExtend instr.accessWidth
-          , address= addr
+          , address= phys
           , lane= dontCare
           , mask= mask }
 
   let sendLoad op = do
-        if isCached addr then do
+        if isCached phys then do
           lookup op
         else do
           mmioSlave.channelA.put
             (mmioRequest{opcode= tag #Get ()} :: ChannelA TLConfig)
 
-  let canReceiveLoad = isCached addr ? (cache.loadResponse.canPeek, mmioSlave.channelD.canPeek)
+  let canReceiveLoad = isCached phys ? (cache.loadResponse.canPeek, mmioSlave.channelD.canPeek)
 
-  let responseLoad = isCached addr ? (cache.loadResponse.peek, mmioSlave.channelD.peek.lane)
+  let responseLoad = isCached phys ? (cache.loadResponse.peek, mmioSlave.channelD.peek.lane)
 
   let consumeLoad =
-        if isCached addr then do
+        if isCached phys then do
           cache.loadResponse.consume
         else do
           mmioSlave.channelD.consume
 
   let sendStore =
-        if isCached addr then do
+        if isCached phys then do
           lookup (tag #Store (mask,beat))
         else do
             mmioSlave.channelA.put
@@ -355,73 +349,107 @@ makeLoadStoreUnit cacheSource mmioSource ptwSource input commit = do
 
   let out =
         ExecOutput
-          { exception= inv aligned
+          { exception= inv ptwOut.peek.success
+          , cause= ptwOut.peek.cause
           , pc= req.pc + 4
-          , cause= dontCare
           , flush= false
           , rd= dontCare
-          , tval= addr }
+          , tval= virt }
+
+  let ptw :: Action () = do
+        let width =
+              (opcode `is` [STOREC,LOADR] .||. instr.isAMO) ?
+                (0b10, instr.accessWidth)
+        ptwIn.put
+          PtwRequest
+            { atomic= instr.isAMO .||. opcode `is` [STOREC,LOADR]
+            , store= opcode `is` [STORE]
+            , virtual= unpack virt
+            , satp= vminfo.satp
+            , priv= vminfo.priv
+            , mxr= vminfo.mxr
+            , sum= vminfo.sum
+            , instr= false
+            , width }
+
+  let translate :: Stmt () = do
+        wait ptwIn.canPut
+        action ptw
+        wait ptwOut.canPeek
 
   always do
     -- *** STORE ***
     when (input.canPeek .&&. opcode `is` [STORE]) do
 
-      when (state.val === 0 .&&. outputQ.notFull) do
-        outputQ.enq (out{ cause= store_amo_address_misaligned } :: ExecOutput)
-
+      when (state.val === 0 .&&. ptwIn.canPut .&&. commit.canPeek) do
         state <== 1
+        ptw
 
-      when (state.val === 1 .&&. commit.canPeek .&&. canStore) do
-        commit.consume
+      when ptwOut.canPeek do
+        when (state.val === 1 .&&. outputQ.notFull) do
+          outputQ.enq out
+          state <== 2
 
-        if (commit.peek) then do
-          when (addr === 0x10000000) $ displayAscii (slice @7 @0 beat)
-          --when (addr === 0x10000000 .&&. slice @7 @0 beat === 0) finish
-          when (isCached addr) input.consume
-          state <== isCached addr ? (0, 2)
-          sendStore
-        else do
+        when (state.val === 2 .&&. commit.canPeek .&&. canStore) do
+          commit.consume
+
+          if (commit.peek .&&. ptwOut.peek.success) then do
+            when (phys === 0x10000000) $ displayAscii (slice @7 @0 beat)
+            --when (addr === 0x10000000 .&&. slice @7 @0 beat === 0) finish
+            when (isCached phys) ptwOut.consume
+            when (isCached phys) input.consume
+            state <== isCached phys ? (0, 3)
+            sendStore
+          else do
+            ptwOut.consume
+            input.consume
+            state <== 0
+
+        when (state.val === 3 .&&. canReceiveStore) do
+          ptwOut.consume
           input.consume
+          consumeStore
           state <== 0
-
-      when (state.val === 2 .&&. canReceiveStore) do
-        input.consume
-        consumeStore
-        state <== 0
 
     -- *** LOAD / LOAD RESERVE ***
     when (input.canPeek .&&. opcode `is` [LOAD,LOADR]) do
       let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
 
-      when (state.val === 0 .&&. canLoad) do
-        if (aligned .&&. (isCached addr .||. commit.peek)) then do
-          -- perform uncached operation when speculation is resolved
-          sendLoad op
-          state <== 1
-        else do
-          outputQ.enq (out{cause=load_address_misaligned} :: ExecOutput)
-          state <== 2
+      when (state.val === 0 .&&. ptwIn.canPut) do
+        state <== 1
+        ptw
 
-      when (state.val === 1 .&&. canReceiveLoad .&&. outputQ.notFull) do
-        consumeLoad
+      when ptwOut.canPeek do
+        when (state.val === 1 .&&. canLoad .&&. commit.canPeek) do
+          if ptwOut.peek.success .&&. commit.peek then do
+            -- perform uncached operation when speculation is resolved
+            sendLoad op
+            state <== 2
+          else do
+            outputQ.enq out
+            state <== 3
 
-        let beat :: Bit 32 = responseLoad .>>. ((slice @1 @0 addr) # (0b000 :: Bit 3))
-        let rd :: Bit 32 =
-              select [
-                isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
-                isHalf .&&. req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
-                isByte .&&. inv req.instr.isUnsigned --> signExtend (slice @7 @0 beat),
-                isHalf .&&. inv req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
-                isWord --> beat
-              ]
+        when (state.val === 2 .&&. canReceiveLoad .&&. outputQ.notFull) do
+          consumeLoad
 
-        outputQ.enq (out{rd} :: ExecOutput)
-        state <== 2
+          let beat :: Bit 32 = responseLoad .>>. ((slice @1 @0 virt) # (0b000 :: Bit 3))
+          let rd :: Bit 32 =
+                select [
+                  isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
+                  isHalf .&&. req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
+                  isByte .&&. inv req.instr.isUnsigned --> signExtend (slice @7 @0 beat),
+                  isHalf .&&. inv req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
+                  isWord --> beat
+                ]
 
-      when (state.val === 2 .&&. commit.canPeek) do
-        commit.consume
-        input.consume
-        state <== 0
+          outputQ.enq (out{rd} :: ExecOutput)
+          state <== 3
+
+        when (state.val === 3 .&&. commit.canPeek) do
+          commit.consume
+          ptwOut.consume
+          input.consume
+          state <== 0
 
     -- *** FENCE ***
     when (input.canPeek .&&. opcode `is` [FENCE]) do
@@ -437,49 +465,58 @@ makeLoadStoreUnit cacheSource mmioSource ptwSource input commit = do
     -- *** AMO / STORE CONDITIONAL ***
     let amoOrSc = instr.isAMO .||. opcode `is` [STOREC]
     when (input.canPeek .&&. amoOrSc) do
-      when (state.val === 0 .&&. outputQ.notFull) do
-        if (aligned) then do
-          state <== 1
-        else do
-          state <== 2
-          outputQ.enq (out{cause=store_amo_address_misaligned} :: ExecOutput)
+      when (state.val === 0 .&&. ptwIn.canPut) do
+        state <== 1
+        ptw
 
-      when (state.val === 2 .&&. commit.canPeek) do
-        -- abort an unaligned atomic operation
-        commit.consume
-        input.consume
-        state <== 0
+      when ptwOut.canPeek do
+        when (state.val === 1 .&&. outputQ.notFull) do
+          if ptwOut.peek.success then do
+            state <== 2
+          else do
+            state <== 3
+            outputQ.enq out
 
-      when (state.val === 1 .&&. commit.canPeek .&&. inv commit.peek .&&. outputQ.notFull) do
-        -- abort atomic operation because of a misspeculation
-        outputQ.enq out
-        commit.consume
-        input.consume
-        state <== 0
+        when (state.val === 3 .&&. commit.canPeek) do
+          -- abort an unaligned atomic operation
+          commit.consume
+          ptwOut.consume
+          input.consume
+          state <== 0
 
-      when (state.val === 1 .&&. cache.canLookup .&&. commit.canPeek .&&. commit.peek) do
-        -- start executing a cached atomic operation when branch prediction is confirmed
-        commit.consume
-        state <== 2
+        when (state.val === 2 .&&. commit.canPeek .&&. inv commit.peek .&&. outputQ.notFull) do
+          -- abort atomic operation because of a misspeculation
+          outputQ.enq out
+          commit.consume
+          ptwOut.consume
+          input.consume
+          state <== 0
 
-        if instr.isAMO then do
-          lookup (tag #Atomic (opcode, req.rs2))
-        else do
-          lookup (tag #StoreC (ones, req.rs2))
+        when (state.val === 2 .&&. cache.canLookup .&&. commit.canPeek .&&. commit.peek) do
+          -- start executing a cached atomic operation when branch prediction is confirmed
+          commit.consume
+          state <== 3
 
-      when (state.val === 2 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
-        outputQ.enq (out{rd= zeroExtend $ inv cache.scResponse.peek} :: ExecOutput)
-        cache.scResponse.consume
-        input.consume
-        state <== 0
+          if instr.isAMO then do
+            lookup (tag #Atomic (opcode, req.rs2))
+          else do
+            lookup (tag #StoreC (ones, req.rs2))
 
-      when (state.val === 2 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
-        outputQ.enq (out{rd= cache.atomicResponse.peek} :: ExecOutput)
-        cache.atomicResponse.consume
-        input.consume
-        state <== 0
+        when (state.val === 3 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
+          outputQ.enq (out{rd= zeroExtend $ inv cache.scResponse.peek} :: ExecOutput)
+          cache.scResponse.consume
+          ptwOut.consume
+          input.consume
+          state <== 0
 
-  return (master, toStream outputQ)
+        when (state.val === 3 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
+          outputQ.enq (out{rd= cache.atomicResponse.peek} :: ExecOutput)
+          cache.atomicResponse.consume
+          ptwOut.consume
+          input.consume
+          state <== 0
+
+  return (master, toStream outputQ, tlbFlush)
 
 makeAlu :: Stream ExecInput -> Module (Stream ExecOutput)
 makeAlu input = do
@@ -550,18 +587,21 @@ makeCore
   systemQ :: Queue ExecInput <- withName "system" makeQueue
   systemBuf :: Reg ExecOutput <- withName "system" $ makeReg dontCare
 
+  systemUnit <- withName "system" $ makeSystem hartId systemInputs
+
   redirectQ :: Queue Redirection <- withName "fetch" makeBypassQueue
 
   window :: Queue DecodeOutput <- makeSizedQueueCore 5
 
-  (imaster, fetch, trainHit, trainMis) <-
-    withName "fetch" $ makeFetch fetchSource itlbSource (toStream redirectQ)
+  (imaster, fetch, trainHit, trainMis, itlbFlush) <- withName "fetch" $
+    makeFetch systemUnit.vmInfo fetchSource itlbSource (toStream redirectQ)
   decode <- withName "decode" $ makeDecode fetch
 
   alu <- withName "alu" $ makeAlu (toStream aluQ)
-  (dmaster, lsu) <-
+  (dmaster, lsu, dtlbFlush) <-
     withName "lsu" $
       makeLoadStoreUnit
+        systemUnit.vmInfo
         dataSource
         mmioSource
         dtlbSource
@@ -569,8 +609,6 @@ makeCore
         (toStream lsuCommitQ)
 
   registers <- withName "registers" makeRegisterFile
-
-  systemUnit <- withName "system" $ makeSystem hartId systemInputs
 
   epoch :: Ehr Epoch <- makeEhr 2 0
 
@@ -614,7 +652,7 @@ makeCore
           registers.setBusy rd
 
         --display
-        --  "\t[" cycle.val "] enter pc: 0x"
+        --  "\t[" hartId "@" cycle.val "] enter pc: 0x"
         --  (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
 
     when (window.canDeq .&&. redirectQ.notFull .&&. lsuCommitQ.notFull) do
@@ -663,9 +701,9 @@ makeCore
             redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
             epoch.write 0 (epoch.read 0 + 1)
 
-            display
-              "exception at pc= 0x" (formatHex 0 req.pc)
-              " to pc= 0x" (formatHex 0 trapPc)
+            --display
+            --  "exception at pc= 0x" (formatHex 0 req.pc)
+            --  " to pc= 0x" (formatHex 0 trapPc)
           else if systemUnit.canInterrupt.valid .&&. inv instr.isMemAccess then do
             let cause = systemUnit.canInterrupt.val
             trapPc <- systemUnit.interrupt req.pc cause dontCare

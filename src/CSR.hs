@@ -462,8 +462,19 @@ makeSscratchCSRs = do
   sscratch :: Reg (Bit 32) <- makeReg dontCare
   return [regToCSR 0x140 sscratch]
 
-makeSatpCSRs :: Module ([CSR], Reg (Bit 32))
+data Satp =
+  Satp
+    { useSv32 :: Bit 1
+    , asid :: Bit 9
+    , ppn :: Bit 22 }
+  deriving(Bits, Generic, Interface, FShow)
+
+makeSatpCSRs :: Module ([CSR], Reg Satp)
 makeSatpCSRs = do
-  satp :: Reg (Bit 32) <- makeReg 0
-  let csrs = [(regToCSR 0x180 satp){csrFlush= true}]
+  satp :: Reg Satp <- makeReg (unpack 0)
+  let satpReg :: Reg (Bit 32) =
+        Reg
+          { readReg= pack satp.val
+          , writeReg= \ x -> satp <== unpack x }
+  let csrs = [(regToCSR 0x180 satpReg){csrFlush= true}]
   return (csrs, satp)
