@@ -54,6 +54,7 @@ data PtwRequest =
     { priv :: Priv
     , virtual :: VirtAddr
     , satp :: Satp
+    , atomic :: Bit 1 -- is the access an atomic memory operation
     , store :: Bit 1 -- is the access a store
     , instr :: Bit 1 -- is the access an ifetch
     , mxr :: Bit 1
@@ -74,15 +75,17 @@ isLegalAccess req pte =
 
     accessLegal =
       selectDefault (pte.readPTE .||. (req.mxr .&&. pte.executePTE))
-        [ req.store --> pte.readPTE .&&. pte.writePTE -- illegal PTE otherwise
+        [ req.store .||. req.atomic --> pte.readPTE .&&. pte.writePTE
         , req.instr --> pte.executePTE ]
 
 -- return an updated PTE after executing a request
 -- and a bit to say if a write-back is needed
 updatePTE :: PtwRequest -> PTE -> (PTE, Bit 1)
 updatePTE req pte =
-  ( pte{accessedPTE= true, dirtyPTE= pte.dirtyPTE .||. req.store}
-  , inv pte.accessedPTE .||. (inv pte.dirtyPTE .&&. req.store))
+  ( pte{accessedPTE= true, dirtyPTE= pte.dirtyPTE .||. dirty}
+  , inv pte.accessedPTE .||. (inv pte.dirtyPTE .&&. dirty))
+    where
+      dirty = req.store .||. req.atomic
 
 -- If output.exception:
 --  - return the execption
@@ -113,22 +116,97 @@ tlbMatch virt entry = entry.index === 0 ? (match0 .&&. match1, match1)
 
 type TlbLogSize = 3
 
+makeDummyPtwFSM :: forall p.
+  ( KnownTLParams p
+  , 32 ~ AddrWidth p
+  , 4 ~ LaneWidth p )
+    => (Bit 32 -> Bit 1) -- is a read access at this address possible
+    -> (Bit 32 -> Bit 1) -- is a write access at this address possible
+    -> (Bit 32 -> Bit 1) -- is an atomic access at this address possible
+    -> (Bit 32 -> Bit 1) -- is an instruction access at this address possible
+    -> Bit (SourceWidth p)
+    -> TLSlave p
+    -> Module (Server PtwRequest PtwResponse, Action ())
+makeDummyPtwFSM canRead canWrite canAtomic canExec source slave = do
+  queue :: Queue PtwRequest <- makePipelineQueue 1
+  let virt :: VirtAddr = queue.first.virtual
+  let addr :: Bit 32 = pack virt
+
+  let isValid =
+        selectDefault (canRead addr)
+          [ queue.first.instr  --> canExec addr
+          , queue.first.store  --> canWrite addr
+          , queue.first.atomic --> canAtomic addr ]
+
+  let reqs = toSink queue
+
+  let aligned =
+        select
+          [ queue.first.width === 0b00 --> true
+          , queue.first.width === 0b01 --> slice @0 @0 addr === 0
+          , queue.first.width === 0b10 --> slice @1 @0 addr === 0 ]
+
+  let af_cause =
+        selectDefault load_access_fault
+          [ queue.first.store  --> store_amo_access_fault
+          , queue.first.atomic --> store_amo_access_fault
+          , queue.first.instr  --> instruction_access_fault ]
+
+  let align_cause =
+        selectDefault load_address_misaligned
+          [ queue.first.store  --> store_amo_address_misaligned
+          , queue.first.atomic --> store_amo_address_misaligned
+          , queue.first.instr  --> instruction_address_misaligned ]
+
+  let tval = pack virt
+
+  let af_output =
+        PtwResponse
+          { cause= af_cause
+          , success= isValid
+          , tval= addr
+          , rd= addr }
+
+  let align_output =
+        PtwResponse
+          { cause= align_cause
+          , success= aligned
+          , tval = addr
+          , rd= addr }
+
+  let resps =
+        Source
+          { canPeek= queue.canDeq
+          , peek=
+              aligned ? (af_output, align_output)
+          , consume= queue.deq}
+
+  return (Server{reqs,resps}, pure ())
+
 makePtwFSM :: forall p.
   ( KnownTLParams p
   , 32 ~ AddrWidth p
   , 4 ~ LaneWidth p )
-    => Bit (SourceWidth p)
-    -> Source PtwRequest
+    => (Bit 32 -> Bit 1) -- is a read access at this address possible
+    -> (Bit 32 -> Bit 1) -- is a write access at this address possible
+    -> (Bit 32 -> Bit 1) -- is an atomic access at this address possible
+    -> (Bit 32 -> Bit 1) -- is an instruction access at this address possible
+    -> Bit (SourceWidth p)
     -> TLSlave p
     -> Module (Server PtwRequest PtwResponse, Action ())
-makePtwFSM source inputs slave = do
+makePtwFSM canRead canWrite canAtomic canExec source slave = do
   outputs :: Queue PtwResponse <- makeBypassQueue
-  flushAck :: Queue () <- makeQueue
 
-  input :: Reg PtwRequest <- makeReg dontCare
-  let virt = input.val.virtual
-  let satp = input.val.satp
-  let priv = input.val.priv
+  inputs :: Queue PtwRequest <- makePipelineQueue 1
+  let virt = inputs.first.virtual
+  let satp = inputs.first.satp
+  let priv = inputs.first.priv
+
+  let isValid :: Bit 32 -> Bit 1 = \ addr ->
+        selectDefault (canRead addr)
+          [ inputs.first.instr  --> canExec addr
+          , inputs.first.store  --> canWrite addr
+          , inputs.first.atomic --> canAtomic addr ]
 
   -- TLB is keek small for now
   tlb :: [Reg (Option TlbEntry)] <- replicateM (valueOf @(2^TlbLogSize)) (makeReg none)
@@ -145,24 +223,27 @@ makePtwFSM source inputs slave = do
 
   let aligned =
         select
-          [ input.val.width === 0b00 --> true
-          , input.val.width === 0b01 --> slice @0 @0 virt.offset === 0
-          , input.val.width === 0b10 --> slice @1 @0 virt.offset === 0 ]
+          [ inputs.first.width === 0b00 --> true
+          , inputs.first.width === 0b01 --> slice @0 @0 virt.offset === 0
+          , inputs.first.width === 0b10 --> slice @1 @0 virt.offset === 0 ]
 
   let pf_cause =
         selectDefault load_page_fault
-          [ input.val.store --> store_amo_page_fault
-          , input.val.instr --> instruction_page_fault ]
+          [ inputs.first.store  --> store_amo_page_fault
+          , inputs.first.atomic --> store_amo_page_fault
+          , inputs.first.instr  --> instruction_page_fault ]
 
   let af_cause =
         selectDefault load_access_fault
-          [ input.val.store --> store_amo_access_fault
-          , input.val.instr --> instruction_access_fault ]
+          [ inputs.first.store  --> store_amo_access_fault
+          , inputs.first.atomic --> store_amo_access_fault
+          , inputs.first.instr  --> instruction_access_fault ]
 
   let align_cause =
         selectDefault load_address_misaligned
-          [ input.val.store --> store_amo_address_misaligned
-          , input.val.instr --> instruction_address_misaligned ]
+          [ inputs.first.store  --> store_amo_address_misaligned
+          , inputs.first.atomic --> store_amo_address_misaligned
+          , inputs.first.instr  --> instruction_address_misaligned ]
 
   let tval = pack virt
 
@@ -187,12 +268,15 @@ makePtwFSM source inputs slave = do
           , rd= pack virt
           , tval }
 
-  idle :: Ehr (Bit 1) <- makeEhr 2 true
   index :: Reg (Bit 1) <- makeReg dontCare
   addr :: Reg (Bit 34) <- makeReg dontCare
+
+  -- Don't Perform Address Translation (early output due to a fault)
   abort :: Reg (Bit 1) <- makeReg false
 
-  -- Stop the `Page Table Walk` procedure
+  blockInput :: Wire (Bit 1) <- makeWire false
+
+  -- Finish the `Page Table Walk` procedure
   stop :: Reg (Bit 1) <- makeReg false
 
   -- Used by `Page Table Walk` and `Tlb Lookup` to return their results,
@@ -201,20 +285,23 @@ makePtwFSM source inputs slave = do
 
   let align_fail :: Action () = do
         outputs.enq align_output{success=false}
-        idle.write 1 true
+        blockInput <== 1
+        inputs.deq
   let af_fail :: Action () = do
         outputs.enq af_output{success=false}
-        idle.write 1 true
+        blockInput <== 1
+        inputs.deq
   let pf_fail :: Action () = do
         outputs.enq pf_output{success=false}
-        idle.write 1 true
+        blockInput <== 1
+        inputs.deq
 
   -- we write in port 0 of idle:
   --     do not write in any register during a call to succede,
   --     otherwise we may double write because of a new request
   let succede :: Bit 32 -> Action () = \ rd -> do
         outputs.enq (pf_output{rd} :: PtwResponse)
-        idle.write 0 true
+        inputs.deq
 
   let get address =
         slave.channelA.put
@@ -238,15 +325,22 @@ makePtwFSM source inputs slave = do
 
   doFlush :: Wire (Bit 1) <- makeWire false
 
-  runStmt do
+  -- Warning: it must be statically clear that each loop take at least one cycle,
+  -- otherwise we will observe a circular path
+  withName "runStmt" $ runStmt do
     while true do
-      wait (inv (idle.read 0) .&&. outputs.notFull)
+      wait (inputs.canDeq .&&. outputs.notFull)
 
       if inv aligned then do
         action align_fail
 
       else if priv === machine_priv .||. inv satp.useSv32 then do
-        action pf_fail
+        let addr :: Bit 32 = pack virt
+
+        if isValid addr then do
+          action (succede addr)
+        else do
+          action pf_fail
 
       else do
         when (inv hit.val) do
@@ -286,30 +380,33 @@ makePtwFSM source inputs slave = do
                   index <== index.val - 1
                   addr <== pte.ppn # virt.vpn0 # (0b00 :: Bit 2)
 
-        when (inv abort.val) do
+        if inv abort.val then do
+          -- Translation Step
           let entry = match.val
           let pte = entry.pte
-          if isLegalAccess input.val entry.pte then do
-            let (newPte, diff) = updatePTE input.val pte
+          let addr :: Bit 34 =
+                entry.index === 0 ?
+                  (pte.ppn # virt.offset, upper pte.ppn # virt.vpn0 # virt.offset)
+          if slice @33 @32 addr =!= 0 .||. inv (isValid (lower addr)) then do
+            action af_fail
+
+          else if isLegalAccess inputs.first entry.pte then do
+            let (newPte, diff) = updatePTE inputs.first pte
 
             when diff do
               wait slave.channelA.canPut
               action (put entry.address (pack newPte))
+              wait (inv doFlush.val)
               action (tlb!way.val <== some entry{pte=newPte})
               wait slave.channelD.canPeek
               action slave.channelD.consume
 
-            wait (inv doFlush.val)
-            action do
-              let addr :: Bit 34 =
-                    entry.index === 0 ?
-                      (pte.ppn # virt.offset, upper pte.ppn # virt.vpn0 # virt.offset)
-              if slice @33 @32 addr === 0 then
-                succede (lower addr)
-              else
-                af_fail
+            action (succede (lower addr))
+
           else do
             action pf_fail
+        else do
+          tick
 
   let flush = do
         doFlush <== true
@@ -320,15 +417,15 @@ makePtwFSM source inputs slave = do
     ( Server
         { reqs=
             Sink
-              { canPut= idle.read 1
+              { canPut= inputs.notFull .&&. inv blockInput.val
               , put= \ x -> do
+                  -- Tlb Lookup
                   let (w,h) = tlbSearch x.virtual
                   addr <== satp.ppn # x.virtual.vpn1 # (0b00 :: Bit 2)
                   match <== (tlb!w).val.val
-                  idle.write 1 false
                   abort <== false
                   stop <== false
-                  input <== x
+                  inputs.enq x
                   index <== 1
                   way <== w
                   hit <== h }

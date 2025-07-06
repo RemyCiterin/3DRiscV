@@ -455,18 +455,15 @@ makeStatusCSRs = do
 makeMscratchCSRs :: Module [CSR]
 makeMscratchCSRs = do
   mscratch :: Reg (Bit 32) <- makeReg dontCare
-
   return [regToCSR 0x340 mscratch]
 
 makeSscratchCSRs :: Module [CSR]
 makeSscratchCSRs = do
   sscratch :: Reg (Bit 32) <- makeReg dontCare
-
   return [regToCSR 0x140 sscratch]
 
 makeSatpCSRs :: Module ([CSR], Reg (Bit 32))
 makeSatpCSRs = do
   satp :: Reg (Bit 32) <- makeReg 0
-  let csrs = [regToCSR 0x180 satp]
-
+  let csrs = [(regToCSR 0x180 satp){csrFlush= true}]
   return (csrs, satp)

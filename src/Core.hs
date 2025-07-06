@@ -6,6 +6,7 @@ import Blarney.Queue
 import Blarney.Option
 import Blarney.Stream
 import Blarney.SourceSink
+import Blarney.ClientServer
 import Blarney.Connectable
 import Blarney.Utils
 import Blarney.ADT
@@ -18,6 +19,7 @@ import Clint
 import Uart
 import Alu
 import CSR
+import Tlb
 
 import TileLink
 import TileLink.CoherentBCache
@@ -46,6 +48,8 @@ type HistSize = 8
 
 data FetchOutput = FetchOutput {
     bstate :: BPredState HistSize RasSize,
+    exception :: Bit 1,
+    cause :: CauseException,
     prediction :: Bit 32,
     instr :: Bit 32,
     epoch :: Epoch,
@@ -55,6 +59,8 @@ data FetchOutput = FetchOutput {
 data DecodeOutput = DecodeOutput {
     bstate :: BPredState HistSize RasSize,
     prediction :: Bit 32,
+    exception :: Bit 1,
+    cause :: CauseException,
     instr :: Instr,
     epoch :: Epoch,
     pc :: Bit 32
@@ -76,26 +82,87 @@ type Training =
 type TLConfig = TLParams 32 4 4 8 8
 type TLConfig' = TLParams 32 4 4 8 0
 
+makeICache ::
+  TLSlave TLConfig -- cache slave
+  -> TLSlave TLConfig -- ptw slave
+  -> Bit (SourceWidth TLConfig) -- cache source
+  -> Bit (SourceWidth TLConfig) -- ptw source
+  -> Module (Server (Bit 32) PtwResponse)
+makeICache cacheSlave ptwSlave cacheSource ptwSource = do
+  cache <-
+    withName "icache" $
+      makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
+
+  (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <- withName "ITLB" $
+    makePtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
+
+  tagQ :: Queue PtwResponse <- makeQueue
+
+  withName "icache" $ always do
+    when (cache.canMatch .&&. ptwOut.canPeek .&&. tagQ.notFull) do
+      if ptwOut.peek.success then do
+        cache.match (upper ptwOut.peek.rd)
+      else do
+        cache.abort
+
+      tagQ.enq ptwOut.peek
+      ptwOut.consume
+
+  let reqs =
+        Sink
+          { canPut= cache.canLookup .&&. ptwIn.canPut
+          , put= \ x -> do
+              cache.lookup (slice @11 @6 x) (slice @5 @2 x) (item #Load)
+              ptwIn.put
+                PtwRequest
+                  { virtual= unpack x
+                  , satp= unpack 0
+                  , priv= machine_priv
+                  , sum= dontCare
+                  , mxr= dontCare
+                  , atomic= false
+                  , store= false
+                  , instr= true
+                  , width= 0b10 }}
+
+  let resps=
+        Source
+          { canPeek= tagQ.canDeq .&&. (inv tagQ.first.success .||. cache.loadResponse.canPeek)
+          , peek= tagQ.first{rd= cache.loadResponse.peek} :: PtwResponse
+          , consume= do
+              when tagQ.first.success do
+                cache.loadResponse.consume
+              tagQ.deq }
+
+  return Server{reqs, resps}
+
 makeFetch ::
+  Bit (SourceWidth TLConfig) ->
   Bit (SourceWidth TLConfig) ->
   Stream Redirection ->
   Module (TLMaster TLConfig, Stream FetchOutput, Training, Training)
-makeFetch source redirection = do
+makeFetch fetchSource ptwSource redirection = do
   bpred :: BranchPredictor HistSize RasSize EpochWidth <-
     withName "bpred" $ makeBranchPredictor 10
 
-  key :: Reg (Bit 20) <- makeReg dontCare
-  (cache,master) <- withName "icache" $
-    makeBCacheCore @2 @20 @6 @4 @() @TLConfig source (\ _ _ -> dontCare)
-  responseQ <- makeSizedQueueCore 4
+  let xbarconfig =
+        XBarConfig
+          { bce= True
+          , rootAddr= \ _ -> 0
+          , rootSink= \ _ -> 0
+          , rootSource= \ x ->
+              select
+                [ x === fetchSource --> 0
+                , x === ptwSource --> 1 ]
+          , sizeChannelA= 2
+          , sizeChannelB= 2
+          , sizeChannelC= 2
+          , sizeChannelD= 2
+          , sizeChannelE= 2 }
 
-  always do
-    when (cache.canMatch) do
-      cache.match key.val
+  ([master], [cacheSlave,ptwSlave]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
 
-    when (cache.loadResponse.canPeek .&&. responseQ.notFull) do
-      responseQ.enq cache.loadResponse.peek
-      cache.loadResponse.consume
+  cache <- makeICache cacheSlave ptwSlave fetchSource ptwSource
 
   pc :: Ehr (Bit 32) <- makeEhr 2 0x80000000
   epoch :: Ehr Epoch <- makeEhr 2 0
@@ -107,11 +174,17 @@ makeFetch source redirection = do
 
   outputQ :: Queue FetchOutput <- makeQueue
 
+  responseQ :: Queue PtwResponse <- makeSizedQueueCore 4
+
+
   always do
-    when (cache.canLookup .&&. queue.notFull) do
-      cache.lookup (slice @11 @6 (pc.read 1)) (slice @5 @2 (pc.read 1)) (tag #Load ())
+    when (cache.resps.canPeek .&&. responseQ.notFull) do
+      responseQ.enq cache.resps.peek
+      cache.resps.consume
+
+    when (cache.reqs.canPut .&&. queue.notFull) do
       bpred.start (pc.read 1) (epoch.read 1)
-      key <== truncateLSB (pc.read 1)
+      cache.reqs.put (pc.read 1)
       queue.enq ()
 
     when (queue.canDeq .&&. fetchQ.notFull .&&. inv redirection.canPeek) do
@@ -130,7 +203,9 @@ makeFetch source redirection = do
         let (outPc, outPred, outState, outEpoch) = fetchQ.first.val
 
         outputQ.enq FetchOutput{
-          instr= responseQ.first,
+          exception= inv responseQ.first.success,
+          cause= responseQ.first.cause,
+          instr= responseQ.first.rd,
           prediction= outPred,
           bstate= outState,
           epoch= outEpoch,
@@ -156,6 +231,8 @@ makeDecode stream = do
       let req = stream.peek
       outputQ.enq DecodeOutput
         { instr= decodeInstr req.instr
+        , exception= req.exception
+        , cause= req.cause
         , prediction= req.prediction
         , bstate= req.bstate
         , epoch= req.epoch
@@ -167,23 +244,28 @@ makeDecode stream = do
 makeLoadStoreUnit ::
   Bit (SourceWidth TLConfig) ->
   Bit (SourceWidth TLConfig) ->
+  Bit (SourceWidth TLConfig) ->
   Stream ExecInput ->
   Stream (Bit 1) ->
   Module (TLMaster TLConfig, Stream ExecOutput)
-makeLoadStoreUnit cacheSource mmioSource input commit = do
+makeLoadStoreUnit cacheSource mmioSource ptwSource input commit = do
   let xbarconfig =
         XBarConfig
           { bce= True
           , rootAddr= \ _ -> 0
           , rootSink= \ _ -> 0
-          , rootSource= \ x -> x === cacheSource ? (0,1)
+          , rootSource= \ x ->
+              select
+                [ x === cacheSource --> 0
+                , x === mmioSource --> 1
+                , x === ptwSource --> 2 ]
           , sizeChannelA= 2
           , sizeChannelB= 2
           , sizeChannelC= 2
           , sizeChannelD= 2
           , sizeChannelE= 2 }
 
-  ([master], [cacheSlave,mmioSlave]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
+  ([master], [cacheSlave,mmioSlave,ptwSlave]) <- makeTLXBar @1 @3 @TLConfig xbarconfig
 
   outputQ :: Queue ExecOutput <- makeQueue
 
@@ -191,6 +273,9 @@ makeLoadStoreUnit cacheSource mmioSource input commit = do
   cache <-
     withName "dcache" $
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
+
+  (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <-
+    withName "DTLB" $ makeDummyPtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
 
   always do
     when (cache.canMatch) do
@@ -282,7 +367,7 @@ makeLoadStoreUnit cacheSource mmioSource input commit = do
     when (input.canPeek .&&. opcode `is` [STORE]) do
 
       when (state.val === 0 .&&. outputQ.notFull) do
-        outputQ.enq out{ cause= store_amo_address_misaligned }
+        outputQ.enq (out{ cause= store_amo_address_misaligned } :: ExecOutput)
 
         state <== 1
 
@@ -314,7 +399,7 @@ makeLoadStoreUnit cacheSource mmioSource input commit = do
           sendLoad op
           state <== 1
         else do
-          outputQ.enq out{cause=load_address_misaligned}
+          outputQ.enq (out{cause=load_address_misaligned} :: ExecOutput)
           state <== 2
 
       when (state.val === 1 .&&. canReceiveLoad .&&. outputQ.notFull) do
@@ -357,7 +442,7 @@ makeLoadStoreUnit cacheSource mmioSource input commit = do
           state <== 1
         else do
           state <== 2
-          outputQ.enq out{cause=store_amo_address_misaligned}
+          outputQ.enq (out{cause=store_amo_address_misaligned} :: ExecOutput)
 
       when (state.val === 2 .&&. commit.canPeek) do
         -- abort an unaligned atomic operation
@@ -447,13 +532,17 @@ data CoreConfig =
     { fetchSource :: Bit (SourceWidth TLConfig)
     , dataSource :: Bit (SourceWidth TLConfig)
     , mmioSource :: Bit (SourceWidth TLConfig)
+    , itlbSource :: Bit (SourceWidth TLConfig)
+    , dtlbSource :: Bit (SourceWidth TLConfig)
     , hartId :: Integer }
 
 makeCore ::
   CoreConfig
   -> SystemInputs
   -> Module (TLMaster TLConfig, TLMaster TLConfig)
-makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = do
+makeCore
+  CoreConfig{hartId,fetchSource,dataSource,mmioSource,itlbSource,dtlbSource}
+  systemInputs = do
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
   lsuCommitQ :: Queue (Bit 1) <- withName "lsu" makeQueue
   aluQ :: Queue ExecInput <- withName "alu" makeQueue
@@ -466,12 +555,18 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
   window :: Queue DecodeOutput <- makeSizedQueueCore 5
 
   (imaster, fetch, trainHit, trainMis) <-
-    withName "fetch" $ makeFetch fetchSource (toStream redirectQ)
+    withName "fetch" $ makeFetch fetchSource itlbSource (toStream redirectQ)
   decode <- withName "decode" $ makeDecode fetch
 
   alu <- withName "alu" $ makeAlu (toStream aluQ)
   (dmaster, lsu) <-
-    withName "lsu" $ makeLoadStoreUnit dataSource mmioSource (toStream lsuQ) (toStream lsuCommitQ)
+    withName "lsu" $
+      makeLoadStoreUnit
+        dataSource
+        mmioSource
+        dtlbSource
+        (toStream lsuQ)
+        (toStream lsuCommitQ)
 
   registers <- withName "registers" makeRegisterFile
 
@@ -635,9 +730,13 @@ makeFakeTestCore _ = mdo
                 [ x === 0 --> 0
                 , x === 1 --> 1
                 , x === 2 --> 1
-                , x === 3 --> 2
-                , x === 4 --> 3
-                , x === 5 --> 3 ]
+                , x === 3 --> 0
+                , x === 4 --> 1
+                , x === 5 --> 2
+                , x === 6 --> 3
+                , x === 7 --> 3
+                , x === 8 --> 2
+                , x === 9 --> 3 ]
           , sizeChannelA= 2
           , sizeChannelB= 2
           , sizeChannelC= 2
@@ -677,14 +776,18 @@ makeFakeTestCore _ = mdo
           { fetchSource= 0
           , dataSource= 1
           , mmioSource= 2
+          , itlbSource= 3
+          , dtlbSource= 4
           , hartId= 0 }
   (imaster0, dmaster0) <- withName "core" $ makeCore coreconfig0 systemInputs0
 
   let coreconfig1 =
         CoreConfig
-          { fetchSource= 3
-          , dataSource= 4
-          , mmioSource= 5
+          { fetchSource= 5
+          , dataSource= 6
+          , mmioSource= 7
+          , itlbSource= 8
+          , dtlbSource= 9
           , hartId= 1 }
   (imaster1, dmaster1) <- withName "core" $ makeCore coreconfig1 systemInputs1
 
