@@ -274,7 +274,10 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
   -- Don't Perform Address Translation (early output due to a fault)
   abort :: Reg (Bit 1) <- makeReg false
 
-  blockInput :: Wire (Bit 1) <- makeWire false
+  -- Delay `inputs.deq` of one cycle to ensure we don't write two times
+  -- in abort or stop in the same cycle (inputs is a pipeline fifo)
+  deqInput :: Reg (Bit 1) <- makeDReg false
+  always $ when deqInput.val inputs.deq
 
   -- Finish the `Page Table Walk` procedure
   stop :: Reg (Bit 1) <- makeReg false
@@ -285,16 +288,13 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
 
   let align_fail :: Action () = do
         outputs.enq align_output{success=false}
-        blockInput <== 1
-        inputs.deq
+        deqInput <== true
   let af_fail :: Action () = do
         outputs.enq af_output{success=false}
-        blockInput <== 1
-        inputs.deq
+        deqInput <== true
   let pf_fail :: Action () = do
         outputs.enq pf_output{success=false}
-        blockInput <== 1
-        inputs.deq
+        deqInput <== true
 
   -- we write in port 0 of idle:
   --     do not write in any register during a call to succede,
@@ -325,8 +325,8 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
 
   doFlush :: Wire (Bit 1) <- makeWire false
 
-  -- Warning: it must be statically clear that each loop take at least one cycle,
-  -- otherwise we will observe a circular path
+  -- Warning: it must be statically clear that each loop step take at
+  -- least one cycle, otherwise we will observe a circular path
   withName "runStmt" $ runStmt do
     while true do
       wait (inputs.canDeq .&&. outputs.notFull)
@@ -417,7 +417,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
     ( Server
         { reqs=
             Sink
-              { canPut= inputs.notFull .&&. inv blockInput.val
+              { canPut= inputs.notFull
               , put= \ x -> do
                   -- Tlb Lookup
                   let (w,h) = tlbSearch x.virtual
