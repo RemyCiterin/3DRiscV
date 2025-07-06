@@ -111,16 +111,17 @@ tlbMatch virt entry = entry.index === 0 ? (match0 .&&. match1, match1)
     match0 = entry.vpn0 === virt.vpn0
     match1 = entry.vpn1 === virt.vpn1
 
+type TlbLogSize = 3
+
 makePtwFSM :: forall p.
   ( KnownTLParams p
   , 32 ~ AddrWidth p
   , 4 ~ LaneWidth p )
     => Bit (SourceWidth p)
     -> Source PtwRequest
-    -> Source ()
     -> TLSlave p
-    -> Module (Server PtwRequest PtwResponse, Source ())
-makePtwFSM source flush inputs  slave = do
+    -> Module (Server PtwRequest PtwResponse, Action ())
+makePtwFSM source inputs slave = do
   outputs :: Queue PtwResponse <- makeBypassQueue
   flushAck :: Queue () <- makeQueue
 
@@ -130,11 +131,17 @@ makePtwFSM source flush inputs  slave = do
   let priv = input.val.priv
 
   -- TLB is keek small for now
-  tlb :: [Reg (Option TlbEntry)] <- replicateM 8 (makeReg none)
-  counter :: Reg (Bit 3) <- makeReg 0
-  always (counter <== counter.val + 1)
-  way :: Reg (Bit 3) <- makeReg dontCare
+  tlb :: [Reg (Option TlbEntry)] <- replicateM (valueOf @(2^TlbLogSize)) (makeReg none)
+  randomWay :: Reg (Bit TlbLogSize) <- makeReg 0
+  always (randomWay <== randomWay.val + 1)
+
+  way :: Reg (Bit TlbLogSize) <- makeReg dontCare
   hit :: Reg (Bit 1) <- makeReg dontCare
+
+  let tlbSearch :: VirtAddr -> (Bit TlbLogSize, Bit 1) = \ x ->
+        selectDefault (randomWay.val, false)
+          [ r.val.valid .&&. tlbMatch x r.val.val --> (lit i, true)
+            | (i, r) <- zip [0..] tlb ]
 
   let aligned =
         select
@@ -180,16 +187,17 @@ makePtwFSM source flush inputs  slave = do
           , rd= pack virt
           , tval }
 
-  let tlbSearch :: VirtAddr -> (Bit 3, Bit 1) = \ x ->
-        selectDefault (counter.val, false)
-          [ r.val.valid .&&. tlbMatch x r.val.val --> (lit i, true)
-            | (i, r) <- zip [0..] tlb ]
-
   idle :: Ehr (Bit 1) <- makeEhr 2 true
   index :: Reg (Bit 1) <- makeReg dontCare
   addr :: Reg (Bit 34) <- makeReg dontCare
   abort :: Reg (Bit 1) <- makeReg false
+
+  -- Stop the `Page Table Walk` procedure
   stop :: Reg (Bit 1) <- makeReg false
+
+  -- Used by `Page Table Walk` and `Tlb Lookup` to return their results,
+  -- because the results in `tlb` can be corrupted because of a flush
+  match :: Reg TlbEntry <- makeReg dontCare
 
   let align_fail :: Action () = do
         outputs.enq align_output{success=false}
@@ -228,6 +236,8 @@ makePtwFSM source flush inputs  slave = do
             , source
             , lane }
 
+  doFlush :: Wire (Bit 1) <- makeWire false
+
   runStmt do
     while true do
       wait (inv (idle.read 0) .&&. outputs.notFull)
@@ -240,7 +250,7 @@ makePtwFSM source flush inputs  slave = do
 
       else do
         when (inv hit.val) do
-          -- Write the new leaf PTE at the choosen position
+          -- Page Table Walk
           while (inv stop.val) do
             let (msb, lsb) = split addr.val
             if msb =!= 0 then do
@@ -251,18 +261,20 @@ makePtwFSM source flush inputs  slave = do
             else do
               wait slave.channelA.canPut
               action (get lsb)
-              wait slave.channelD.canPeek
+              wait (slave.channelD.canPeek .&&. inv doFlush.val)
               let pte = unpack slave.channelD.peek.lane
               action do
                 slave.channelD.consume
                 if isLeafPTE pte then do
-                  tlb!way.val <== some
-                    TlbEntry
-                      { address= lsb
-                      , index= index.val
-                      , vpn0= virt.vpn0
-                      , vpn1= virt.vpn1
-                      , pte }
+                  let out =
+                        TlbEntry
+                          { address= lsb
+                          , index= index.val
+                          , vpn0= virt.vpn0
+                          , vpn1= virt.vpn1
+                          , pte }
+                  tlb!way.val <== some out
+                  match <== out
                   stop <== true
                 else if inv pte.validPTE .||. index.val === 0 then do
                   -- Address translation failure
@@ -275,9 +287,10 @@ makePtwFSM source flush inputs  slave = do
                   addr <== pte.ppn # virt.vpn0 # (0b00 :: Bit 2)
 
         when (inv abort.val) do
-          let entry = (tlb!way.val).val.val
+          let entry = match.val
+          let pte = entry.pte
           if isLegalAccess input.val entry.pte then do
-            let (newPte, diff) = updatePTE input.val entry.pte
+            let (newPte, diff) = updatePTE input.val pte
 
             when diff do
               wait slave.channelA.canPut
@@ -286,10 +299,11 @@ makePtwFSM source flush inputs  slave = do
               wait slave.channelD.canPeek
               action slave.channelD.consume
 
+            wait (inv doFlush.val)
             action do
               let addr :: Bit 34 =
                     entry.index === 0 ?
-                      (entry.pte.ppn # virt.offset, upper entry.pte.ppn # virt.vpn0 # virt.offset)
+                      (pte.ppn # virt.offset, upper pte.ppn # virt.vpn0 # virt.offset)
               if slice @33 @32 addr === 0 then
                 succede (lower addr)
               else
@@ -297,23 +311,20 @@ makePtwFSM source flush inputs  slave = do
           else do
             action pf_fail
 
-  always do
-    when (flush.canPeek .&&. idle.read 0 .&&. idle.read 1 .&&. flushAck.notFull) do
-      forM_ tlb \ r -> do
-        let pte = r.val.val.pte
-        when (pte.globalPTE) do
+  let flush = do
+        doFlush <== true
+        forM_ tlb \ r -> do
           r <== none
-      flushAck.enq ()
-      flush.consume
 
   return
     ( Server
         { reqs=
             Sink
-              { canPut= idle.read 1 .&&. inv flush.canPeek
+              { canPut= idle.read 1
               , put= \ x -> do
                   let (w,h) = tlbSearch x.virtual
                   addr <== satp.ppn # x.virtual.vpn1 # (0b00 :: Bit 2)
+                  match <== (tlb!w).val.val
                   idle.write 1 false
                   abort <== false
                   stop <== false
@@ -322,4 +333,4 @@ makePtwFSM source flush inputs  slave = do
                   way <== w
                   hit <== h }
         , resps= toSource outputs}
-    , toSource flushAck)
+    , flush )

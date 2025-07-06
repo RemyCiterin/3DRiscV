@@ -46,7 +46,6 @@ fshowRegId reg =
   formatCond (reg === 30) (fshow "t5") <>
   formatCond (reg === 31) (fshow "t6")
 
--- TODO: ifence, sfence.vma
 data Mnemonic =
     LUI
   | AUIPC

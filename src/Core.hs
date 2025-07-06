@@ -449,22 +449,6 @@ data CoreConfig =
     , mmioSource :: Bit (SourceWidth TLConfig)
     , hartId :: Integer }
 
-makeSystemUnit hartId systemInputs inputs commit = do
-  systemUnit <- makeSystem hartId systemInputs
-  outputs :: Queue ExecOutput <- makeQueue
-
-  always do
-    when (inputs.canPeek .&&. commit.canPeek .&&. outputs.notFull) do
-      if commit.peek then do
-        out <- systemUnit.exec inputs.peek
-        outputs.enq out
-      else do
-        outputs.enq dontCare
-      inputs.consume
-      commit.consume
-
-  return (toSource outputs, systemUnit)
-
 makeCore ::
   CoreConfig
   -> SystemInputs
@@ -475,8 +459,7 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
   aluQ :: Queue ExecInput <- withName "alu" makeQueue
   lsuQ :: Queue ExecInput <- withName "lsu" makeQueue
   systemQ :: Queue ExecInput <- withName "system" makeQueue
-  systemCommitQ :: Queue (Bit 1) <- withName "system" makeQueue
-  systemOutputQ :: Queue ExecOutput <- withName "system" makeQueue
+  systemBuf :: Reg ExecOutput <- withName "system" $ makeReg dontCare
 
   redirectQ :: Queue Redirection <- withName "fetch" makeBypassQueue
 
@@ -492,8 +475,7 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
 
   registers <- withName "registers" makeRegisterFile
 
-  (systemOut, systemUnit) <- withName "system" $
-    makeSystemUnit hartId systemInputs (toSource systemQ) (toSource systemCommitQ)
+  systemUnit <- withName "system" $ makeSystem hartId systemInputs
 
   epoch :: Ehr Epoch <- makeEhr 2 0
 
@@ -540,7 +522,7 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
         --  "\t[" cycle.val "] enter pc: 0x"
         --  (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
 
-    when (window.canDeq .&&. redirectQ.notFull .&&. lsuCommitQ.notFull .&&. systemCommitQ.notFull) do
+    when (window.canDeq .&&. redirectQ.notFull .&&. lsuCommitQ.notFull) do
       let req :: DecodeOutput = window.first
       let instr :: Instr = req.instr
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
@@ -549,14 +531,15 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
         lsuCommitQ.enq (req.epoch === epoch.read 0)
         doCommit.write 0 true
 
-      when (inv (doCommit.read 0) .&&. instr.isSystem) do
-        systemCommitQ.enq (req.epoch === epoch.read 0)
+      when (inv (doCommit.read 0) .&&. instr.isSystem .&&. systemQ.canDeq) do
+        x <- whenAction (req.epoch === epoch.read 0) $ systemUnit.exec systemQ.first
         doCommit.write 0 true
+        systemBuf <== x
 
       let rdy =
             instr.isMemAccess ?
               ( lsu.canPeek .&&. doCommit.read 1
-              , instr.isSystem ? (systemOut.canPeek .&&. doCommit.read 1, alu.canPeek))
+              , instr.isSystem ? (systemQ.canDeq .&&. doCommit.read 0, alu.canPeek))
 
       when rdy do
         window.deq
@@ -568,7 +551,7 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
         else do
           if instr.isSystem then do
             doCommit.write 1 false
-            systemOut.consume
+            systemQ.deq
           else do
             alu.consume
 
@@ -576,7 +559,7 @@ makeCore CoreConfig{hartId, fetchSource, dataSource, mmioSource} systemInputs = 
           display "exec invalid instruction at pc= 0x" (formatHex 0 req.pc)
 
         when (req.epoch === epoch.read 0) do
-          let resp = instr.isMemAccess ? (lsu.peek, instr.isSystem ? (systemOut.peek, alu.peek))
+          let resp = instr.isMemAccess ? (lsu.peek, instr.isSystem ? (systemBuf.val, alu.peek))
 
           systemUnit.instret
 
