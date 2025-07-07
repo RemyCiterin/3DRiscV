@@ -10,7 +10,13 @@ module mkTop (
   output sd_clk,
   output sd_mosi,
   input sd_miso,
-  output sd_cs
+  output sd_cs,
+  output oled_dc,
+  output oled_res,
+  output oled_vdd,
+  output oled_sclk,
+  output oled_sdin,
+  output oled_vbat
 );
 
   (* mark_debug="true" *) wire RST_N;
@@ -42,15 +48,27 @@ module mkTop (
   //  .reset(RST)
   //);
 
-  TestSpi inst (
-    .out_0(tx),
-    .out_1_miso_0(sd_miso),
-    .out_1_miso_en(1),
-    .out_1_clk(sd_clk),
-    .out_1_mosi(sd_mosi),
-    .out_1_cs(sd_cs),
+  TestOled inst (
+    .out_oled_vdd(oled_vdd),
+    .out_oled_reset(oled_res),
+    .out_oled_clk(oled_sclk),
+    .out_oled_vbat(oled_vbat),
+    .out_oled_dout(oled_sdin),
+    .out_oled_isData(oled_dc),
+    .out_oled_debug(led),
     .clock(clk83mhz),
     .reset(RST)
   );
+
+  //TestSpi inst (
+  //  .out_0(tx),
+  //  .out_1_miso_0(sd_miso),
+  //  .out_1_miso_en(1),
+  //  .out_1_clk(sd_clk),
+  //  .out_1_mosi(sd_mosi),
+  //  .out_1_cs(sd_cs),
+  //  .clock(clk83mhz),
+  //  .reset(RST)
+  //);
 
 endmodule

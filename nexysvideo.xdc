@@ -31,6 +31,14 @@ set_property -dict {PACKAGE_PIN U18 IOSTANDARD LVCMOS33} [get_ports sd_cs] # sd_
 set_property -dict {PACKAGE_PIN AA19 IOSTANDARD LVCMOS33} [get_ports tx]
 set_property -dict {PACKAGE_PIN V18 IOSTANDARD LVCMOS33} [get_ports rx]
 
+#OLED Display
+set_property -dict {PACKAGE_PIN W22 IOSTANDARD LVCMOS33} [get_ports oled_dc]
+set_property -dict {PACKAGE_PIN U21 IOSTANDARD LVCMOS33} [get_ports oled_res]
+set_property -dict {PACKAGE_PIN W21 IOSTANDARD LVCMOS33} [get_ports oled_sclk]
+set_property -dict {PACKAGE_PIN Y22 IOSTANDARD LVCMOS33} [get_ports oled_sdin]
+set_property -dict {PACKAGE_PIN P20 IOSTANDARD LVCMOS33} [get_ports oled_vbat]
+set_property -dict {PACKAGE_PIN V22 IOSTANDARD LVCMOS33} [get_ports oled_vdd]
+
 set_property SLEW FAST [get_ports {ddr3_dq[0]}]
 set_property IN_TERM UNTUNED_SPLIT_50 [get_ports {ddr3_dq[0]}]
 set_property IOSTANDARD SSTL15 [get_ports {ddr3_dq[0]}]
