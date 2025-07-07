@@ -83,7 +83,8 @@ data Printer =
     , displayLower :: Bit 5 -> Action ()
     , displayUpper :: Bit 5 -> Action ()
     , displayHexa :: Bit 4 -> Action ()
-    , displayReturn :: Action ()}
+    , displayBeginLine :: Action ()
+    , displayNewLine :: Action ()}
 
 makePrinter :: Module (Printer, Stream (Bit 8))
 makePrinter = do
@@ -97,7 +98,8 @@ makePrinter = do
             queue.enq (zeroExtend alpha + fromAscii 'a')
         , displayUpper= \ alpha -> do
             queue.enq (zeroExtend alpha + fromAscii 'A')
-        , displayReturn= queue.enq 10
+        , displayBeginLine= queue.enq 10
+        , displayNewLine= queue.enq 13
         , displayHexa= \ hexa -> do
             if (hexa .<. 10) then do
               queue.enq (zeroExtend hexa + fromAscii '0')
@@ -114,7 +116,7 @@ makeTestSpi = do
   (spi, response) <- makeSpi (toStream requestQ)
 
   (printer, uart) <- makePrinter
-  tx <- makeTxUart 217 uart
+  tx <- makeTxUart (div 83_000_000 115200) uart
 
   counter :: Reg (Bit 32) <- makeReg 0
 
@@ -142,7 +144,9 @@ makeTestSpi = do
 
   let displayReturn :: Stmt () = do
         wait printer.canDisplay
-        action do printer.displayReturn
+        action do printer.displayNewLine
+        wait printer.canDisplay
+        action do printer.displayBeginLine
 
   let sendCmd :: Bit 8 -> Bit 32 -> Bit 8 -> Stmt () = \ cmd arg crc -> do
         send 0xFF
@@ -218,7 +222,7 @@ makeTestSpi = do
 
   runStmt do
     action do
-      spi.setDivider 32
+      spi.setDivider 128
       spi.setCS 1
 
       counter <== 10000

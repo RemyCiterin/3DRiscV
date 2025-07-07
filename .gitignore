@@ -1,6 +1,7 @@
 dist-newstyle/
 Verilog/
 build/
+db/
 simulation/sim
 simulation/obj_dir
 sim

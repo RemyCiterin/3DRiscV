@@ -1,7 +1,12 @@
+FAMILY = artix7
+PART = xc7a200tsbg484-1
+DBPART = $(shell echo ${PART} | sed -e 's/-[0-9]//g')
+XDC ?= nexysvideo.xdc
 
 LIB = \
 			src/Top.v \
 			simulation/Block*v \
+			simulation/pll_nexys_video.v \
 			Verilog/*.v
 
 compile:
@@ -12,15 +17,15 @@ test:
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 100000 1 > Mem.hex
 	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -D > zig/firmware.asm
 
-yosys:
-	sed -i '/$$finish/d' Verilog/TestCore.v
-	yosys \
-		-DULX3S -q -p "synth_ecp5 -abc9 -abc2 -top mkTop -json ./build/mkTop.json" \
-		$(LIB)
+#yosys:
+#	sed -i '/$$finish/d' Verilog/TestCore.v
+#	yosys \
+#		-DULX3S -q -p "synth_ecp5 -abc9 -abc2 -top mkTop -json ./build/mkTop.json" \
+#		$(LIB)
 
-nextpnr:
-	nextpnr-ecp5 --force --timing-allow-fail --json ./build/mkTop.json --lpf ulx3s.lpf \
-		--textcfg ./build/mkTop_out.config --85k --freq 40 --package CABGA381
+#nextpnr:
+#	nextpnr-ecp5 --force --timing-allow-fail --json ./build/mkTop.json --lpf ulx3s.lpf \
+#		--textcfg ./build/mkTop_out.config --85k --freq 40 --package CABGA381
 
 ecppack:
 	ecppack --compress --svf-rowsize 100000 --svf ./build/mkTop.svf \
@@ -33,13 +38,59 @@ verilator: compile
 	make -C simulation all
 	./sim
 
-iverilog:
-
-
-
 simulate:
 	iverilog -s top_sim src/SimTop.v simulation/mt48lc16m16a2.v simulation/BlockRAMDual.v Verilog/*.v -o Verilog/SimTop.vvp
 	vvp Verilog/SimTop.vvp
 
 run:
 	./sim
+
+.PHONY: clean
+clean:
+	@rm -f build/*.bit
+	@rm -f build/*.frames
+	@rm -f build/*.fasm
+	@rm -f build/*.json
+	@rm -f build/*.bin
+	@rm -f build/*.bba
+
+.PHONY: pnrclean
+pnrclean:
+	rm build/*.fasm build/*.frames build/*.bit
+
+.PHONY: program
+program:
+	sudo openFPGALoader --board nexysVideo --bitstream build/mkTop.bit
+
+yosys:
+	sed -i '/$$finish/d' Verilog/TestCore.v
+	sed -i '/$$write/d' Verilog/Uart.v
+	sed -i '/$$write/d' Verilog/TestSpi.v
+	yosys -q -p \
+		"synth_xilinx -flatten -abc9 -arch xc7 -top mkTop; write_json build/mkTop.json" \
+		$(LIB)
+
+# The chip database only needs to be generated once
+# that is why we don't clean it with make clean
+db/${DBPART}.bin:
+	${PYPY3} ${NEXTPNR_XILINX_PYTHON_DIR}/bbaexport.py \
+		--device ${PART} --bba ${DBPART}.bba
+	bbasm -l ${DBPART}.bba db/${DBPART}.bin
+	rm -f ${DBPART}.bba
+
+build/mkTop.fasm: build/mkTop.json db/${DBPART}.bin ${XDC}
+	nextpnr-xilinx \
+		--router router1 --chipdb db/${DBPART}.bin --xdc ${XDC} \
+		--json build/mkTop.json --fasm $@
+
+build/mkTop.frames: build/mkTop.fasm
+	fasm2frames --part ${PART} --db-root ${PRJXRAY_DB_DIR}/${FAMILY} \
+		build/mkTop.fasm > build/mkTop.frames
+
+build/mkTop.bit: build/mkTop.frames
+	xc7frames2bit \
+		--part_file ${PRJXRAY_DB_DIR}/${FAMILY}/${PART}/part.yaml \
+		--part_name ${PART} --frm_file build/mkTop.frames \
+		--output_file build/mkTop.bit
+
+nextpnr: build/mkTop.bit
