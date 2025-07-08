@@ -26,6 +26,7 @@ executable blarney-test
     TileLink.GetPut,
     TileLink.RAM,
     TileLink,
+    DDR3,
     Oled,
     Tlb,
     AXI4,

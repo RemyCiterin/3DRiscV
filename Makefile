@@ -9,6 +9,9 @@ LIB = \
 			simulation/pll_nexys_video.v \
 			Verilog/*.v
 
+DDR3 = \
+			 UberDDR3/rtl/*.v
+
 compile:
 	cabal run blarney-test -- --enable-name-prop
 
@@ -67,9 +70,10 @@ yosys:
 	sed -i '/$$write/d' Verilog/TestCore.v
 	sed -i '/$$write/d' Verilog/Uart.v
 	sed -i '/$$write/d' Verilog/TestSpi.v
+	sed -i '/$$write/d' Verilog/TestDDR3.v
 	yosys -q -p \
 		"synth_xilinx -flatten -abc9 -arch xc7 -top mkTop; write_json build/mkTop.json" \
-		$(LIB)
+		$(LIB) $(DDR3)
 
 # The chip database only needs to be generated once
 # that is why we don't clean it with make clean

@@ -1,3 +1,6 @@
 [submodule "xv6-rv32"]
 	path = xv6-rv32
 	url = git@github.com:RemyCiterin/xv6-rv32.git
+[submodule "UberDDR3"]
+	path = UberDDR3
+	url = git@github.com:AngeloJacobo/UberDDR3.git

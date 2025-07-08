@@ -20,6 +20,7 @@ import qualified Sdram
 import qualified Uart
 import qualified Cache
 import qualified Core
+import qualified DDR3
 import qualified Oled
 import TileLink.CoherentBCache
 
@@ -129,5 +130,6 @@ main = do
         --writeVerilogModule testBCacheCore "TestCore" "Verilog/"
         --writeVerilogModule makeTestGetPut "TestCore" "Verilog/"
         writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"
+        writeVerilogModule DDR3.makeWrapperDDR3 "TestDDR3" "Verilog/"
         writeVerilogModule Sdram.makeTestSdram "TestSdram" "Verilog/"
         writeVerilogModule (Oled.makeOled 83) "TestOled" "Verilog/"

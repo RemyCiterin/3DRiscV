@@ -13,6 +13,7 @@ pkgs.mkShell {
     pkgs.yosys
     pkgs.nextpnr
     pkgs.trellis
+    pkgs.screen
 
     pkgs.graphviz
 
