@@ -68,32 +68,57 @@ makeOled clkMhz = do
             sink.put x
             isData <== false }
 
+  let inc :: Stmt () = action (counter <== counter.val + 1)
+  let dec :: Stmt () = action (counter <== counter.val - 1)
+  let rst :: Stmt () = action (counter <== 0)
+
   -- Wait for a given delay in nanosecond
   let until :: Integer -> Stmt () = \ x -> do
         action do
           counter <== lit (div (x * clkMhz) 1000)
         while (counter.val =!= 0) do
-          action do
-            counter <== counter.val - 1
+          dec
 
   let sendCmd :: Bit 8 -> Stmt () = \ x -> do
         wait commandSink.canPut
         action do
           commandSink.put x
-        until 10_000
+        --until 10_000
 
   let sendDat :: Bit 8 -> Stmt () = \ x -> do
         wait dataSink.canPut
         action do
           dataSink.put x
-        until 10_000
+        --until 10_000
+
+  let chargePump1 = 0x8D
+  let chargePump2 = 0x14
+  let preCharge1 = 0xD9
+  let preCharge2 = 0xF1
+  let dispContrast1 = 0x81
+  let dispContrast2 = 0x0F
+  let setSegRemap = 0xA0
+  let setScanDirection = 0xC0
+  let setLowerColumnAddress = 0xDA
+  let lowerColumnAddress = 0x00
+  let displayOn = 0xAF
+  let displayOff = 0xAE
+  let setPage = 0x22
+  let leftColumn1 = 0x00
+  let leftColumn2 = 0x10
+
+  let updatePageState :: Bit 2 -> Stmt () = \ page -> do
+        sendCmd setPage
+        sendCmd (zeroExtend page)
+        sendCmd leftColumn1
+        sendCmd leftColumn2
 
   runStmt do
     until 50
     action do
       vdd <== 0
     until 1_000_000
-    sendCmd 0xAE -- DisplayOff
+    sendCmd displayOff
     action do
       reset <== 0
     until 1_000_000
@@ -101,26 +126,60 @@ makeOled clkMhz = do
       reset <== 1
     until 1_000_000
 
-    sendCmd 0x8D -- ChargePump1
-    sendCmd 0x14 -- ChargePump2
-    sendCmd 0xD9 -- PreCharge1
-    sendCmd 0xF1 -- PreCharge2
+    sendCmd chargePump1
+    sendCmd chargePump2
+    sendCmd preCharge1
+    sendCmd preCharge2
 
     action do
       vbat <== 0
     until 1_000_000
 
-    sendCmd 0x81 -- DispContrast1
-    sendCmd 0x0F -- DispContrast2
-    sendCmd 0xA0 -- SetSegRemap
-    sendCmd 0xC0 -- SetScanDirection
-    sendCmd 0xDA -- SetLowerColumnAddress
-    sendCmd 0x00 -- LowerColumnAddress
-    sendCmd 0xAF -- DisplayOn
+    sendCmd dispContrast1
+    sendCmd dispContrast2
+    sendCmd setSegRemap
+    sendCmd setScanDirection
+    sendCmd setLowerColumnAddress
+    sendCmd lowerColumnAddress
+    sendCmd displayOn
 
     until 1_000_000
 
-    sendCmd 0xA5
+    updatePageState 0
+
+    rst
+    updatePageState 0
+    while (counter.val .<. 16*8) do
+      sendDat 0x00
+      inc
+
+    rst
+    updatePageState 1
+    while (counter.val .<. 16*8) do
+      sendDat (lower counter.val)
+      inc
+
+    rst
+    updatePageState 2
+    while (counter.val .<. 16*8) do
+      sendDat 0x55
+      inc
+
+    rst
+    updatePageState 3
+    while (counter.val .<. 16*8) do
+      sendDat 0x55
+      inc
+
+    --updatePageState 1
+    --action do
+    --  counter <== 0
+    --while (counter.val .<. 64) do
+    --  action do
+    --    counter <== counter.val + 1
+    --  sendDat 0x30
+
+    --sendCmd 0xA5
 
     action do
       debug <== ones
