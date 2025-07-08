@@ -96,7 +96,7 @@ makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
   (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <- withName "ITLB" $
-    makePtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
+    makeDummyPtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
 
   tagQ :: Queue PtwResponse <- makeQueue
 
@@ -579,15 +579,13 @@ makeCore ::
   -> Module (TLMaster TLConfig, TLMaster TLConfig)
 makeCore
   CoreConfig{hartId,fetchSource,dataSource,mmioSource,itlbSource,dtlbSource}
-  systemInputs = do
+  systemInputs = mdo
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
   lsuCommitQ :: Queue (Bit 1) <- withName "lsu" makeQueue
   aluQ :: Queue ExecInput <- withName "alu" makeQueue
   lsuQ :: Queue ExecInput <- withName "lsu" makeQueue
   systemQ :: Queue ExecInput <- withName "system" makeQueue
   systemBuf :: Reg ExecOutput <- withName "system" $ makeReg dontCare
-
-  systemUnit <- withName "system" $ makeSystem hartId systemInputs
 
   redirectQ :: Queue Redirection <- withName "fetch" makeBypassQueue
 
@@ -609,6 +607,12 @@ makeCore
         (toStream lsuCommitQ)
 
   registers <- withName "registers" makeRegisterFile
+
+  let tlbFlush = do
+        itlbFlush
+        dtlbFlush
+
+  systemUnit <- withName "system" $ makeSystem hartId tlbFlush systemInputs
 
   epoch :: Ehr Epoch <- makeEhr 2 0
 

@@ -39,9 +39,10 @@ data SystemIfc =
 
 makeSystem ::
   Integer
+  -> Action ()
   -> SystemInputs
   -> Module SystemIfc
-makeSystem hartId inputs = do
+makeSystem hartId tlbFlush inputs = do
   let misaCSRs = [readOnlyCSR 0xf10 0b01000000000101000000000100000001]
   let mvendoridCSRs = [readOnlyCSR 0xf11 0]
   let marchidCSRs = [readOnlyCSR 0xf12 0]
@@ -224,6 +225,16 @@ makeSystem hartId inputs = do
                 , pc= dontCare
                 , rd= dontCare }
           else if input.instr.opcode `is` [FENCE_I] then do
+            return
+              ExecOutput
+                { cause= dontCare
+                , exception= false
+                , tval= dontCare
+                , flush= true
+                , pc= dontCare
+                , rd= dontCare }
+          else if input.instr.opcode `is` [SFENCE_VMA] then do
+            tlbFlush
             return
               ExecOutput
                 { cause= dontCare

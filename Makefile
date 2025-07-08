@@ -64,6 +64,7 @@ program:
 
 yosys:
 	sed -i '/$$finish/d' Verilog/TestCore.v
+	sed -i '/$$write/d' Verilog/TestCore.v
 	sed -i '/$$write/d' Verilog/Uart.v
 	sed -i '/$$write/d' Verilog/TestSpi.v
 	yosys -q -p \

@@ -317,6 +317,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
             , lane }
 
   doFlush :: Wire (Bit 1) <- makeWire false
+  hasFlush :: Reg (Bit 1) <- makeReg false
 
   -- Warning: it must be statically clear that each loop step take at
   -- least one cycle, otherwise we will observe a circular path
@@ -360,7 +361,8 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
                           , vpn0= virt.vpn0
                           , vpn1= virt.vpn1
                           , pte }
-                  tlb!way.val <== some out
+                  when (inv hasFlush.val) do
+                    tlb!way.val <== some out
                   match <== out
                   stop <== true
                 else if inv pte.validPTE .||. index.val === 0 then do
@@ -403,6 +405,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
 
   let flush = do
         doFlush <== true
+        hasFlush <== true
         forM_ tlb \ r -> do
           r <== none
 
@@ -410,12 +413,13 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
     ( Server
         { reqs=
             Sink
-              { canPut= inputs.notFull
+              { canPut= inputs.notFull .&&. inv doFlush.val
               , put= \ x -> do
                   -- Tlb Lookup
                   let (w,h) = tlbSearch x.virtual
                   addr <== satp.ppn # x.virtual.vpn1 # (0b00 :: Bit 2)
                   match <== (tlb!w).val.val
+                  hasFlush <== false
                   abort <== false
                   stop <== false
                   inputs.enq x

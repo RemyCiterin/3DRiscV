@@ -33,12 +33,12 @@ module mkTop (
   wire RST;
   assign RST = !RST_N;
 
-  //TestCore inst (
-  //  .out(ftdi_rxd),
-  //  .in0(ftdi_txd),
-  //  .clock(clk100mhz),
-  //  .reset(!RST_N)
-  //);
+  TestCore inst (
+    .out(tx),
+    .in0(rx),
+    .clock(clk83mhz),
+    .reset(RST)
+  );
 
   //Uart inst (
   //  .out_tx(tx),
@@ -48,17 +48,17 @@ module mkTop (
   //  .reset(RST)
   //);
 
-  TestOled inst (
-    .out_oled_vdd(oled_vdd),
-    .out_oled_reset(oled_res),
-    .out_oled_clk(oled_sclk),
-    .out_oled_vbat(oled_vbat),
-    .out_oled_dout(oled_sdin),
-    .out_oled_isData(oled_dc),
-    .out_oled_debug(led),
-    .clock(clk83mhz),
-    .reset(RST)
-  );
+  //TestOled inst (
+  //  .out_oled_vdd(oled_vdd),
+  //  .out_oled_reset(oled_res),
+  //  .out_oled_clk(oled_sclk),
+  //  .out_oled_vbat(oled_vbat),
+  //  .out_oled_dout(oled_sdin),
+  //  .out_oled_isData(oled_dc),
+  //  .out_oled_debug(led),
+  //  .clock(clk83mhz),
+  //  .reset(RST)
+  //);
 
   //TestSpi inst (
   //  .out_0(tx),

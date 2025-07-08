@@ -8,7 +8,6 @@ pkgs.mkShell {
     pkgs.gtkwave
     pkgs.openfpgaloader
     pkgs.pkgsCross.riscv32-embedded.buildPackages.gcc
-    pkgs.pkgsCross.riscv64-embedded.buildPackages.gcc
     pkgs.qemu
 
     pkgs.yosys
