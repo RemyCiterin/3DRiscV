@@ -11,6 +11,7 @@ import Blarney.ADT
 
 import TileLink
 import TileLink.GetPut
+import MulDiv
 
 import CPU
 import qualified Spi
@@ -119,6 +120,8 @@ main = do
         --simulate testRAM
         --simulate Cache.testCache
         simulate testIf
+     | "--formal" `elem` args -> do
+        verifyMultiplier
      | otherwise -> do
         writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogTop top "Main" "Verilog/"
@@ -126,7 +129,8 @@ main = do
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
         writeVerilogTop testRegFile "Rf" "Verilog/"
         writeVerilogTop testRAM "TestRam" "Verilog/"
-        writeVerilogModule Core.makeFakeTestCore "TestCore" "Verilog/"
+        writeVerilogModule makeTestMultiplier "TestCore" "Verilog/"
+        --writeVerilogModule Core.makeFakeTestCore "TestCore" "Verilog/"
         --writeVerilogModule testBCacheCore "TestCore" "Verilog/"
         --writeVerilogModule makeTestGetPut "TestCore" "Verilog/"
         writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"
