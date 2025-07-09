@@ -202,6 +202,8 @@ makeBCacheCoreWith source slave execAtomic = do
       nextState <== state.read 1
       address <== addr
 
+      -- display source " probe " (formatHex 0 addr)
+
       sequence_ [do
           p.load idx
           t.load idx
@@ -286,6 +288,8 @@ makeBCacheCoreWith source slave execAtomic = do
                     | (t,p,i) <- zip3 keyRam permRam [0..]]
 
           if hit then do
+            --when (source .<. 2) do
+            --  display source " hit " (formatHex 0 (baseAddr msb))
             execOp hitWay
             state.write 0 st_idle
             when (dataRamA.storeActiveBE) do
@@ -305,10 +309,15 @@ makeBCacheCoreWith source slave execAtomic = do
               when (oldPerm === branch) do
                 releaseM.start.put (b2n, baseAddr oldKey, none)
 
+              --when (source .<. 2) do
+              --  display source " release " (formatHex 0 (baseAddr oldKey))
+
               -- invalidate the permission of the choosen block
               storeListRAM permRam hitWay index.val nothing
               state.write 0 st_release
             else do
+              --when (source .<. 2) do
+              --  display source " acquire " (formatHex 0 (baseAddr msb))
               state.write 0 st_acquire
               acquireM.acquireBlock
                 (needPermTrunk @atomic @p request.val ? (n2t, n2b))

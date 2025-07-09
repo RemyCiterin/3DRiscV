@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) !void {
         .cpu_features_add = Target.riscv.featureSet(&[_]Feature{
             .zicbom,
             .a,
+            .m,
         }),
         .os_tag = .freestanding,
         .abi = .none, // .eabi

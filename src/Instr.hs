@@ -91,6 +91,14 @@ data Mnemonic =
   | AMOMINU
   | AMOMAXU
   | AMOSWAP
+  | MUL
+  | MULH
+  | MULHSU
+  | MULHU
+  | DIV
+  | DIVU
+  | REM
+  | REMU
   deriving (Bounded, Enum, Show, Ord, Eq)
 
 -- | Upper bound on number of instruction mnemonics used by the decoder
@@ -132,6 +140,14 @@ decodeTable =
   , "0000000 rs2<5> rs1<5> 001 rd<5> 0110011" --> SLL
   , "0000000 rs2<5> rs1<5> 101 rd<5> 0110011" --> SRL
   , "0100000 rs2<5> rs1<5> 101 rd<5> 0110011" --> SRA
+  , "0000001 rs2<5> rs1<5> 000 rd<5> 0110011" --> MUL
+  , "0000001 rs2<5> rs1<5> 001 rd<5> 0110011" --> MULH
+  , "0000001 rs2<5> rs1<5> 010 rd<5> 0110011" --> MULHSU
+  , "0000001 rs2<5> rs1<5> 011 rd<5> 0110011" --> MULHU
+  , "0000001 rs2<5> rs1<5> 100 rd<5> 0110011" --> DIV
+  , "0000001 rs2<5> rs1<5> 101 rd<5> 0110011" --> DIVU
+  , "0000001 rs2<5> rs1<5> 110 rd<5> 0110011" --> REM
+  , "0000001 rs2<5> rs1<5> 111 rd<5> 0110011" --> REMU
   , "imm[20] imm[10:1] imm[11] imm[19:12] rd<5> 1101111" --> JAL
   , "imm[11:0] rs1<5> 000 rd<5> 1100111" --> JALR
   , "off[12] off[10:5] rs2<5> rs1<5> 000 off[4:1] off[11] 1100011" --> BEQ

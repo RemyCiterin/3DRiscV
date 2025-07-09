@@ -89,6 +89,7 @@ makeAcquireMaster source logSize arbiter ram slave = do
         sink <== msg.sink
 
   let init g idx addr opcode = do
+        dynamicAssert (slave.channelA.canPut .&&. inv valid.val) "not ready"
         slave.channelA.put
           ChannelA
             { opcode= opcode
@@ -107,6 +108,7 @@ makeAcquireMaster source logSize arbiter ram slave = do
     , acquirePerms= \ g addr -> do
         init g dontCare addr (tag #AcquireBlock g)
     , acquireAck= do
+        dynamicAssert slave.channelE.canPut "channelE not ready"
         slave.channelE.put ChannelE{sink= sink.val}
         valid <== false
         last <== false

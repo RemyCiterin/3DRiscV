@@ -518,13 +518,13 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
 
   return (master, toStream outputQ, tlbFlush)
 
-makeAlu :: Stream ExecInput -> Module (Stream ExecOutput)
-makeAlu input = do
-  return Source{
-    consume= input.consume,
-    canPeek= input.canPeek,
-    peek= alu input.peek
-  }
+--makeAlu :: Stream ExecInput -> Module (Stream ExecOutput)
+--makeAlu input = do
+--  return Source{
+--    consume= input.consume,
+--    canPeek= input.canPeek,
+--    peek= alu input.peek
+--  }
 
 data RegisterFile =
   RegisterFile
@@ -655,9 +655,10 @@ makeCore
         when (rd =!= 0) do
           registers.setBusy rd
 
-        --display
-        --  "\t[" hartId "@" cycle.val "] enter pc: 0x"
-        --  (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
+        --when (hartId == 0) do
+        --  display
+        --    "\t[" hartId "@" cycle.val "] enter pc: 0x"
+        --    (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
 
     when (window.canDeq .&&. redirectQ.notFull .&&. lsuCommitQ.notFull) do
       let req :: DecodeOutput = window.first
@@ -692,10 +693,10 @@ makeCore
           else do
             alu.consume
 
-        when (instr.opcode === 0) do
-          display "exec invalid instruction at pc= 0x" (formatHex 0 req.pc)
-
         when (req.epoch === epoch.read 0) do
+          when (instr.opcode === 0) do
+            display "exec invalid instruction at pc= 0x" (formatHex 0 req.pc)
+
           let resp = instr.isMemAccess ? (lsu.peek, instr.isSystem ? (systemBuf.val, alu.peek))
 
           systemUnit.instret
@@ -708,20 +709,24 @@ makeCore
             --display
             --  "exception at pc= 0x" (formatHex 0 req.pc)
             --  " to pc= 0x" (formatHex 0 trapPc)
-          else if systemUnit.canInterrupt.valid .&&. inv instr.isMemAccess then do
+          else if systemUnit.canInterrupt.valid .&&. inv instr.isMemAccess .&&. inv instr.isSystem then do
             let cause = systemUnit.canInterrupt.val
             trapPc <- systemUnit.interrupt req.pc cause dontCare
 
             redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
             epoch.write 0 (epoch.read 0 + 1)
+
+            --display
+            --  "interrupt at pc= 0x" (formatHex 0 req.pc)
+            --  " to pc= 0x" (formatHex 0 trapPc)
           else do
-            --when (if hartId == 0 then true else false) do
+            --when (hartId == 0) do
             --  display
             --    "\t[" hartId "@" cycle.val "] retire pc: "
             --    (formatHex 8 req.pc) " instr: " (fshow instr)
 
             when (rd =!= 0) do
-              --when (if hartId == 0 then true else false) do
+              --when (hartId == 0) do
               --  display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
               registers.write rd resp.rd
 
@@ -766,7 +771,7 @@ makeFakeTestCore _ = mdo
         XBarConfig
           { bce= True
           , rootAddr= \ x -> x .>=. 0x80000000 ? (0,1)
-          , rootSink= \ x -> x === 0 ? (0,1)
+          , rootSink= \ x -> 0
           , rootSource= \ x ->
               select
                 [ x === 0 --> 0

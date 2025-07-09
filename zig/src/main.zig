@@ -65,8 +65,8 @@ pub fn log(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    logSpinlock.lock();
-    defer logSpinlock.unlock();
+    //logSpinlock.lock();
+    //defer logSpinlock.unlock();
 
     const id = RV.mhartid.read();
 

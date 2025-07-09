@@ -2,13 +2,18 @@ module Alu where
 
 import Blarney
 import Blarney.Option
+import Blarney.SourceSink
+import Blarney.ClientServer
 import Blarney.Utils
 import Blarney.ADT
 import Blarney.Ehr
 
 import Instr
+import MulDiv
 import CSR
 
+-- Return a valid execution with pc+4 as output if the instruction
+-- is not managedby the ALU (used for multiplier/divider)
 alu :: ExecInput -> ExecOutput
 alu query =
   ExecOutput {rd, exception, cause, pc= newPc, tval= newPc, flush= false}
@@ -55,6 +60,64 @@ alu query =
         opcode `is` [SRL] --> rs1 .>>. slice @4 @0 op2,
         opcode `is` [SRA] --> rs1 .>>>. slice @4 @0 op2
       ]
+
+makeAlu :: Source ExecInput -> Module (Source ExecOutput)
+makeAlu inputs = do
+  Server{reqs=mulIn, resps=mulOut} <- makeMultiplier @64 2
+  Server{reqs=divIn, resps=divOut} <- makeDivider @34
+
+  idle :: Reg (Bit 1) <- makeReg true
+  always do
+    when (idle.val .&&. inputs.canPeek) do
+      when (mulIn.canPut .&&. isMul) do
+        mulIn.put (mulLhs, mulRhs)
+        idle <== false
+
+      when (divIn.canPut .&&. isDivRem) do
+        divIn.put (divNum, divDen)
+        idle <== false
+
+  return
+    Source
+      { canPeek=
+          inputs.canPeek
+          .&&. ((mulOut.canPeek .&&. inv idle.val) .||. inv isMul)
+          .&&. ((divOut.canPeek .&&. inv idle.val) .||. inv isDivRem)
+      , peek=
+          let rd = selectDefault output.rd
+                [ divOverflow --> isRem ? (0, rs1)
+                , divZero --> isRem ? (0, -1)
+                , isDivRem .&&. inv divOverflow .&&. inv divZero -->
+                    isRem ? (lower divOut.peek.snd, lower divOut.peek.fst)
+                , isMul --> mulUpper ? (upper mulOut.peek, lower mulOut.peek) ] in
+          (output{rd} :: ExecOutput)
+      , consume= do
+          inputs.consume
+          when isMul mulOut.consume
+          when isDivRem divOut.consume
+          when (isMul .||. isDivRem) do
+            idle <== true }
+  where
+    instr = inputs.peek.instr
+    output = alu inputs.peek
+    opcode = instr.opcode
+    rs1 = inputs.peek.rs1
+    rs2 = inputs.peek.rs2
+
+    mulLhs, mulRhs :: Bit 64
+    mulLhs = opcode `is` [MUL,MULH,MULHSU] ? (signExtend rs1, zeroExtend rs1)
+    mulRhs = opcode `is` [MUL,MULH] ? (signExtend rs2, zeroExtend rs2)
+    mulUpper = opcode `is` [MULH, MULHSU, MULHU]
+    isMul = opcode `is` [MUL,MULH,MULHSU,MULHU]
+
+    divNum, divDen :: Bit 34
+    divNum = opcode `is` [DIV,REM] ? (signExtend rs1, zeroExtend rs1)
+    divDen = opcode `is` [DIV,REM] ? (signExtend rs2, zeroExtend rs2)
+    isDivRem = opcode `is` [DIV,DIVU,REM,REMU]
+    isRem = opcode `is` [REM,REMU]
+
+    divOverflow = opcode `is` [DIV,REM] .&&. signedDivOverflow (rs1, rs2)
+    divZero = opcode `is` [DIV,DIVU,REM,REMU] .&&. rs2 === 0
 
 execCSR :: Priv -> CSRUnit -> ExecInput -> Action ExecOutput
 execCSR currentPriv unit ExecInput{instr, pc, rs1} = do

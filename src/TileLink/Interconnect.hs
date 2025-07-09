@@ -164,7 +164,7 @@ makeTLXBarBCE config = do
         [constant i === config.rootSource sourceD.peek.source
           | i <- [0..toInteger $ valueOf @m - 1]]
   let rootE =
-        [constant i === config.rootSink sourceD.peek.sink
+        [constant i === config.rootSink sourceE.peek.sink
           | i <- [0..toInteger $ valueOf @n - 1]]
 
   let canPeekA = map (sourceA.canPeek .&&.) rootA

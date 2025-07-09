@@ -36,30 +36,18 @@ makeMultiplier steps
       rhs <== rhs.val .>>. (lit (toInteger steps) :: Bit n)
       lhs <== lhs.val .<<. (lit (toInteger steps) :: Bit n)
 
-  doDeq :: Wire (Bit 1) <- makeWire false
-  doEnq :: Wire (Bit 1) <- makeWire false
-
-  always do
-    when (doDeq.val .&&. inv doEnq.val) do
-      idle <== true
-
-    when (doEnq.val .&&. inv doDeq.val) do
-      idle <== false
-
   let reqs =
         Sink
-          { canPut= idle.val .||. doDeq.val
+          { canPut= idle.val
           , put= \ (x,y) -> do
-              doEnq <== true
+              idle <== false
               -- `rhs` is divided by two at each steps, so I try to make it null asap
               -- I assmue that in a program the probability that a lot of msb are zeros is
               -- higher than having a lot of lsb to zeros (so I optimize rhs and not lhs)
               if x .<. y then do
                 rhs <== x
                 lhs <== y
-                display (formatHex 0 x) " " (formatHex 0 y)
               else do
-                display (formatHex 0 y) " " (formatHex 0 x)
                 rhs <== y
                 lhs <== x
               acc <== 0 }
@@ -68,7 +56,7 @@ makeMultiplier steps
         Source
           { peek= acc.val
           , canPeek= inv idle.val .&&. stop
-          , consume= doDeq <== true }
+          , consume= idle <== true }
 
   return Server{reqs, resps}
 
@@ -102,22 +90,12 @@ makeDivider = do
 
       index <== index.val .>>. (1 :: Bit n)
 
-  doDeq :: Wire (Bit 1) <- makeWire false
-  doEnq :: Wire (Bit 1) <- makeWire false
-
-  always do
-    when (doDeq.val .&&. inv doEnq.val) do
-      idle <== true
-
-    when (doEnq.val .&&. inv doDeq.val) do
-      idle <== false
-
   let reqs =
         Sink
-          { canPut= idle.val .||. doDeq.val
+          { canPut= idle.val
           , put= \ (x, y) -> do
               index <== lit (2 ^ (valueOf @n - 1))
-              doEnq <== true
+              idle <== false
               num <== x
               den <== y
               rem <== 0
@@ -127,14 +105,14 @@ makeDivider = do
         Source
           { peek= (div.val, rem.val)
           , canPeek= inv idle.val .&&. index.val === 0
-          , consume= doDeq <== true }
+          , consume= idle <== true }
 
   return Server{reqs,resps}
 
 -- Detect a signed division overflow (-minInt is not representable)
 signedDivOverflow :: forall n. KnownNat n => (Bit n, Bit n) -> Bit 1
 signedDivOverflow (num, den) =
-  den === -1 .&&. num === lit (- 2 ^ (valueOf @n - 1))
+  den === -1 .&&. num === -lit (2 ^ (valueOf @n - 1))
 
 forwardProgress = True
 
