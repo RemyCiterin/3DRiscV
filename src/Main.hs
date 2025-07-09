@@ -129,7 +129,7 @@ main = do
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
         writeVerilogTop testRegFile "Rf" "Verilog/"
         writeVerilogTop testRAM "TestRam" "Verilog/"
-        writeVerilogModule makeTestMultiplier "TestCore" "Verilog/"
+        writeVerilogModule makeTestDivider "TestCore" "Verilog/"
         --writeVerilogModule Core.makeFakeTestCore "TestCore" "Verilog/"
         --writeVerilogModule testBCacheCore "TestCore" "Verilog/"
         --writeVerilogModule makeTestGetPut "TestCore" "Verilog/"
