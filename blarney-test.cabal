@@ -28,6 +28,7 @@ executable blarney-test
     TileLink,
     MulDiv,
     DDR3,
+    Plic,
     Oled,
     Tlb,
     AXI4,
