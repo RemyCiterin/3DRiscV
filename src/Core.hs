@@ -127,10 +127,11 @@ makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
                   , instr= true
                   , width= 0b10 }}
 
+  let rd = tagQ.first.success ? (cache.loadResponse.peek, 0)
   let resps=
         Source
           { canPeek= tagQ.canDeq .&&. (inv tagQ.first.success .||. cache.loadResponse.canPeek)
-          , peek= tagQ.first{rd= cache.loadResponse.peek} :: PtwResponse
+          , peek= tagQ.first{rd} :: PtwResponse
           , consume= do
               when tagQ.first.success do
                 cache.loadResponse.consume
@@ -701,8 +702,10 @@ makeCore
 
           systemUnit.instret
 
-          if resp.exception then do
-            trapPc <- systemUnit.exception req.pc resp.cause resp.tval
+          if resp.exception .||. req.exception then do
+            let tval = req.exception ? (req.pc, resp.tval)
+            let cause = req.exception ? (req.cause, resp.cause)
+            trapPc <- systemUnit.exception req.pc cause tval
             redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
             epoch.write 0 (epoch.read 0 + 1)
 

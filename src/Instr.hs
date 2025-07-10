@@ -220,7 +220,6 @@ decodeInstr instr =
   , accessWidth = getBitFieldSel selMap "aw" instr
   , isSystem =
       opcode `is` [CSRRW,CSRRC,CSRRS,MRET,SRET,WFI,ECALL,FENCE_I,SFENCE_VMA]
-      .||. opcode === 0
   , isUnsigned = getBitFieldSel selMap "ul" instr
   , isMemAccess = opcode `is` [LOAD,STORE,FENCE,STOREC,LOADR] .||. isAMO
   , canBranch = opcode `is` [JAL,JALR,BEQ,BNE,BLT,BLTU,BGE,BGEU]

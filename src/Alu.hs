@@ -26,9 +26,9 @@ alu query =
     off = query.instr.off
     pc = query.pc
 
-    cause = instruction_address_misaligned
+    cause = opcode === 0 ? (illegal_instruction, instruction_address_misaligned)
 
-    exception = slice @1 @0 newPc =!= 0
+    exception = opcode === 0 .||. slice @1 @0 newPc =!= 0
 
     taken = select [
         opcode `is` [BEQ] --> rs1 === rs2,
