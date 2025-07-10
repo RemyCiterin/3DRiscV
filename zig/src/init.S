@@ -46,8 +46,6 @@ _start:
   lw t0, 0(t0)
   beqz t0, .init_stack_cpu1
   la sp, stack_top1
-.loop_cpu1:
-  j .loop_cpu1
 1:
   la t0, _reboot
   csrw mtvec, t0

@@ -19,7 +19,7 @@ formal:
 	cabal run blarney-test -- --formal
 
 test:
-	riscv32-none-elf-objcopy -O ihex zig/zig-out/bin/kernel.elf Mem.ihex
+	riscv32-none-elf-objcopy --strip-debug -O ihex zig/zig-out/bin/kernel.elf Mem.ihex
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 100000 1 > Mem.hex
 	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -D > zig/firmware.asm
 

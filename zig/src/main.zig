@@ -41,8 +41,6 @@ pub const std_options = .{
     .logFn = log,
 };
 
-// TODO: if their is a timer interrupt during log, then spinlock is busy
-// and their is a dead-lock if the kernel try to log something
 var logSpinlock = Spinlock{};
 
 // Log informations provided by the kernel. As example:
@@ -65,8 +63,15 @@ pub fn log(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    //logSpinlock.lock();
-    //defer logSpinlock.unlock();
+    // This ressource is shared between kernel and users,
+    // so we may observe a deadlock if this function is
+    // interrupted AND used by the kernel
+    const mie = RV.mstatus.read().MIE;
+    RV.mstatus.modify(.{ .MIE = 0 });
+    defer RV.mstatus.modify(.{ .MIE = mie });
+
+    logSpinlock.lock();
+    defer logSpinlock.unlock();
 
     const id = RV.mhartid.read();
 
@@ -96,7 +101,7 @@ pub fn panic(
     hang();
 }
 
-extern var kalloc_buffer: [128 * 1024]u8;
+extern var kalloc_buffer: [31 * 1024 * 1024]u8;
 
 // Main kernel allocator
 pub var kalloc: Allocator = undefined;
@@ -146,7 +151,7 @@ pub export fn kernel_main() align(16) callconv(.C) void {
         \\  interface for UART, SDRAM, MMC and HDMI
     , .{});
 
-    const kalloc_len = 64 * 1024;
+    const kalloc_len = 20 * 1024 * 1024;
     var kernel_fba = std.heap.FixedBufferAllocator.init(kalloc_buffer[0..kalloc_len]);
     kalloc = kernel_fba.allocator();
 

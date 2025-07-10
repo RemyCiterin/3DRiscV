@@ -792,7 +792,7 @@ makeFakeTestCore _ = mdo
 
   ([master0,master1], [slave0,slave1,slave2,slave3]) <-
     withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
-  uncoherentSlave <- withName "memory" $ makeTLRAM @18 @TLConfig' config
+  uncoherentSlave <- withName "memory" $ makeTLRAM @25 @TLConfig' config
 
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0
