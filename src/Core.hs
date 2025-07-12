@@ -127,6 +127,8 @@ makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
                   , instr= true
                   , width= 0b10 }}
 
+  -- Ensure that the instruction will be executed by th Alu in case
+  -- of a misaligned instruction exception
   let rd = tagQ.first.success ? (cache.loadResponse.peek, 0)
   let resps=
         Source
@@ -709,9 +711,9 @@ makeCore
             redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
             epoch.write 0 (epoch.read 0 + 1)
 
-            --display
-            --  "exception at pc= 0x" (formatHex 0 req.pc)
-            --  " to pc= 0x" (formatHex 0 trapPc)
+            display
+              "exception at pc= 0x" (formatHex 0 req.pc)
+              " to pc= 0x" (formatHex 0 trapPc) " " cause
           else if systemUnit.canInterrupt.valid .&&. inv instr.isMemAccess .&&. inv instr.isSystem then do
             let cause = systemUnit.canInterrupt.val
             trapPc <- systemUnit.interrupt req.pc cause dontCare
@@ -719,9 +721,9 @@ makeCore
             redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
             epoch.write 0 (epoch.read 0 + 1)
 
-            --display
-            --  "interrupt at pc= 0x" (formatHex 0 req.pc)
-            --  " to pc= 0x" (formatHex 0 trapPc)
+            display
+              "interrupt at pc= 0x" (formatHex 0 req.pc)
+              " to pc= 0x" (formatHex 0 trapPc)
           else do
             --when (hartId == 0) do
             --  display
@@ -804,21 +806,20 @@ makeFakeTestCore _ = mdo
   withName "xbar" $ makeConnection dmaster1 slave3
   withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
 
-  (clintMmio0, clint0) <- withName "clint" $ makeClint @TLConfig 0x30000000
-  (clintMmio1, clint1) <- withName "clint" $ makeClint @TLConfig 0x30010000
-  clintSlave <- makeTLMmio @TLConfig 1 (clintMmio0 ++ clintMmio1)
+  (clintMmio, clint) <- withName "clint" $ makeClint @TLConfig 2 0x30000000
+  clintSlave <- makeTLMmio @TLConfig 1 clintMmio
   withName "clint" $ makeConnection master1 clintSlave
 
   let systemInputs0 =
         SystemInputs
-          { softwareInterrupt= clint0.softwareInterrupt
-          , timerInterrupt= clint0.timerInterrupt
+          { softwareInterrupt= clint.softwareInterrupt
+          , timerInterrupt= clint.timerInterrupt!(0 :: Int)
           , externalInterrupt= false }
 
   let systemInputs1 =
         SystemInputs
-          { softwareInterrupt= clint1.softwareInterrupt
-          , timerInterrupt= clint1.timerInterrupt
+          { softwareInterrupt= clint.softwareInterrupt
+          , timerInterrupt= clint.timerInterrupt!(1 :: Int)
           , externalInterrupt= false }
 
   let coreconfig0 =

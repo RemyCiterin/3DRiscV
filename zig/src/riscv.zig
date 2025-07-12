@@ -3,12 +3,12 @@ const std = @import("std");
 pub const XLEN = @bitSizeOf(usize);
 
 pub fn getTP() usize {
-    var ret: usize = undefined;
-    asm volatile ("mv %[ret], tp"
-        : [ret] "=r" (ret),
+    return asm volatile ("mv %[ret], tp"
+        : [ret] "=r" (-> u32),
     );
-    return ret;
 }
+
+pub const page_t = *align(4096) [4096]u8;
 
 pub const CSRenum = union(enum) {
     // User Trap Setup

@@ -36,6 +36,13 @@ const Bench = @import("bench.zig");
 // Protected user memory allocator
 const UserAlloc = @import("user_alloc.zig");
 
+// Virtual memory
+const VM = @import("vm.zig");
+
+// Page allocator
+const PAlloc = @import("page_allocator.zig").PAlloc;
+const palloc = @import("page_allocator.zig").palloc;
+
 pub const std_options = .{
     .log_level = .info,
     .logFn = log,
@@ -66,17 +73,17 @@ pub fn log(
     // This ressource is shared between kernel and users,
     // so we may observe a deadlock if this function is
     // interrupted AND used by the kernel
-    const mie = RV.mstatus.read().MIE;
-    RV.mstatus.modify(.{ .MIE = 0 });
-    defer RV.mstatus.modify(.{ .MIE = mie });
+    const sie = RV.sstatus.read().SIE;
+    RV.sstatus.modify(.{ .SIE = 0 });
+    defer RV.sstatus.modify(.{ .SIE = sie });
 
     logSpinlock.lock();
     defer logSpinlock.unlock();
 
-    const id = RV.mhartid.read();
+    const id: u32 = RV.getTP();
 
     _ = level;
-    const cycle: usize = RV.mcycle.read();
+    const cycle: usize = @truncate(Clint.getTime());
 
     const prefix =
         "[cpu {}: " ++ @tagName(scope) ++ " at cycle {}] ";
@@ -111,32 +118,81 @@ pub export fn handler(manager: *Manager) callconv(.C) void {
     const logger = std.log.scoped(.handler);
     const pid = manager.current;
 
-    if (RV.mcause.read().INTERRUPT == 0) {
-        logger.info("cause: {}", .{RV.mcause.read()});
-        logger.info("mepc: {x}", .{manager.read(pid, .pc)});
+    if (RV.scause.read().INTERRUPT == 0) {
+        logger.info("cause: {}", .{RV.scause.read()});
+        logger.info("sepc: {x}", .{manager.read(pid, .pc)});
 
         manager.write(pid, .pc, manager.read(pid, .pc) + 4);
         manager.syscall() catch unreachable;
-    } else if (RV.mip.read().MTIP == 1) {
+    } else if (RV.sip.read().STIP == 1) {
         try UART.writer.print("timmer interrupt\n", .{});
         Clint.setNextTimerInterrupt();
         manager.next();
         logger.info("x", .{});
     } else {
-        RV.mip.modify(.{ .MEIP = 0 });
+        RV.sip.modify(.{ .SEIP = 0 });
     }
+}
+
+pub export fn machine_main() align(16) callconv(.C) noreturn {
+    // We deleg all the interrupts and exceptions so we don't need
+    // an interrupt handler here
+
+    RV.mideleg.modify(.{
+        .UserSoftware = 1,
+        .UserTimer = 1,
+        .UserExternal = 1,
+        .SupervisorTimer = 1,
+        .SupervisorSoftware = 1,
+        .SupervisorExternal = 1,
+        .MachineTimer = 1,
+        .MachineSoftware = 1,
+        .MachineExternal = 1,
+    });
+
+    RV.medeleg.modify(.{
+        .InstructionAdressMisaligned = 1,
+        .InstructionAccessFault = 1,
+        .IllegalInstruction = 1,
+        .Breakpoint = 1,
+        .LoadAdressMisaligned = 1,
+        .LoadAccessFault = 1,
+        .StoreAMOadessMisaligned = 1,
+        .StoreAMOaccessFault = 1,
+        .EnvironmentCallUmode = 1,
+        .EnvironmentCallSmode = 1,
+        .EnvironmentCallMmode = 1,
+        .InstructionPageFault = 1,
+        .LoadPageFault = 1,
+        .StoreAMOpageFault = 1,
+    });
+
+    RV.mstatus.modify(.{ .MPP = 1 });
+
+    RV.mepc.write(@intFromPtr(&supervisor_main));
+
+    const tp: u32 = asm volatile ("csrr %[x], mhartid"
+        : [x] "=r" (-> u32),
+    );
+
+    asm volatile ("move tp, %[tp]"
+        :
+        : [tp] "r" (tp),
+    );
+
+    while (tp != 0) {}
+
+    asm volatile ("mret");
+    while (true) {}
+    //supervisor_main();
+}
+
+pub export fn supervisor_main() align(16) callconv(.C) void {
+    kernel_main();
 }
 
 pub export fn kernel_main() align(16) callconv(.C) void {
     const logger = std.log.scoped(.kernel);
-
-    if (RV.mhartid.read() != 0) {
-        logger.info("== Start CPU1 ==", .{});
-
-        while (true) {}
-    } else {
-        logger.info("== Start CPU0 ==", .{});
-    }
 
     logger.info("=== Start DOoOM ===", .{});
 
@@ -159,20 +215,18 @@ pub export fn kernel_main() align(16) callconv(.C) void {
     var user_alloc = UserAlloc.init(user_fba.allocator());
     malloc = user_alloc.allocator();
 
-    //logger.info("call user main!", .{});
-    //user_main(0, &malloc);
-    //logger.info("user main finish!", .{});
-
     var manager = Manager.init(kalloc);
-    _ = manager.new(@intFromPtr(&user_main), 4096, &malloc) catch unreachable;
+    _ = manager.new(@intFromPtr(&user_main), 4096, &malloc, 0) catch unreachable;
 
-    RV.mstatus.modify(.{ .MPIE = 1 });
-    RV.mie.modify(.{ .MEIE = 0, .MTIE = 1 });
+    RV.sstatus.modify(.{ .SPIE = 1 });
+    RV.sie.modify(.{ .SEIE = 0, .STIE = 1 });
+    RV.sstatus.modify(.{ .SPP = 1 });
 
     Clint.setNextTimerInterrupt();
 
     while (true) {
         logger.info("run pc={}", .{manager.current});
+        RV.sstatus.modify(.{ .SPP = 1 });
         manager.run();
         handler(&manager);
     }
@@ -183,7 +237,7 @@ pub export fn kernel_main() align(16) callconv(.C) void {
 pub export fn user_main(pid: usize, alloc: *Allocator) callconv(.C) noreturn {
     const logger = std.log.scoped(.user);
 
-    logger.info("start process {}", .{pid});
+    logger.info("process {} started", .{pid});
 
     //Syscall.yield();
     Syscall.exec(@intFromPtr(&user_main), 512, &malloc);

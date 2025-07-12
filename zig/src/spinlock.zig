@@ -2,6 +2,10 @@ locked: u32 = 0,
 
 pub const Self = @This();
 
+pub fn init() Self {
+    return .{ .locked = 0 };
+}
+
 pub fn unlock(self: *Self) void {
     _ = @atomicRmw(u32, &self.locked, .Xchg, 0, .acq_rel);
 }

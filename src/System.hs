@@ -186,12 +186,12 @@ makeSystem hartId tlbFlush inputs = do
               priv <== newPriv
               status.spp <== 0
 
-              display "sret to 0x" (formatHex 0 trap.mepc.val)
+              display "sret to 0x" (formatHex 0 trap.sepc.val)
               return
                 ExecOutput
                   { cause= dontCare
                   , exception= false
-                  , pc= trap.mepc.val
+                  , pc= trap.sepc.val
                   , tval= dontCare
                   , flush= false
                   , rd= dontCare }
@@ -218,7 +218,11 @@ makeSystem hartId tlbFlush inputs = do
           else if input.instr.opcode `is` [ECALL] then do
             return
               ExecOutput
-                { cause= ecall_from_m
+                { cause=
+                    select
+                      [ priv.val === machine_priv --> ecall_from_m
+                      , priv.val === supervisor_priv --> ecall_from_s
+                      , priv.val === user_priv --> ecall_from_u ]
                 , exception= true
                 , tval= input.pc
                 , flush= false
@@ -231,7 +235,7 @@ makeSystem hartId tlbFlush inputs = do
                 , exception= false
                 , tval= dontCare
                 , flush= true
-                , pc= dontCare
+                , pc= input.pc + 4
                 , rd= dontCare }
           else if input.instr.opcode `is` [SFENCE_VMA] then do
             tlbFlush
@@ -241,7 +245,7 @@ makeSystem hartId tlbFlush inputs = do
                 , exception= false
                 , tval= dontCare
                 , flush= true
-                , pc= dontCare
+                , pc= input.pc + 4
                 , rd= dontCare }
           else do
             execCSR priv.val csrUnit input

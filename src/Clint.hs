@@ -8,7 +8,7 @@ import Blarney.Utils
 
 data ClintIfc =
   ClintIfc
-    { timerInterrupt :: Bit 1
+    { timerInterrupt :: [Bit 1]
     , softwareInterrupt :: Bit 1 }
 
 makeClint :: forall p.
@@ -16,10 +16,11 @@ makeClint :: forall p.
   , 32 ~ 8*(LaneWidth p)
   , 4 ~ (LaneWidth p)
   , KnownTLParams p)
-    => Bit (AddrWidth p)
+    => Int
+    -> Bit (AddrWidth p)
     -> Module ([Mmio p], ClintIfc)
-makeClint base = do
-  mtimecmp :: Reg (Bit 64) <- makeReg 0
+makeClint numHart base = do
+  mtimecmp :: [Reg (Bit 64)] <- replicateM numHart (makeReg 0)
   mtime :: Reg (Bit 64) <- makeReg 0
   msip :: Reg (Bit 1) <- makeReg 0
 
@@ -34,8 +35,12 @@ makeClint base = do
                 msip <== at @0 lane
           , address= base }
 
-  let mtimecmpMmio = regToMmio (base + 0x4000) (lowerReg mtimecmp)
-  let mtimecmphMmio = regToMmio (base + 0x4004) (upperReg mtimecmp)
+  let mtimecmpMmio =
+        [regToMmio (base + 0x4000 + 8 * lit hartId) (lowerReg cmp)
+          | (hartId, cmp) <- zip [0..] mtimecmp]
+  let mtimecmphMmio =
+        [regToMmio (base + 0x4004 + 8 * lit hartId) (upperReg cmp)
+          | (hartId, cmp) <- zip [0..] mtimecmp]
 
   let mtimeMmio = readOnlyMmio (base + 0xbff8) (lower mtime.val)
   let mtimehMmio = readOnlyMmio (base + 0xbffc) (upper mtime.val)
@@ -43,13 +48,13 @@ makeClint base = do
   let mmioList =
         [ msipMmio
         , mtimeMmio
-        , mtimehMmio
-        , mtimecmpMmio
-        , mtimecmphMmio ]
+        , mtimehMmio ]
+        ++ mtimecmpMmio
+        ++ mtimecmphMmio
 
   let ifc =
         ClintIfc
-          { timerInterrupt= mtime.val .>=. mtimecmp.val
+          { timerInterrupt= [mtime.val .>=. cmp.val | cmp <- mtimecmp]
           , softwareInterrupt= msip.val }
 
   return (mmioList, ifc)

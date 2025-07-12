@@ -334,7 +334,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
         if isValid addr then do
           action (succede addr)
         else do
-          action pf_fail
+          action af_fail
 
       else do
         when (inv hit.val) do

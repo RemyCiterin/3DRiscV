@@ -1,6 +1,8 @@
 const Syscall = @import("syscall.zig");
 const RV = @import("riscv.zig");
 const std = @import("std");
+const VM = @import("vm.zig");
+const ptable_t = VM.ptable_t;
 
 const logger = std.log.scoped(.process);
 
@@ -45,6 +47,8 @@ pub const TrapState = extern struct {
     registers: Registers,
     /// the stack pointer of the kernel idle of the CPU core
     kernel_sp: usize,
+    // satp of the last user
+    satp: usize = 0,
 };
 
 pub extern fn user_trap() callconv(.Naked) void;
@@ -67,7 +71,7 @@ pub const Manager = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
-        RV.mtvec.write(@intFromPtr(&user_trap));
+        RV.stvec.write(@intFromPtr(&user_trap));
         return .{ .allocator = allocator, .current = 0, .processes = .{} };
     }
 
@@ -86,22 +90,19 @@ pub const Manager = struct {
 
     // return the PID of the new process
     // The process will start with it's PID in `a0`, and `args` in `a1`
-    pub fn new(self: *Self, pc: usize, stack_size: usize, args: ?*anyopaque) !usize {
+    pub fn new(self: *Self, pc: usize, stack_size: usize, args: ?*anyopaque, satp: usize) !usize {
         var stack = try self.allocator.alloc(usize, stack_size);
         const pid = self.processes.items.len;
 
         logger.info("start process {}", .{pid});
 
         const process = Process{
-            .state = .{
-                .registers = .{
-                    .sp = @intFromPtr(&stack[stack_size - 1]),
-                    .a1 = @intFromPtr(args),
-                    .pc = pc,
-                    .a0 = pid,
-                },
-                .kernel_sp = undefined,
-            },
+            .state = .{ .registers = .{
+                .sp = @intFromPtr(&stack[stack_size - 1]),
+                .a1 = @intFromPtr(args),
+                .pc = pc,
+                .a0 = pid,
+            }, .kernel_sp = undefined, .satp = satp },
             .stack = stack,
         };
 
@@ -126,12 +127,12 @@ pub const Manager = struct {
     }
 
     pub inline fn exec(self: *Self, pid: usize, params: anytype) !void {
-        const new_pid = try self.new(params.pc, params.stack_size, params.args);
+        const new_pid = try self.new(params.pc, params.stack_size, params.args, 0);
         self.setOutput(pid, .exec);
         self.current = new_pid;
 
         logger.info(
-            "yield syscall from {x} to {x}",
+            "exec syscall from {x} to {x}",
             .{ self.read(pid, .pc), params.pc },
         );
     }

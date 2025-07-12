@@ -51,6 +51,9 @@ simulate:
 run:
 	./sim
 
+run_verbose:
+	./sim_verbose
+
 .PHONY: clean
 clean:
 	@rm -f build/*.bit

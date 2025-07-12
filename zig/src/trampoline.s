@@ -23,14 +23,19 @@ run_user:
   sw s11, 14 * 4(sp)
 
   # save the trap state for the next trap
-  csrw mscratch, a0
+  csrw sscratch, a0
 
   # save the kernel stack in TRAP_STATE.kernel_sp
   sw sp, 32 * 4(a0)
 
   # write TRAP_STATE.mepc in sepc: address of the next instruction after sret
   lw t0, 31 * 4(a0)
-  csrw mepc, t0
+  csrw sepc, t0
+
+  lw t0, 33 * 4(a0)
+  csrrw t0, satp, t0
+  sfence.vma zero, zero
+  sw t0, 33 * 4(a0)
 
   # load the user general purpose registers from TRAP_STATE
   lw ra, 0 * 4(a0)
@@ -66,11 +71,11 @@ run_user:
   lw t6, 30 * 4(a0)
 
   lw a0, 9 * 4(a0)
-  mret
+  sret
 
 .align 4
 user_trap:
-  csrrw a0, mscratch, a0
+  csrrw a0, sscratch, a0
 
   # save the user general purpose registers to TRAP_STATE
   sw ra, 0 * 4(a0)
@@ -106,14 +111,19 @@ user_trap:
   sw t6, 30 * 4(a0)
 
   #save user-a0 in 9 * 4(a0)
-  csrr t0, mscratch
+  csrr t0, sscratch
   sw t0, 9 * 4(a0)
 
   # load the kernel stack pointer from TRAP_STATE.kernel_sp
   lw sp, 32 * 4(a0)
 
+  lw t0, 33 * 4(a0)
+  csrrw t0, satp, t0
+  sfence.vma zero, zero
+  sw t0, 33 * 4(a0)
+
   # save mepc into the stack
-  csrr t0, mepc
+  csrr t0, sepc
   sw t0, 31 * 4(a0)
 
   lw gp, 0 * 4(sp)

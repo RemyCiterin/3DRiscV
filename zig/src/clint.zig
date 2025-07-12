@@ -14,3 +14,7 @@ const clint: *volatile CLINT = @ptrFromInt(0x30000000);
 pub fn setNextTimerInterrupt() void {
     clint.mtimecmp = clint.mtime + Config.timer_step;
 }
+
+pub fn getTime() u64 {
+    return clint.mtime;
+}

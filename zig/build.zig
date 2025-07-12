@@ -53,10 +53,11 @@ pub fn build(b: *std.Build) !void {
         .abi = .none, // .eabi
     };
 
-    const optimize = b.standardOptimizeOption(.{}); // .ReleaseSmall;
-    const optimizeSmall = b.standardOptimizeOption(.{
-        .preferred_optimize_mode = .ReleaseSmall,
-    }); // .ReleaseSmall;
+    const optimize = b.standardOptimizeOption(.{});
+
+    //const optimizeSmall = b.standardOptimizeOption(.{
+    //    .preferred_optimize_mode = .ReleaseSmall,
+    //}); // .ReleaseSmall;
 
     const exe = b.addExecutable(.{
         .name = "kernel.elf",
@@ -65,24 +66,22 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const bootloader = b.addExecutable(.{
-        .name = "bootloader.elf",
-        .root_source_file = .{ .cwd_relative = "src/boot.zig" },
-        .target = b.resolveTargetQuery(target),
-        .optimize = optimizeSmall,
-    });
+    //const bootloader = b.addExecutable(.{
+    //    .name = "bootloader.elf",
+    //    .root_source_file = .{ .cwd_relative = "src/boot.zig" },
+    //    .target = b.resolveTargetQuery(target),
+    //    .optimize = optimizeSmall,
+    //});
 
     exe.addAssemblyFile(.{ .cwd_relative = "src/trampoline.s" });
     exe.addAssemblyFile(.{ .cwd_relative = "src/init.S" });
 
-    bootloader.addAssemblyFile(.{ .cwd_relative = "src/trampoline.s" });
-    bootloader.addAssemblyFile(.{ .cwd_relative = "src/init.S" });
-
-    //exe.code_model = .medium;
+    //bootloader.addAssemblyFile(.{ .cwd_relative = "src/trampoline.s" });
+    //bootloader.addAssemblyFile(.{ .cwd_relative = "src/init.S" });
 
     exe.setLinkerScriptPath(.{ .cwd_relative = "src/linker_kernel.ld" });
-    bootloader.setLinkerScriptPath(.{ .cwd_relative = "src/linker_boot.ld" });
+    //bootloader.setLinkerScriptPath(.{ .cwd_relative = "src/linker_boot.ld" });
 
     b.installArtifact(exe);
-    b.installArtifact(bootloader);
+    //b.installArtifact(bootloader);
 }

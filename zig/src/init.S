@@ -49,7 +49,7 @@ _start:
 1:
   la t0, _reboot
   csrw mtvec, t0
-  jal kernel_main
+  jal machine_main
 .infinite_loop:
   j .infinite_loop
 
