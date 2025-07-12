@@ -1,6 +1,7 @@
 module TileLink.Interconnect where
 
 import Blarney
+import Blarney.TypeFamilies
 import Blarney.Connectable
 import Blarney.SourceSink
 import Blarney.Sharing
@@ -39,27 +40,32 @@ makeSharedBurstSink hasData getSize n sink = do
               s.put msg }
       | (s, i) <- zip sinks [0..] ]
 
-makeSharedSinkA :: forall p. KnownTLParams p => Int -> Sink (ChannelA p) -> Module [Sink (ChannelA p)]
+makeSharedSinkA :: forall p.
+  KnownTLParams p => Int -> Sink (ChannelA p) -> Module [Sink (ChannelA p)]
 makeSharedSinkA i = makeSharedBurstSink @p (\ msg -> hasDataA msg.opcode) (\ msg -> msg.size) i
 
-makeSharedSinkB :: forall p. KnownTLParams p => Int -> Sink (ChannelB p) -> Module [Sink (ChannelB p)]
+makeSharedSinkB :: forall p.
+  KnownTLParams p => Int -> Sink (ChannelB p) -> Module [Sink (ChannelB p)]
 makeSharedSinkB i = makeSharedSink i
 
-makeSharedSinkC :: forall p. KnownTLParams p => Int -> Sink (ChannelC p) -> Module [Sink (ChannelC p)]
+makeSharedSinkC :: forall p.
+  KnownTLParams p => Int -> Sink (ChannelC p) -> Module [Sink (ChannelC p)]
 makeSharedSinkC i = makeSharedBurstSink @p (\ msg -> hasDataC msg.opcode) (\ msg -> msg.size) i
 
-makeSharedSinkD :: forall p. KnownTLParams p => Int -> Sink (ChannelD p) -> Module [Sink (ChannelD p)]
+makeSharedSinkD :: forall p.
+  KnownTLParams p => Int -> Sink (ChannelD p) -> Module [Sink (ChannelD p)]
 makeSharedSinkD i = makeSharedBurstSink @p (\ msg -> hasDataD msg.opcode) (\ msg -> msg.size) i
 
-makeSharedSinkE :: forall p. KnownTLParams p => Int -> Sink (ChannelE p) -> Module [Sink (ChannelE p)]
+makeSharedSinkE :: forall p.
+  KnownTLParams p => Int -> Sink (ChannelE p) -> Module [Sink (ChannelE p)]
 makeSharedSinkE i = makeSharedSink i
 
 data XBarConfig n m p =
   XBarConfig
     { bce :: Bool
-    , rootSource :: Bit (SourceWidth p) -> Bit (Log2 m)
-    , rootSink :: Bit (SinkWidth p) -> Bit (Log2 n)
-    , rootAddr :: Bit (AddrWidth p) -> Bit (Log2 m)
+    , rootSource :: Bit (SourceWidth p) -> Bit (Log2Ceil m)
+    , rootSink :: Bit (SinkWidth p) -> Bit (Log2Ceil n)
+    , rootAddr :: Bit (AddrWidth p) -> Bit (Log2Ceil m)
     , sizeChannelA :: Int
     , sizeChannelB :: Int
     , sizeChannelC :: Int
@@ -67,7 +73,7 @@ data XBarConfig n m p =
     , sizeChannelE :: Int }
 
 makeTLXBarNoBCE :: forall n m p.
-  (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2 n), KnownNat (Log2 m))
+  (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2Ceil n), KnownNat (Log2Ceil m))
     => XBarConfig n m p
     -> Module ([TLMaster p], [TLSlave p])
 makeTLXBarNoBCE config = do
@@ -76,8 +82,8 @@ makeTLXBarNoBCE config = do
 
   let laneSize :: TLSize = constant (toInteger (valueOf @(LaneWidth p)))
 
-  tokenA :: Reg (Bit (Log2 m)) <- makeReg dontCare
-  tokenD :: Reg (Bit (Log2 m)) <- makeReg dontCare
+  tokenA :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
+  tokenD :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
   sizeA :: Reg TLSize <- makeReg 0
   sizeD :: Reg TLSize <- makeReg 0
 
@@ -121,7 +127,7 @@ makeTLXBarNoBCE config = do
 
 -- n is the number of masters, and m the number of slaves
 makeTLXBarBCE :: forall n m p.
-  (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2 n), KnownNat (Log2 m))
+  (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2Ceil n), KnownNat (Log2Ceil m))
     => XBarConfig n m p
     -> Module ([TLMaster p], [TLSlave p])
 makeTLXBarBCE config = do
@@ -133,9 +139,9 @@ makeTLXBarBCE config = do
 
   let laneSize :: TLSize = constant (toInteger (valueOf @(LaneWidth p)))
 
-  tokenA :: Reg (Bit (Log2 m)) <- makeReg dontCare
-  tokenC :: Reg (Bit (Log2 m)) <- makeReg dontCare
-  tokenD :: Reg (Bit (Log2 m)) <- makeReg dontCare
+  tokenA :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
+  tokenC :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
+  tokenD :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
   sizeA :: Reg TLSize <- makeReg 0
   sizeC :: Reg TLSize <- makeReg 0
   sizeD :: Reg TLSize <- makeReg 0
@@ -197,7 +203,7 @@ makeTLXBarBCE config = do
     buildQueue n = makeSizedQueueCore n
 
 makeTLXBar :: forall n m p.
-  (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2 n), KnownNat (Log2 m))
+  (KnownNat n, KnownNat m, KnownTLParams p, KnownNat (Log2Ceil n), KnownNat (Log2Ceil m))
     => XBarConfig n m p
     -> Module ([TLMaster p], [TLSlave p])
 makeTLXBar config =

@@ -204,6 +204,9 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
     let getIndex :: Bit (AddrWidth p) -> Bit iw = \ addr ->
           unsafeSlice (logSize-1, log2 (valueOf @(LaneWidth p))) addr
 
+    let getBlockAligned :: Bit (AddrWidth p) -> Bit (AddrWidth p) = \ addr ->
+          addr .&. inv ((1 .<<. logSize') - 1)
+
     buffer <- makeGrantFSM @iw @p
 
     probe :: ProbeFSM iw p <- makeProbeFSM sink logSize' channelB metaC sources
@@ -230,12 +233,12 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
         when (inv fill.val) do
           slave.channelA.put
             ChannelA
-              { mask= ones
-              , address= msg.val.address
+              { address= getBlockAligned msg.val.address
               , opcode= item #Get
               , lane= dontCare
               , size= logSize'
-              , source= sink }
+              , source= sink
+              , mask= ones }
 
       -- Fill the buffer using a Probe response
       when (probe.write.canPeek .&&. slave.channelA.canPut) do
@@ -345,7 +348,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
     return
       AcquireFSM
         { active= valid.val .||. waitAck.val .||. index1.val =!= 0
-        , address= msg.val.address
+        , address= getBlockAligned msg.val.address
         , start= do
             let acquire = channelA.peek
             dynamicAssert (inv valid.val) "invalid state"
@@ -365,7 +368,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
                   channelA.peek.opcode.isAcquirePerms ?
                   ( perm === trunk ? (tag #ProbePerms (item #N), tag #ProbePerms (item #B))
                   , perm === trunk ? (tag #ProbeBlock (item #N), tag #ProbeBlock (item #B)))
-            probe.start.put (opcode, 0, acquire.address, owners)
+            probe.start.put (opcode, 0, getBlockAligned acquire.address, owners)
             size <== 1 .<<. acquire.size
 
             when (inv acquire.opcode.isAcquirePerms) do

@@ -41,7 +41,7 @@ const VM = @import("vm.zig");
 
 // Page allocator
 const PAlloc = @import("page_allocator.zig").PAlloc;
-const palloc = @import("page_allocator.zig").palloc;
+const palloc = @import("page_allocator.zig");
 
 pub const std_options = .{
     .log_level = .info,
@@ -207,13 +207,37 @@ pub export fn kernel_main() align(16) callconv(.C) void {
         \\  interface for UART, SDRAM, MMC and HDMI
     , .{});
 
-    const kalloc_len = 20 * 1024 * 1024;
+    const kalloc_len = 5 * 1024 * 1024;
     var kernel_fba = std.heap.FixedBufferAllocator.init(kalloc_buffer[0..kalloc_len]);
     kalloc = kernel_fba.allocator();
 
-    var user_fba = std.heap.FixedBufferAllocator.init(kalloc_buffer[kalloc_len..]);
+    const malloc_len = 5 * 1024 * 1024;
+    var user_fba = std.heap.FixedBufferAllocator.init(
+        kalloc_buffer[kalloc_len .. kalloc_len + malloc_len],
+    );
     var user_alloc = UserAlloc.init(user_fba.allocator());
     malloc = user_alloc.allocator();
+
+    logger.info("kalloc buffer base: {*}", .{&kalloc_buffer[0]});
+    palloc.init(
+        @intFromPtr(&kalloc_buffer[kalloc_len + malloc_len]),
+        @intFromPtr(&kalloc_buffer[30 * 1024 * 1024]),
+    );
+
+    const ptable = VM.initTable() catch unreachable;
+
+    VM.map(ptable, 0x10000000, 0x10000000, 0x1000, VM.Perms.rw()) catch unreachable;
+    VM.map(ptable, 0x30000000, 0x30000000, 0x10000, VM.Perms.rw()) catch unreachable;
+    VM.map(ptable, 0x80000000, 0x80000000, 40 * 1024 * 1024, VM.Perms.rwx()) catch unreachable;
+
+    logger.info("Prepare to write to SATP", .{});
+    RV.satp.write(.{
+        .PPN = @truncate(@as(u32, @intFromPtr(ptable)) / 4096),
+        .MODE = .Sv32,
+        .ASID = 0,
+    });
+    asm volatile ("sfence.vma");
+    logger.info("Prepare to sfence.vma", .{});
 
     var manager = Manager.init(kalloc);
     _ = manager.new(@intFromPtr(&user_main), 4096, &malloc, 0) catch unreachable;

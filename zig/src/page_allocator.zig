@@ -10,6 +10,8 @@ const std = @import("std");
 const Lock = @import("spinlock.zig");
 const riscv = @import("riscv.zig");
 
+const logger = std.log.scoped(.palloc);
+
 var palloc: PAlloc = undefined;
 pub const page_t = riscv.page_t;
 
@@ -59,6 +61,7 @@ pub const PAlloc = struct {
         };
 
         // free all the memory
+        logger.info("Initialize page allocator", .{});
         this.freeRange(begin, end);
 
         return this;
@@ -84,8 +87,8 @@ pub const PAlloc = struct {
         if (x < this.begin) unreachable;
         if (x >= this.end) unreachable;
 
-        this.lock.acquire();
-        defer this.lock.release();
+        this.lock.lock();
+        defer this.lock.unlock();
 
         var node: *align(4096) Node = @ptrCast(ptr);
         node.next = this.node;
@@ -94,8 +97,8 @@ pub const PAlloc = struct {
 
     /// allocate a new page and return an address aligned on 4096
     pub fn alloc(this: *@This()) std.mem.Allocator.Error!page_t {
-        this.lock.acquire();
-        defer this.lock.release();
+        this.lock.lock();
+        defer this.lock.unlock();
 
         this.number_alloc += 1;
 

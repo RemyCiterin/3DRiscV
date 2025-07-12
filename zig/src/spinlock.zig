@@ -1,4 +1,4 @@
-locked: u32 = 0,
+locked: u32 align(4) = 0,
 
 pub const Self = @This();
 

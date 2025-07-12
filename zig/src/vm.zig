@@ -208,6 +208,11 @@ pub fn map(
         entry.setPerms(perms);
         entry.V = 1;
 
+        //if (va <= 0x80100000) logger.info(
+        //    "va: {x} pte: {x} pte*: {x}",
+        //    .{ va, @as(u32, @intFromPtr(entry)), @as(u32, @bitCast(entry.*)) },
+        //);
+
         if (va == last) return;
 
         va += 4096;

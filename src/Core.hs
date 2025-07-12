@@ -96,25 +96,28 @@ makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
   (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <- withName "ITLB" $
-    makeDummyPtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
+    makePtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
 
   tagQ :: Queue PtwResponse <- makeQueue
 
-  withName "icache" $ always do
-    when (cache.canMatch .&&. ptwOut.canPeek .&&. tagQ.notFull) do
-      if ptwOut.peek.success then do
-        cache.match (upper ptwOut.peek.rd)
-      else do
-        cache.abort
+  key :: Reg (Bit 20) <- makeReg dontCare
 
+  withName "icache" $ always do
+    when (cache.canMatch) do
+      cache.match key.val
+
+    when (cache.canLookup .&&. ptwOut.canPeek .&&. tagQ.notFull) do
+      when (ptwOut.peek.success) do
+        let phys = ptwOut.peek.rd
+        cache.lookup (slice @11 @6 phys) (slice @5 @2 phys) (item #Load)
+        key <== slice @31 @12 phys
       tagQ.enq ptwOut.peek
       ptwOut.consume
 
   let reqs =
         Sink
-          { canPut= cache.canLookup .&&. ptwIn.canPut
+          { canPut= ptwIn.canPut
           , put= \ x -> do
-              cache.lookup (slice @11 @6 x) (slice @5 @2 x) (item #Load)
               ptwIn.put
                 PtwRequest
                   { virtual= unpack x
@@ -127,7 +130,7 @@ makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
                   , instr= true
                   , width= 0b10 }}
 
-  -- Ensure that the instruction will be executed by th Alu in case
+  -- Ensure that the instruction will be executed by the Alu in case
   -- of a misaligned instruction exception
   let rd = tagQ.first.success ? (cache.loadResponse.peek, 0)
   let resps=
@@ -222,8 +225,8 @@ makeFetch vminfo fetchSource ptwSource redirection = do
       fetchQ.deq
 
     when redirection.canPeek do
-      pc.write 0 redirection.peek.pc
-      epoch.write 0 redirection.peek.epoch
+      pc.write 1 redirection.peek.pc
+      epoch.write 1 redirection.peek.epoch
       redirection.consume
 
   return (master, toStream outputQ, bpred.trainHit, bpred.trainMis, flush)
@@ -272,7 +275,7 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
           , sizeChannelD= 2
           , sizeChannelE= 2 }
 
-  ([master], [cacheSlave,mmioSlave,ptwSlave]) <- makeTLXBar @1 @3 @TLConfig xbarconfig
+  ([master], [cacheSlave,mmioSlave,ptwSlave,_]) <- makeTLXBar @1 @4 @TLConfig xbarconfig
 
   outputQ :: Queue ExecOutput <- makeQueue
 
@@ -281,7 +284,7 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
   (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <- withName "DTLB" $
-    makeDummyPtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
+    makePtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
   let phys :: Bit 32 = ptwOut.peek.rd
 
   always do
@@ -713,7 +716,7 @@ makeCore
 
             display
               "exception at pc= 0x" (formatHex 0 req.pc)
-              " to pc= 0x" (formatHex 0 trapPc) " " cause
+              " to pc= 0x" (formatHex 0 trapPc) " " cause " " (formatHex 0 tval)
           else if systemUnit.canInterrupt.valid .&&. inv instr.isMemAccess .&&. inv instr.isSystem then do
             let cause = systemUnit.canInterrupt.val
             trapPc <- systemUnit.interrupt req.pc cause dontCare

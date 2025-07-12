@@ -17,25 +17,25 @@ import CSR
 
 data VirtAddr =
   VirtAddr
-    { offset :: Bit 12
+    { vpn1 :: Bit 10
     , vpn0 :: Bit 10
-    , vpn1 :: Bit 10 }
-  deriving(Generic, Bits)
+    , offset :: Bit 12 }
+  deriving(Generic, Bits, FShow)
 
 -- Nodes:
 --    - A supervisor software can access to a user PTE if SUM is set
 data PTE =
   PTE
-    { validPTE :: Bit 1     -- valid Page Table Entry
-    , readPTE :: Bit 1      -- readable Page Table Entry
-    , writePTE :: Bit 1     -- writable Page Table Entry
-    , executePTE :: Bit 1   -- executable Page Table Entry
-    , userPTE :: Bit 1      -- user can access to this entry
-    , globalPTE :: Bit 1    -- don't evitc this entry from TLB at flush
-    , accessedPTE :: Bit 1  -- accessed bit (set at any access)
-    , dirtyPTE :: Bit 1     -- dirty bit (set at anywrite)
+    { ppn :: Bit 22         -- physical page number
     , rswPTE :: Bit 2       -- reserved for software use
-    , ppn :: Bit 22 }       -- physical page number
+    , dirtyPTE :: Bit 1     -- dirty bit (set at anywrite)
+    , accessedPTE :: Bit 1  -- accessed bit (set at any access)
+    , globalPTE :: Bit 1    -- don't evitc this entry from TLB at flush
+    , userPTE :: Bit 1      -- user can access to this entry
+    , executePTE :: Bit 1   -- executable Page Table Entry
+    , writePTE :: Bit 1     -- writable Page Table Entry
+    , readPTE :: Bit 1      -- readable Page Table Entry
+    , validPTE :: Bit 1 }   -- valid Page Table Entry
   deriving(Generic, Bits, FShow, Interface)
 
 isLeafPTE :: PTE -> Bit 1
@@ -53,14 +53,14 @@ data PtwRequest =
     , mxr :: Bit 1
     , sum :: Bit 1
     , width :: Bit 2 }
-  deriving(Generic, Bits)
+  deriving(Generic, Bits, FShow)
 
 isLegalAccess :: PtwRequest -> PTE -> Bit 1
 isLegalAccess req pte =
   privLegal .&&. valid .&&. accessLegal
   where
     userLegal = pte.userPTE
-    supervisorLegal = pte.userPTE ? (req.sum, false)
+    supervisorLegal = pte.userPTE ? (req.sum, true)
 
     privLegal = req.priv === user_priv ? (userLegal, supervisorLegal)
 
@@ -99,7 +99,7 @@ data TlbEntry =
     , index :: Bit 1
     , address :: Bit 32
     , pte :: PTE }
-  deriving(Bits, Generic, Interface)
+  deriving(Bits, Generic, Interface, FShow)
 
 tlbMatch :: VirtAddr -> TlbEntry -> Bit 1
 tlbMatch virt entry = entry.index === 0 ? (match0 .&&. match1, match1)
@@ -323,7 +323,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
   -- least one cycle, otherwise we will observe a circular path
   withName "runStmt" $ runStmt do
     while true do
-      wait (inputs.canDeq .&&. outputs.notFull)
+      wait (inputs.canDeq .&&. outputs.notFull .&&. inv deqInput.val)
 
       if inv aligned then do
         action align_fail
@@ -383,9 +383,10 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
                 entry.index === 0 ?
                   (pte.ppn # virt.offset, upper pte.ppn # virt.vpn0 # virt.offset)
           if slice @33 @32 addr =!= 0 .||. inv (isValid (lower addr)) then do
-            action af_fail
+            action do
+              af_fail
 
-          else if isLegalAccess inputs.first entry.pte then do
+          else if isLegalAccess inputs.first pte then do
             let (newPte, diff) = updatePTE inputs.first pte
 
             when diff do
@@ -417,7 +418,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
               , put= \ x -> do
                   -- Tlb Lookup
                   let (w,h) = tlbSearch x.virtual
-                  addr <== satp.ppn # x.virtual.vpn1 # (0b00 :: Bit 2)
+                  addr <== x.satp.ppn # x.virtual.vpn1 # (0b00 :: Bit 2)
                   match <== (tlb!w).val.val
                   hasFlush <== false
                   abort <== false
