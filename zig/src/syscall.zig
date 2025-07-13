@@ -21,8 +21,9 @@ pub fn syscall(input: Input) Output {
 
     asm volatile ("ecall"
         :
-        : [output] "{a0}" (@as(*volatile Output, &output)),
-          [input] "{a1}" (@as(*const volatile Input, &input)),
+        : [code] "{a0}" (@as(usize, 0)),
+          [output] "{a1}" (@as(*volatile Output, &output)),
+          [input] "{a2}" (@as(*const volatile Input, &input)),
         : "memory"
     );
 

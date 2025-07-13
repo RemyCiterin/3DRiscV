@@ -52,7 +52,12 @@ pub const TrapState = extern struct {
 };
 
 pub extern fn user_trap() callconv(.Naked) void;
-extern fn run_user(*TrapState) callconv(.C) void;
+pub extern fn run_user(*TrapState) callconv(.C) void;
+
+pub export var trap_state align(4096) = TrapState{
+    .registers = .{ .pc = undefined },
+    .kernel_sp = undefined,
+};
 
 pub const Process = struct {
     state: TrapState,
@@ -76,8 +81,9 @@ pub const Manager = struct {
     }
 
     pub fn run(self: *Self) void {
-        const state: *TrapState = &self.processes.items[self.current].state;
-        run_user(state);
+        trap_state = self.processes.items[self.current].state;
+        run_user(&trap_state);
+        self.processes.items[self.current].state = trap_state;
     }
 
     pub fn read(self: *Self, pid: usize, comptime reg: Register) usize {
@@ -110,19 +116,28 @@ pub const Manager = struct {
         return pid;
     }
 
+    pub fn newWith(self: *Self, state: TrapState, stack: []usize) !void {
+        const process = Process{ .state = state, .stack = stack };
+        try self.processes.append(self.allocator, process);
+    }
+
     pub fn next(self: *Self) void {
         self.current += 1;
         if (self.current >= self.processes.items.len)
             self.current = 0;
     }
 
+    pub fn getSyscallCode(self: *Self, pid: usize) usize {
+        return self.read(pid, .a0);
+    }
+
     pub fn setOutput(self: *Self, pid: usize, output: Syscall.Output) void {
-        const ptr: *volatile Syscall.Output = @ptrFromInt(self.read(pid, .a0));
+        const ptr: *volatile Syscall.Output = @ptrFromInt(self.read(pid, .a1));
         ptr.* = output;
     }
 
     pub fn getInput(self: *Self, pid: usize) Syscall.Input {
-        const input: *volatile Syscall.Input = @ptrFromInt(self.read(pid, .a1));
+        const input: *volatile Syscall.Input = @ptrFromInt(self.read(pid, .a2));
         return input.*;
     }
 
@@ -143,8 +158,15 @@ pub const Manager = struct {
         self.next();
     }
 
+    pub inline fn print(self: *Self, pid: usize) void {
+        @import("print.zig").putChar(@truncate(self.read(pid, .a1)));
+    }
+
     pub inline fn syscall(self: *Self) !void {
         const pid = self.current;
+
+        if (self.getSyscallCode(pid) == 1)
+            return self.print(pid);
 
         switch (self.getInput(pid)) {
             .exec => |params| try self.exec(pid, params),

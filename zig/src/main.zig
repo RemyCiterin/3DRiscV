@@ -38,10 +38,62 @@ const UserAlloc = @import("user_alloc.zig");
 
 // Virtual memory
 const VM = @import("vm.zig");
+const ptable_t = VM.ptable_t;
+const page_t = VM.page_t;
 
 // Page allocator
 const PAlloc = @import("page_allocator.zig").PAlloc;
 const palloc = @import("page_allocator.zig");
+
+var initial_user_program = @embedFile("user.bin");
+
+// Allocate the first executable
+pub fn setupExectable(manager: *Manager, binary: []const u8) anyerror!ptable_t {
+    const ptable: ptable_t = try VM.initTable();
+
+    const stack = try palloc.alloc();
+
+    const stack_usize: [*]usize = @ptrCast(&stack[0]);
+
+    VM.map(ptable, 0x20000000, @intFromPtr(stack), 0x1000, VM.Perms.urw()) catch unreachable;
+
+    var pos: u32 = 0;
+    var size: u32 = binary.len;
+
+    while (size > 0) {
+        const page = try palloc.alloc();
+        std.mem.copyForwards(u8, page, binary[pos .. pos + @min(4096, size)]);
+        try VM.map(ptable, 0x10000000 + pos, @intFromPtr(page), 4096, VM.Perms.urwx());
+        size = if (size > 4096) size - 4096 else 0;
+        pos += 4096;
+    }
+
+    for (0..10) |_| {
+        const page = try palloc.alloc();
+        try VM.map(ptable, 0x10000000 + pos, @intFromPtr(page), 4096, VM.Perms.urwx());
+        pos += 4096;
+    }
+
+    const trampoline: u32 = @intFromPtr(&Process.run_user) & ~@as(u32, 0xFFF);
+    try VM.map(ptable, trampoline, trampoline, 0x2000, VM.Perms.rx());
+
+    const trap: u32 = @intFromPtr(&Process.trap_state) & ~@as(u32, 0xFFF);
+    try VM.map(ptable, trap, trap, 0x2000, VM.Perms.rw());
+
+    const satp: usize = @bitCast(@TypeOf(RV.satp).Fields{
+        .PPN = @truncate(@as(u64, @intFromPtr(ptable)) / 4096),
+        .MODE = .Sv32,
+        .ASID = 0,
+    });
+
+    try manager.newWith(Process.TrapState{
+        .registers = .{ .pc = 0x10000000 },
+        .kernel_sp = undefined,
+        .satp = satp,
+    }, stack_usize[0..1024]);
+
+    return ptable;
+}
 
 pub const std_options = .{
     .log_level = .info,
@@ -119,8 +171,8 @@ pub export fn handler(manager: *Manager) callconv(.C) void {
     const pid = manager.current;
 
     if (RV.scause.read().INTERRUPT == 0) {
-        logger.info("cause: {}", .{RV.scause.read()});
-        logger.info("sepc: {x}", .{manager.read(pid, .pc)});
+        // logger.info("cause: {}", .{RV.scause.read()});
+        //logger.info("sepc: {x}", .{manager.read(pid, .pc)});
 
         manager.write(pid, .pc, manager.read(pid, .pc) + 4);
         manager.syscall() catch unreachable;
@@ -184,7 +236,6 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
 
     asm volatile ("mret");
     while (true) {}
-    //supervisor_main();
 }
 
 pub export fn supervisor_main() align(16) callconv(.C) void {
@@ -230,6 +281,8 @@ pub export fn kernel_main() align(16) callconv(.C) void {
     VM.map(ptable, 0x30000000, 0x30000000, 0x10000, VM.Perms.rw()) catch unreachable;
     VM.map(ptable, 0x80000000, 0x80000000, 40 * 1024 * 1024, VM.Perms.rwx()) catch unreachable;
 
+    VM.map(ptable, 0x20000000, 0x83000000, 4096, VM.Perms.rwx()) catch unreachable;
+
     logger.info("Prepare to write to SATP", .{});
     RV.satp.write(.{
         .PPN = @truncate(@as(u32, @intFromPtr(ptable)) / 4096),
@@ -240,17 +293,18 @@ pub export fn kernel_main() align(16) callconv(.C) void {
     logger.info("Prepare to sfence.vma", .{});
 
     var manager = Manager.init(kalloc);
-    _ = manager.new(@intFromPtr(&user_main), 4096, &malloc, 0) catch unreachable;
+    //_ = manager.new(@intFromPtr(&user_main), 4096, &malloc, 0) catch unreachable;
 
     RV.sstatus.modify(.{ .SPIE = 1 });
     RV.sie.modify(.{ .SEIE = 0, .STIE = 1 });
-    RV.sstatus.modify(.{ .SPP = 1 });
+    RV.sstatus.modify(.{ .SPP = 0 });
 
     Clint.setNextTimerInterrupt();
 
+    _ = setupExectable(&manager, initial_user_program[0..]) catch unreachable;
+
     while (true) {
-        logger.info("run pc={}", .{manager.current});
-        RV.sstatus.modify(.{ .SPP = 1 });
+        RV.sstatus.modify(.{ .SPP = 0 });
         manager.run();
         handler(&manager);
     }

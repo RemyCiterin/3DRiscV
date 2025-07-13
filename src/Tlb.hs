@@ -36,7 +36,41 @@ data PTE =
     , writePTE :: Bit 1     -- writable Page Table Entry
     , readPTE :: Bit 1      -- readable Page Table Entry
     , validPTE :: Bit 1 }   -- valid Page Table Entry
-  deriving(Generic, Bits, FShow, Interface)
+  deriving(Generic, Bits, Interface)
+
+instance FShow PTE where
+  fshow pte =
+      fshow "PTE{"
+      <> ppn
+      <> sep <> valid
+      <> sep <> dirty
+      <> sep <> accessed
+      <> sep <> global
+      <> sep <> rsw
+      <> sep <> fshow "perms: " <> perms <> noperms
+      <> fshow "}"
+    where
+      sep = fshow ", "
+      ppn = fshow "ppn: 0x" <> formatHex 0 (pte.ppn # (0 :: Bit 12))
+      rsw = fshow "rsw: " <> fshow pte.rswPTE
+      dirty =
+        formatCond pte.dirtyPTE (fshow "dirty")
+        <> formatCond (inv pte.dirtyPTE) (fshow "clean")
+      accessed = fshow "A: " <> fshow pte.accessedPTE
+      global = fshow "G: " <> fshow pte.globalPTE
+      user = formatCond pte.userPTE (fshow "U")
+      execute = formatCond pte.executePTE (fshow "X")
+      write = formatCond pte.writePTE (fshow "W")
+      read = formatCond pte.readPTE (fshow "R")
+      perms = user <> execute <> read <> write
+      noperms =
+        formatCond
+          (inv $ pte.executePTE .||. pte.readPTE .||. pte.writePTE .||. pte.userPTE)
+          (fshow "N/A")
+      valid =
+        formatCond pte.validPTE (fshow "valid")
+        <> formatCond (inv pte.validPTE) (fshow "invalid")
+
 
 isLeafPTE :: PTE -> Bit 1
 isLeafPTE pte =
@@ -367,6 +401,8 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
                   stop <== true
                 else if inv pte.validPTE .||. index.val === 0 then do
                   -- Address translation failure
+                  display "Invalid address translation with:\n\t" pte "\n\tat " (formatHex 0 lsb)
+                  display "\t" slave.channelD.peek
                   abort <== true
                   stop <== true
                   pf_fail

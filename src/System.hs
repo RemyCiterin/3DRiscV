@@ -115,6 +115,8 @@ makeSystem hartId tlbFlush inputs = do
         let newPriv = toS ? (supervisor_priv, machine_priv)
         let cause_msb = interrupt ? (2^31, 0)
 
+        priv <== newPriv
+
         if toS then do
           trap.scause <== cause_msb .|. zeroExtend cause
           status.spp <== priv.val =!= user_priv

@@ -170,6 +170,7 @@ pub fn CSR(comptime packedT: type) type {
         tag: CSRenum,
 
         const Self = @This();
+        pub const Fields: type = packedT;
 
         pub fn read(comptime self: Self) packedT {
             return @bitCast(self.tag.read());

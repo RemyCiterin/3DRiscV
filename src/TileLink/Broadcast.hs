@@ -252,7 +252,7 @@ makeAcquireFSM sink logSize sources channelA channelB metaC channelD channelE sl
         slave.channelA.put
           ChannelA
             { opcode= item #PutData
-            , address= msg.val.address
+            , address= getBlockAligned msg.val.address
             , size= logSize'
             , source= sink
             , lane

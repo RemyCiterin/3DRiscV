@@ -66,6 +66,13 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const user = b.addExecutable(.{
+        .name = "user.elf",
+        .root_source_file = .{ .cwd_relative = "user/main.zig" },
+        .target = b.resolveTargetQuery(target),
+        .optimize = optimize,
+    });
+
     //const bootloader = b.addExecutable(.{
     //    .name = "bootloader.elf",
     //    .root_source_file = .{ .cwd_relative = "src/boot.zig" },
@@ -75,13 +82,16 @@ pub fn build(b: *std.Build) !void {
 
     exe.addAssemblyFile(.{ .cwd_relative = "src/trampoline.s" });
     exe.addAssemblyFile(.{ .cwd_relative = "src/init.S" });
+    user.addAssemblyFile(.{ .cwd_relative = "user/init.S" });
 
     //bootloader.addAssemblyFile(.{ .cwd_relative = "src/trampoline.s" });
     //bootloader.addAssemblyFile(.{ .cwd_relative = "src/init.S" });
 
+    user.setLinkerScriptPath(.{ .cwd_relative = "user/linker.ld" });
     exe.setLinkerScriptPath(.{ .cwd_relative = "src/linker_kernel.ld" });
     //bootloader.setLinkerScriptPath(.{ .cwd_relative = "src/linker_boot.ld" });
 
     b.installArtifact(exe);
+    b.installArtifact(user);
     //b.installArtifact(bootloader);
 }
