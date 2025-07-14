@@ -141,18 +141,25 @@ pub fn initTable() anyerror!ptable_t {
     return table;
 }
 
-pub fn walkAndAlloc(table: ptable_t, va: u32) anyerror!*pte_t {
+pub const WalkOutput = struct {
+    level: isize,
+    pte: *pte_t,
+};
+
+pub fn walkAndAlloc(table: ptable_t, va: u32, megapage: bool) anyerror!WalkOutput {
     comptime var level: isize = 1;
     var ptable: ptable_t = table;
 
     inline while (true) : (level -= 1) {
         const entry: *pte_t = &ptable.*[VirtAddr.vpn(va, level)];
 
-        if (level == 0)
-            return entry;
+        if (level == 0 or entry.leaf())
+            return .{ .level = level, .pte = entry };
 
         if (entry.valid()) {
             ptable = entry.as_ptable();
+        } else if (megapage) {
+            return .{ .level = 1, .pte = entry };
         } else {
             ptable = try initTable();
             entry.* = pte_t.fromptable_t(ptable);
@@ -161,20 +168,24 @@ pub fn walkAndAlloc(table: ptable_t, va: u32) anyerror!*pte_t {
     }
 }
 
-pub fn walk(table: ptable_t, va: u32) ?*pte_t {
+pub fn walk(table: ptable_t, va: u32) WalkOutput {
     comptime var level: isize = 1;
     var ptable: ptable_t = table;
 
     inline while (true) : (level -= 1) {
         const entry: *pte_t = &ptable.*[VirtAddr.vpn(va, level)];
 
-        if (level == 0)
-            return entry;
+        if (level == 0 or !entry.valid() or entry.leaf())
+            return .{ .level = level, .pte = entry };
 
-        if (!entry.valid()) return null;
         ptable = entry.as_ptable();
     }
 }
+
+pub const MapError = error{
+    Unaligned,
+    Remap,
+};
 
 pub fn map(
     table: ptable_t,
@@ -192,16 +203,27 @@ pub fn map(
         .{ virt, virt + size - 1, phys, phys + size - 1 },
     );
 
-    if (va % 4096 != 0 or size % 4096 != 0 or size == 0) {
-        @panic("vm.map: unaligned virtual memory map");
+    if (va % 4096 != 0 or size % 4096 != 0 or size == 0 or pa % size != 0) {
+        logger.info(
+            "va: 0x{x}, pa: 0x{x} or size: 0x{x} is not aligned",
+            .{ va, pa, size },
+        );
+        return MapError.Unaligned;
     }
 
     while (true) {
-        var entry: *pte_t = try walkAndAlloc(table, va);
+        const psize: usize = 0x1000;
+        const mpsize: usize = 0x400000;
+        var megapage =
+            last >= va + mpsize and pa % mpsize == 0 and va % mpsize == 0;
+
+        const output = try walkAndAlloc(table, va, megapage);
+        const entry: *pte_t = output.pte;
+        megapage = output.level == 1;
 
         if (entry.valid()) {
             logger.info("remap virtual address {x}", .{va});
-            @panic("vm.map");
+            return MapError.Remap;
         }
 
         entry.PPN = @truncate(pa / 4096);
@@ -210,11 +232,19 @@ pub fn map(
 
         if (va == last) return;
 
-        va += 4096;
-        pa += 4096;
+        va += if (megapage) mpsize else psize;
+        pa += if (megapage) mpsize else psize;
     }
 }
 
+pub const UnmapError = error{
+    UnalignedMegapage,
+    TooSmallMegapage,
+    Unaligned,
+    Unmapped,
+};
+
+// Must return without error if it match a previous map
 pub fn unmap(
     table: ptable_t,
     virt: u32,
@@ -230,17 +260,28 @@ pub fn unmap(
     );
 
     if (va % 4096 != 0 or size % 4096 != 0 or size == 0)
-        return error.VirtAlign;
+        return UnmapError.Unaligned;
 
-    while (true) : (va += 4096) {
-        var entry: *pte_t = try walk(table, va) orelse {
-            logger.info("virtual address {} is unmapped", .{va});
-            @panic("vm.unmap");
-        };
+    while (true) {
+        const psize: usize = 0x1000;
+        const mpsize: usize = 0x400000;
+        const output = walk(table, va);
+        const entry: *pte_t = output.pte;
+        const megapage = output.level == 1;
 
         if (!entry.valid()) {
-            logger.info("virtual address {} is unmapped", .{va});
-            @panic("vm.unmap");
+            logger.info("virtual address 0x{x} is unmapped", .{va});
+            return UnmapError.Unmapped;
+        }
+
+        if (megapage and va % mpsize != 0) {
+            logger.info("virtual address 0x{x} is unaligned on a megapage", .{va});
+            return UnmapError.UnalignedMegapage;
+        }
+
+        if (megapage and last < va + mpsize) {
+            logger.info("size is too small for a megapage deallocation", .{});
+            return UnmapError.TooSmallMegapage;
         }
 
         if (free)
@@ -248,5 +289,7 @@ pub fn unmap(
         entry.* = .{};
 
         if (va == last) return;
+
+        va -= if (megapage) mpsize else psize;
     }
 }

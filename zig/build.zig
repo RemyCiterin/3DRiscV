@@ -88,7 +88,7 @@ pub fn build(b: *std.Build) !void {
     //bootloader.addAssemblyFile(.{ .cwd_relative = "src/init.S" });
 
     user.setLinkerScriptPath(.{ .cwd_relative = "user/linker.ld" });
-    exe.setLinkerScriptPath(.{ .cwd_relative = "src/linker_kernel.ld" });
+    exe.setLinkerScriptPath(.{ .cwd_relative = "src/linker.ld" });
     //bootloader.setLinkerScriptPath(.{ .cwd_relative = "src/linker_boot.ld" });
 
     b.installArtifact(exe);

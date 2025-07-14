@@ -1,8 +1,9 @@
 const Syscall = @import("syscall.zig");
-const RV = @import("riscv.zig");
+const config = @import("config.zig");
+const riscv = @import("riscv.zig");
 const std = @import("std");
-const VM = @import("vm.zig");
-const ptable_t = VM.ptable_t;
+const vm = @import("vm.zig");
+const ptable_t = vm.ptable_t;
 
 const logger = std.log.scoped(.process);
 
@@ -54,15 +55,21 @@ pub const TrapState = extern struct {
 pub extern fn user_trap() callconv(.Naked) void;
 pub extern fn run_user(*TrapState) callconv(.C) void;
 
-pub export var trap_state align(4096) = TrapState{
-    .registers = .{ .pc = undefined },
-    .kernel_sp = undefined,
-};
+pub export var trap_states: [config.max_cpus]TrapState = undefined;
 
 pub const Process = struct {
     state: TrapState,
     stack: []usize,
 };
+
+pub fn run_user_process(state: *TrapState) void {
+    const cpuid = riscv.getTP();
+    const trap_state = &trap_states[cpuid];
+
+    trap_state.* = state;
+    run_user(trap_state);
+    state = trap_state.*;
+}
 
 // Process manager
 pub const Manager = struct {
@@ -81,7 +88,7 @@ pub const Manager = struct {
         logger.info("x: {*}", .{x});
 
         const buffer = try std.ArrayListUnmanaged(Process).initCapacity(allocator, 2);
-        RV.stvec.write(@intFromPtr(&user_trap));
+        riscv.stvec.write(@intFromPtr(&user_trap));
 
         return .{
             .allocator = allocator,
@@ -91,9 +98,12 @@ pub const Manager = struct {
     }
 
     pub fn run(self: *Self) void {
-        trap_state = self.processes.items[self.current].state;
-        run_user(&trap_state);
-        self.processes.items[self.current].state = trap_state;
+        const cpuid = riscv.getTP();
+        const trap_state = &trap_states[cpuid];
+
+        trap_state.* = self.processes.items[self.current].state;
+        run_user(trap_state);
+        self.processes.items[self.current].state = trap_state.*;
     }
 
     pub fn read(self: *Self, pid: usize, comptime reg: Register) usize {

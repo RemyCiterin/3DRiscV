@@ -4,7 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 // Control and status registers description
-const RV = @import("riscv.zig");
+const riscv = @import("riscv.zig");
 
 // UART mmio interface
 const UART = @import("print.zig");
@@ -36,9 +36,9 @@ const Bench = @import("bench.zig");
 const Alloc = @import("malloc.zig");
 
 // Virtual memory
-const VM = @import("vm.zig");
-const ptable_t = VM.ptable_t;
-const page_t = VM.page_t;
+const vm = @import("vm.zig");
+const ptable_t = vm.ptable_t;
+const page_t = vm.page_t;
 
 // Page allocator
 const PAlloc = @import("page_allocator.zig").PAlloc;
@@ -49,13 +49,13 @@ var initial_user_program = @embedFile("user.bin");
 // Allocate the first executable
 pub fn setupExectable(manager: *Manager, binary: []const u8) anyerror!ptable_t {
     const logger = std.log.scoped(.kernel);
-    const ptable: ptable_t = try VM.initTable();
+    const ptable: ptable_t = try vm.initTable();
 
     const stack = try palloc.alloc();
 
     const stack_usize: [*]usize = @ptrCast(&stack[0]);
 
-    try VM.map(ptable, 0x20000000, @intFromPtr(stack), 0x1000, VM.Perms.urw());
+    try vm.map(ptable, 0x20000000, @intFromPtr(stack), 0x1000, vm.Perms.urw());
 
     var pos: u32 = 0;
     var size: u32 = binary.len;
@@ -63,24 +63,24 @@ pub fn setupExectable(manager: *Manager, binary: []const u8) anyerror!ptable_t {
     while (size > 0) {
         const page = try palloc.alloc();
         std.mem.copyForwards(u8, page, binary[pos .. pos + @min(4096, size)]);
-        try VM.map(ptable, 0x10000000 + pos, @intFromPtr(page), 4096, VM.Perms.urwx());
+        try vm.map(ptable, 0x10000000 + pos, @intFromPtr(page), 4096, vm.Perms.urwx());
         size = if (size > 4096) size - 4096 else 0;
         pos += 4096;
     }
 
     for (0..10) |_| {
         const page = try palloc.alloc();
-        try VM.map(ptable, 0x10000000 + pos, @intFromPtr(page), 4096, VM.Perms.urwx());
+        try vm.map(ptable, 0x10000000 + pos, @intFromPtr(page), 4096, vm.Perms.urwx());
         pos += 4096;
     }
 
     const trampoline: u32 = @intFromPtr(&Process.run_user) & ~@as(u32, 0xFFF);
-    try VM.map(ptable, trampoline, trampoline, 0x2000, VM.Perms.rx());
+    try vm.map(ptable, trampoline, trampoline, 0x2000, vm.Perms.rx());
 
-    const trap: u32 = @intFromPtr(&Process.trap_state) & ~@as(u32, 0xFFF);
-    try VM.map(ptable, trap, trap, 0x2000, VM.Perms.rw());
+    const trap: u32 = @intFromPtr(&Process.trap_states) & ~@as(u32, 0xFFF);
+    try vm.map(ptable, trap, trap, 0x4000, vm.Perms.rw());
 
-    const satp: usize = @bitCast(@TypeOf(RV.satp).Fields{
+    const satp: usize = @bitCast(@TypeOf(riscv.satp).Fields{
         .PPN = @truncate(@as(u64, @intFromPtr(ptable)) / 4096),
         .MODE = .Sv32,
         .ASID = 0,
@@ -127,14 +127,14 @@ pub fn log(
     // This ressource is shared between kernel and users,
     // so we may observe a deadlock if this function is
     // interrupted AND used by the kernel
-    const sie = RV.sstatus.read().SIE;
-    RV.sstatus.modify(.{ .SIE = 0 });
-    defer RV.sstatus.modify(.{ .SIE = sie });
+    const sie = riscv.sstatus.read().SIE;
+    riscv.sstatus.modify(.{ .SIE = 0 });
+    defer riscv.sstatus.modify(.{ .SIE = sie });
 
     logSpinlock.lock();
     defer logSpinlock.unlock();
 
-    const id: u32 = RV.getTP();
+    const id: u32 = riscv.getTP();
 
     _ = level;
     const cycle: usize = @truncate(Clint.getTime());
@@ -166,25 +166,25 @@ pub export fn handler(manager: *Manager) callconv(.C) void {
     const logger = std.log.scoped(.handler);
     const pid = manager.current;
 
-    if (RV.scause.read().INTERRUPT == 0) {
-        // logger.info("cause: {}", .{RV.scause.read()});
+    if (riscv.scause.read().INTERRUPT == 0) {
+        // logger.info("cause: {}", .{riscv.scause.read()});
         //logger.info("sepc: {x}", .{manager.read(pid, .pc)});
 
         manager.write(pid, .pc, manager.read(pid, .pc) + 4);
         manager.syscall() catch unreachable;
-    } else if (RV.sip.read().STIP == 1) {
+    } else if (riscv.sip.read().STIP == 1) {
         try UART.writer.print("timmer interrupt\n", .{});
         Clint.setNextTimerInterrupt();
         manager.next();
         logger.info("x", .{});
     } else {
-        RV.sip.modify(.{ .SEIP = 0 });
+        riscv.sip.modify(.{ .SEIP = 0 });
     }
 }
 
 pub export fn machine_main() align(16) callconv(.C) noreturn {
     // Deleg all interrupts
-    RV.mideleg.modify(.{
+    riscv.mideleg.modify(.{
         .UserSoftware = 1,
         .UserTimer = 1,
         .UserExternal = 1,
@@ -197,7 +197,7 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
     });
 
     // Deleg all exceptions
-    RV.medeleg.modify(.{
+    riscv.medeleg.modify(.{
         .InstructionAdressMisaligned = 1,
         .InstructionAccessFault = 1,
         .IllegalInstruction = 1,
@@ -214,9 +214,9 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
         .StoreAMOpageFault = 1,
     });
 
-    RV.mstatus.modify(.{ .MPP = 1 });
+    riscv.mstatus.modify(.{ .MPP = 1 });
 
-    RV.mepc.write(@intFromPtr(&supervisor_main));
+    riscv.mepc.write(@intFromPtr(&supervisor_main));
 
     const tp: u32 = asm volatile ("csrr %[x], mhartid"
         : [x] "=r" (-> u32),
@@ -262,15 +262,15 @@ pub fn kernel_main() anyerror!noreturn {
 
     palloc.init();
 
-    const ptable = try VM.initTable();
+    const ptable = try vm.initTable();
 
-    try VM.map(ptable, 0x10000000, 0x10000000, 0x1000, VM.Perms.rw());
-    try VM.map(ptable, 0x30000000, 0x30000000, 0x10000, VM.Perms.rw());
-    try VM.map(ptable, 0x80000000, 0x80000000, 40 * 1024 * 1024, VM.Perms.rwx());
+    try vm.map(ptable, 0x10000000, 0x10000000, 0x1000, vm.Perms.rw());
+    try vm.map(ptable, 0x30000000, 0x30000000, 0x10000, vm.Perms.rw());
+    try vm.map(ptable, 0x80000000, 0x80000000, 64 * 1024 * 1024, vm.Perms.rwx());
 
-    try VM.map(ptable, 0x20000000, 0x83000000, 4096, VM.Perms.rwx());
+    try vm.map(ptable, 0x20000000, 0x83000000, 4096, vm.Perms.rwx());
 
-    RV.satp.write(.{
+    riscv.satp.write(.{
         .PPN = @truncate(@as(u32, @intFromPtr(ptable)) / 4096),
         .MODE = .Sv32,
         .ASID = 0,
@@ -279,16 +279,16 @@ pub fn kernel_main() anyerror!noreturn {
 
     var manager = try Manager.init(malloc);
 
-    RV.sstatus.modify(.{ .SPIE = 1 });
-    RV.sie.modify(.{ .SEIE = 0, .STIE = 1 });
-    RV.sstatus.modify(.{ .SPP = 0 });
+    riscv.sstatus.modify(.{ .SPIE = 1 });
+    riscv.sie.modify(.{ .SEIE = 0, .STIE = 1 });
+    riscv.sstatus.modify(.{ .SPP = 0 });
 
     Clint.setNextTimerInterrupt();
 
     _ = try setupExectable(&manager, initial_user_program[0..]);
 
     while (true) {
-        RV.sstatus.modify(.{ .SPP = 0 });
+        riscv.sstatus.modify(.{ .SPP = 0 });
         manager.run();
         handler(&manager);
     }
