@@ -1,19 +1,20 @@
+//! This module build a memory allocator protected by a spinlock,
+//! so it can be used by multiple parallel threads. This lock
+//! is a spinlock so it just wait for it to be ready
+
 const std = @import("std");
 const mem = std.mem;
 
 const Spinlock = @import("spinlock.zig");
 
-// User allocator protedted by a spinlock
-const UserAlloc = @This();
-
 lock: Spinlock = .{},
 kalloc: std.mem.Allocator,
 
-pub fn init(kalloc: std.mem.Allocator) UserAlloc {
+pub fn init(kalloc: std.mem.Allocator) @This() {
     return .{ .kalloc = kalloc };
 }
 
-pub fn allocator(self: *UserAlloc) std.mem.Allocator {
+pub fn allocator(self: *@This()) std.mem.Allocator {
     return .{
         .ptr = self,
         .vtable = &.{
@@ -30,7 +31,7 @@ pub fn alloc(
     alignment: u8,
     ret_addr: usize,
 ) ?[*]u8 {
-    const self: *UserAlloc = @ptrCast(@alignCast(ctx));
+    const self: *@This() = @ptrCast(@alignCast(ctx));
 
     self.lock.lock();
     defer self.lock.unlock();
@@ -50,7 +51,7 @@ pub fn resize(
     new_len: usize,
     ret_addr: usize,
 ) bool {
-    const self: *UserAlloc = @ptrCast(@alignCast(ctx));
+    const self: *@This() = @ptrCast(@alignCast(ctx));
 
     self.lock.lock();
     defer self.lock.unlock();
@@ -70,7 +71,7 @@ pub fn free(
     alignment: u8,
     ret_addr: usize,
 ) void {
-    const self: *UserAlloc = @ptrCast(@alignCast(ctx));
+    const self: *@This() = @ptrCast(@alignCast(ctx));
 
     self.lock.lock();
     defer self.lock.unlock();

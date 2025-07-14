@@ -33,8 +33,7 @@ const Clint = @import("clint.zig");
 // User-mode performance benchmarks
 const Bench = @import("bench.zig");
 
-// Protected user memory allocator
-const UserAlloc = @import("user_alloc.zig");
+const Alloc = @import("malloc.zig");
 
 // Virtual memory
 const VM = @import("vm.zig");
@@ -49,13 +48,14 @@ var initial_user_program = @embedFile("user.bin");
 
 // Allocate the first executable
 pub fn setupExectable(manager: *Manager, binary: []const u8) anyerror!ptable_t {
+    const logger = std.log.scoped(.kernel);
     const ptable: ptable_t = try VM.initTable();
 
     const stack = try palloc.alloc();
 
     const stack_usize: [*]usize = @ptrCast(&stack[0]);
 
-    VM.map(ptable, 0x20000000, @intFromPtr(stack), 0x1000, VM.Perms.urw()) catch unreachable;
+    try VM.map(ptable, 0x20000000, @intFromPtr(stack), 0x1000, VM.Perms.urw());
 
     var pos: u32 = 0;
     var size: u32 = binary.len;
@@ -86,11 +86,13 @@ pub fn setupExectable(manager: *Manager, binary: []const u8) anyerror!ptable_t {
         .ASID = 0,
     });
 
+    logger.info("add new executable", .{});
     try manager.newWith(Process.TrapState{
         .registers = .{ .pc = 0x10000000 },
         .kernel_sp = undefined,
         .satp = satp,
     }, stack_usize[0..1024]);
+    logger.info("new executable added", .{});
 
     return ptable;
 }
@@ -160,12 +162,6 @@ pub fn panic(
     hang();
 }
 
-extern var kalloc_buffer: [31 * 1024 * 1024]u8;
-
-// Main kernel allocator
-pub var kalloc: Allocator = undefined;
-pub var malloc: Allocator = undefined;
-
 pub export fn handler(manager: *Manager) callconv(.C) void {
     const logger = std.log.scoped(.handler);
     const pid = manager.current;
@@ -187,9 +183,7 @@ pub export fn handler(manager: *Manager) callconv(.C) void {
 }
 
 pub export fn machine_main() align(16) callconv(.C) noreturn {
-    // We deleg all the interrupts and exceptions so we don't need
-    // an interrupt handler here
-
+    // Deleg all interrupts
     RV.mideleg.modify(.{
         .UserSoftware = 1,
         .UserTimer = 1,
@@ -202,6 +196,7 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
         .MachineExternal = 1,
     });
 
+    // Deleg all exceptions
     RV.medeleg.modify(.{
         .InstructionAdressMisaligned = 1,
         .InstructionAccessFault = 1,
@@ -239,10 +234,14 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
 }
 
 pub export fn supervisor_main() align(16) callconv(.C) void {
-    kernel_main();
+    const logger = std.log.scoped(.supervisor);
+    kernel_main() catch |e| {
+        logger.err("kernel error: {}", .{e});
+        hang();
+    };
 }
 
-pub export fn kernel_main() align(16) callconv(.C) void {
+pub fn kernel_main() anyerror!noreturn {
     const logger = std.log.scoped(.kernel);
 
     logger.info("=== Start DOoOM ===", .{});
@@ -258,42 +257,27 @@ pub export fn kernel_main() align(16) callconv(.C) void {
         \\  interface for UART, SDRAM, MMC and HDMI
     , .{});
 
-    const kalloc_len = 5 * 1024 * 1024;
-    var kernel_fba = std.heap.FixedBufferAllocator.init(kalloc_buffer[0..kalloc_len]);
-    kalloc = kernel_fba.allocator();
+    Alloc.init();
+    const malloc = Alloc.malloc;
 
-    const malloc_len = 5 * 1024 * 1024;
-    var user_fba = std.heap.FixedBufferAllocator.init(
-        kalloc_buffer[kalloc_len .. kalloc_len + malloc_len],
-    );
-    var user_alloc = UserAlloc.init(user_fba.allocator());
-    malloc = user_alloc.allocator();
+    palloc.init();
 
-    logger.info("kalloc buffer base: {*}", .{&kalloc_buffer[0]});
-    palloc.init(
-        @intFromPtr(&kalloc_buffer[kalloc_len + malloc_len]),
-        @intFromPtr(&kalloc_buffer[30 * 1024 * 1024]),
-    );
+    const ptable = try VM.initTable();
 
-    const ptable = VM.initTable() catch unreachable;
+    try VM.map(ptable, 0x10000000, 0x10000000, 0x1000, VM.Perms.rw());
+    try VM.map(ptable, 0x30000000, 0x30000000, 0x10000, VM.Perms.rw());
+    try VM.map(ptable, 0x80000000, 0x80000000, 40 * 1024 * 1024, VM.Perms.rwx());
 
-    VM.map(ptable, 0x10000000, 0x10000000, 0x1000, VM.Perms.rw()) catch unreachable;
-    VM.map(ptable, 0x30000000, 0x30000000, 0x10000, VM.Perms.rw()) catch unreachable;
-    VM.map(ptable, 0x80000000, 0x80000000, 40 * 1024 * 1024, VM.Perms.rwx()) catch unreachable;
+    try VM.map(ptable, 0x20000000, 0x83000000, 4096, VM.Perms.rwx());
 
-    VM.map(ptable, 0x20000000, 0x83000000, 4096, VM.Perms.rwx()) catch unreachable;
-
-    logger.info("Prepare to write to SATP", .{});
     RV.satp.write(.{
         .PPN = @truncate(@as(u32, @intFromPtr(ptable)) / 4096),
         .MODE = .Sv32,
         .ASID = 0,
     });
     asm volatile ("sfence.vma");
-    logger.info("Prepare to sfence.vma", .{});
 
-    var manager = Manager.init(kalloc);
-    //_ = manager.new(@intFromPtr(&user_main), 4096, &malloc, 0) catch unreachable;
+    var manager = try Manager.init(malloc);
 
     RV.sstatus.modify(.{ .SPIE = 1 });
     RV.sie.modify(.{ .SEIE = 0, .STIE = 1 });
@@ -301,101 +285,11 @@ pub export fn kernel_main() align(16) callconv(.C) void {
 
     Clint.setNextTimerInterrupt();
 
-    _ = setupExectable(&manager, initial_user_program[0..]) catch unreachable;
+    _ = try setupExectable(&manager, initial_user_program[0..]);
 
     while (true) {
         RV.sstatus.modify(.{ .SPP = 0 });
         manager.run();
         handler(&manager);
     }
-
-    @panic("unreachable");
-}
-
-pub export fn user_main(pid: usize, alloc: *Allocator) callconv(.C) noreturn {
-    const logger = std.log.scoped(.user);
-
-    logger.info("process {} started", .{pid});
-
-    //Syscall.yield();
-    Syscall.exec(@intFromPtr(&user_main), 512, &malloc);
-
-    logger.info("Binary Search:", .{});
-    for (1..11) |i| {
-        const size = 10 * i;
-        var bench = Bench.BinarySearch.init(alloc.*, size) catch unreachable;
-        Bench.measure(size, &bench);
-        bench.free();
-    }
-
-    logger.info("Fibo:", .{});
-    for (1..11) |i| {
-        const size = 10 * i;
-        var bench = Bench.Fibo.init(size);
-        const fibo = Bench.measure(size, &bench);
-        //logger.info("fibo({}) = {}", .{ size, fibo });
-        _ = fibo;
-    }
-
-    logger.info("Fibo Recursive:", .{});
-    for (1..11) |i| {
-        const size = 2 * i;
-        var bench = Bench.FiboRec.init(size);
-        const fibo = Bench.measure(size, &bench);
-        //logger.info("fibo({}) = {}", .{ size, fibo });
-        _ = fibo;
-    }
-
-    logger.info("ALU latency:", .{});
-    for (1..11) |i| {
-        const size = 10 * i;
-        var bench = Bench.LatencyALU.init(size);
-        const output = Bench.measure(size, &bench);
-        _ = output;
-    }
-
-    logger.info("ALU bandwidth:", .{});
-    for (1..11) |i| {
-        const size = 10 * i;
-        var bench = Bench.BandwidthALU.init(size);
-        const output = Bench.measure(size, &bench);
-        _ = output;
-    }
-
-    logger.info("LSU latency:", .{});
-    for (1..11) |i| {
-        const size = 10 * i;
-        var bench = Bench.LatencyLSU.init(size);
-        const output = Bench.measure(size, &bench);
-        _ = output;
-    }
-
-    logger.info("LSU bandwidth:", .{});
-    for (1..11) |i| {
-        const size = 10 * i;
-        var bench = Bench.BandwidthLSU.init(size);
-        const output = Bench.measure(size, &bench);
-        _ = output;
-    }
-
-    logger.info("Merge Sort:", .{});
-    for (1..11) |i| {
-        const size = 10 * i;
-        var bench = Bench.Sort.init(alloc.*, size) catch unreachable;
-        Bench.measure(size, &bench);
-        bench.free();
-    }
-
-    logger.info("Matrix Multiplication:", .{});
-    for (1..11) |i| {
-        const size = 2 * i;
-        var bench = Bench.MatrixMult.init(alloc.*, size) catch unreachable;
-        Bench.measure(size, &bench);
-        bench.free();
-    }
-
-    const pixel = Screen.Pixel{ .blue = 0b10, .red = 0b100 };
-    pixel.fillRectangle(100, 0, 100, 240 - 1);
-    pixel.fillRectangle(0, 100, 320 - 1, 100);
-    hang();
 }

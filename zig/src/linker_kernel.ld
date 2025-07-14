@@ -5,10 +5,6 @@ ENTRY( _start )
 
 SECTIONS
 {
-  /*
-   * ensure that _start 0x80010000,
-   * where qemu's -kernel jumps.
-   */
   . = 0x80000000;
   . = ALIGN(4K);
 
@@ -40,5 +36,8 @@ SECTIONS
     . = ALIGN(4);
     PROVIDE(bss_end = .);
 
-    kalloc_buffer = .;
+    . = ALIGN(4K);
+    malloc_buffer = .;
+    . = ALIGN(4K);
+    palloc_buffer = .;
 }

@@ -22,7 +22,7 @@ test:
 	riscv32-none-elf-objcopy --strip-debug -O ihex zig/zig-out/bin/kernel.elf Mem.ihex
 	riscv32-none-elf-objcopy --strip-debug -O binary zig/zig-out/bin/user.elf zig/src/user.bin
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 100000 1 > Mem.hex
-	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -D > zig/firmware.asm
+	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -S > zig/firmware.asm
 
 #yosys:
 #	sed -i '/$$finish/d' Verilog/TestCore.v
@@ -43,14 +43,14 @@ prog:
 
 verilator: compile
 	make -C simulation all
-	./sim
+	stdbuf -o0 ./sim
 
 simulate:
 	iverilog -s top_sim src/SimTop.v simulation/mt48lc16m16a2.v simulation/BlockRAMDual.v Verilog/*.v -o Verilog/SimTop.vvp
 	vvp Verilog/SimTop.vvp
 
 run:
-	./sim
+	stdbuf -o0 ./sim
 
 run_verbose:
 	./sim_verbose

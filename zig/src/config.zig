@@ -1,5 +1,9 @@
 pub const cpus: u64 = 1;
 pub const memory_end = 0x80000000 + 32 * 1024 * 1024;
+
+pub const malloc_size = 32 * 1024 * 1024;
+pub const palloc_size = 16 * 1024 * 1024;
+
 pub const timer_step = 200000;
 pub const clint_base = 0x30000000;
 pub const screen_base = 0x40000000;

@@ -9,13 +9,18 @@
 const std = @import("std");
 const Lock = @import("spinlock.zig");
 const riscv = @import("riscv.zig");
+const config = @import("config.zig");
 
 const logger = std.log.scoped(.palloc);
+
+pub extern var palloc_buffer: [config.palloc_size]u8;
 
 var palloc: PAlloc = undefined;
 pub const page_t = riscv.page_t;
 
-pub fn init(begin: usize, end: usize) void {
+pub fn init() void {
+    const begin: usize = @intFromPtr(&palloc_buffer[0]);
+    const end: usize = begin + config.palloc_size;
     palloc = PAlloc.init(begin, end);
 }
 
