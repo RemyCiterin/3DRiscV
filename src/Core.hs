@@ -727,6 +727,7 @@ makeCore
             display
               "interrupt at pc= 0x" (formatHex 0 req.pc)
               " to pc= 0x" (formatHex 0 trapPc)
+              " " cause
           else do
             --when (hartId == 0) do
             --  display

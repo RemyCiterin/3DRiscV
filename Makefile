@@ -22,7 +22,8 @@ test:
 	riscv32-none-elf-objcopy --strip-debug -O ihex zig/zig-out/bin/kernel.elf Mem.ihex
 	riscv32-none-elf-objcopy --strip-debug -O binary zig/zig-out/bin/user.elf zig/src/user.bin
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 100000 1 > Mem.hex
-	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -S > zig/firmware.asm
+	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -S > zig/kernel.asm
+	riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
 
 #yosys:
 #	sed -i '/$$finish/d' Verilog/TestCore.v

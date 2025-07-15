@@ -203,7 +203,7 @@ pub fn map(
         .{ virt, virt + size - 1, phys, phys + size - 1 },
     );
 
-    if (va % 4096 != 0 or size % 4096 != 0 or size == 0 or pa % size != 0) {
+    if (va % 4096 != 0 or size % 4096 != 0 or size == 0 or pa % 4096 != 0) {
         logger.info(
             "va: 0x{x}, pa: 0x{x} or size: 0x{x} is not aligned",
             .{ va, pa, size },

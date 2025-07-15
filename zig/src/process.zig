@@ -83,10 +83,6 @@ pub const Manager = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) anyerror!Self {
-        logger.info("ready to allocate x?", .{});
-        const x: *u8 = try allocator.create(u8);
-        logger.info("x: {*}", .{x});
-
         const buffer = try std.ArrayListUnmanaged(Process).initCapacity(allocator, 2);
         riscv.stvec.write(@intFromPtr(&user_trap));
 
@@ -138,9 +134,6 @@ pub const Manager = struct {
 
     pub fn newWith(self: *Self, state: TrapState, stack: []usize) !void {
         const process = Process{ .state = state, .stack = stack };
-
-        const x: *u8 = try self.allocator.create(u8);
-        logger.info("x: {*}", .{x});
 
         try self.processes.append(self.allocator, process);
     }

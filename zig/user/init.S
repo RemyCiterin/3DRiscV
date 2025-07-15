@@ -18,7 +18,7 @@ _start:
   la t0, bss_init_finish
   li t1, 1
   sw t1, 0(t0)
-  jal main
+  call main
 .infinite_loop:
   j .infinite_loop
 

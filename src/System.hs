@@ -167,7 +167,7 @@ makeSystem hartId tlbFlush inputs = do
                   , exception= false
                   , pc= trap.mepc.val
                   , tval= dontCare
-                  , flush= false
+                  , flush= true
                   , rd= dontCare }
             else do
               return
@@ -195,7 +195,7 @@ makeSystem hartId tlbFlush inputs = do
                   , exception= false
                   , pc= trap.sepc.val
                   , tval= dontCare
-                  , flush= false
+                  , flush= true
                   , rd= dontCare }
             else do
               return

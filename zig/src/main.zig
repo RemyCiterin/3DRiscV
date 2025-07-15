@@ -35,6 +35,8 @@ const Bench = @import("bench.zig");
 
 const Alloc = @import("malloc.zig");
 
+const config = @import("config.zig");
+
 // Virtual memory
 const vm = @import("vm.zig");
 const ptable_t = vm.ptable_t;
@@ -162,7 +164,7 @@ pub fn panic(
     hang();
 }
 
-pub export fn handler(manager: *Manager) callconv(.C) void {
+pub fn handler(manager: *Manager) callconv(.C) void {
     const logger = std.log.scoped(.handler);
     const pid = manager.current;
 
@@ -172,13 +174,13 @@ pub export fn handler(manager: *Manager) callconv(.C) void {
 
         manager.write(pid, .pc, manager.read(pid, .pc) + 4);
         manager.syscall() catch unreachable;
-    } else if (riscv.sip.read().STIP == 1) {
-        try UART.writer.print("timmer interrupt\n", .{});
-        Clint.setNextTimerInterrupt();
-        manager.next();
-        logger.info("x", .{});
+
+        //riscv.sip.modify(.{ .SSIP = 0 });
+        logger.info("exception sip.ssip: {any}", .{riscv.sip.read().SSIP});
+        logger.info("timecmp: {}", .{Clint.mtimecmp.*});
     } else {
-        riscv.sip.modify(.{ .SEIP = 0 });
+        logger.info("interrupt sip.ssip: {any}", .{riscv.sip.read().SSIP});
+        riscv.sip.modify(.{ .SSIP = 0 });
     }
 }
 
@@ -191,7 +193,7 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
         .SupervisorTimer = 1,
         .SupervisorSoftware = 1,
         .SupervisorExternal = 1,
-        .MachineTimer = 1,
+        .MachineTimer = 0,
         .MachineSoftware = 1,
         .MachineExternal = 1,
     });
@@ -214,7 +216,51 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
         .StoreAMOpageFault = 1,
     });
 
-    riscv.mstatus.modify(.{ .MPP = 1 });
+    const MachineState = extern struct {
+        a1: usize = undefined,
+        a2: usize = undefined,
+        a3: usize = undefined,
+        a4: usize = undefined,
+        interval: usize = config.timer_step,
+        mtimecmp: *volatile u64,
+
+        // TODO: use mtimecmp as u64 and not u32
+        export fn machine_handler() callconv(.Naked) void {
+            asm volatile (
+                \\csrrw a0,mscratch,a0
+                \\sw a1, 0 * 4(a0)
+                \\sw a2, 1 * 4(a0)
+                \\sw a3, 2 * 4(a0)
+                \\sw a4, 3 * 4(a0)
+                \\
+                \\lw a1, 4 * 4(a0) // interval
+                \\lw a2, 5 * 4(a0) // *mtimecmp
+                \\
+                \\lw a3, 0(a2)     // mtimecmp
+                \\add a3, a3, a1
+                \\sw a3, 0(a2)     // mtimecmp <- old(mtimecmp) + interval
+                \\
+                \\li a1,2
+                \\csrs sip, a1 // Set bit 2 of sip
+                \\
+                \\li a1, 0x10000000
+                \\li a2, 10
+                \\sw a2, 0(a1)
+                \\
+                \\lw a1, 0 * 4(a0)
+                \\lw a2, 1 * 4(a0)
+                \\lw a3, 2 * 4(a0)
+                \\lw a4, 3 * 4(a0)
+                \\csrrw a0,mscratch,a0
+                \\mret
+            );
+        }
+    };
+
+    var state = MachineState{ .mtimecmp = &Clint.clint.mtimecmp };
+
+    riscv.mstatus.modify(.{ .MPP = 1, .MPIE = 1 });
+    riscv.mie.modify(.{ .MTIE = 1 });
 
     riscv.mepc.write(@intFromPtr(&supervisor_main));
 
@@ -229,7 +275,18 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
 
     while (tp != 0) {}
 
-    asm volatile ("mret");
+    Clint.setNextTimerInterrupt();
+    //Clint.mtimecmp.* = 1 << 63;
+
+    asm volatile (
+        \\csrw mscratch,%[state]
+        \\csrw mtvec,%[handler]
+        \\mret
+        :
+        : [state] "r" (&state),
+          [handler] "r" (&MachineState.machine_handler),
+    );
+
     while (true) {}
 }
 
@@ -282,8 +339,6 @@ pub fn kernel_main() anyerror!noreturn {
     riscv.sstatus.modify(.{ .SPIE = 1 });
     riscv.sie.modify(.{ .SEIE = 0, .STIE = 1 });
     riscv.sstatus.modify(.{ .SPP = 0 });
-
-    Clint.setNextTimerInterrupt();
 
     _ = try setupExectable(&manager, initial_user_program[0..]);
 
