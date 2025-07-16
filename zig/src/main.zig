@@ -79,21 +79,11 @@ pub fn setupExectable(manager: *Manager, binary: []const u8) anyerror!ptable_t {
     const trampoline: u32 = @intFromPtr(&Process.run_user) & ~@as(u32, 0xFFF);
     try vm.map(ptable, trampoline, trampoline, 0x2000, vm.Perms.rx());
 
-    const trap: u32 = @intFromPtr(&Process.trap_states) & ~@as(u32, 0xFFF);
-    try vm.map(ptable, trap, trap, 0x4000, vm.Perms.rw());
-
-    const satp: usize = @bitCast(@TypeOf(riscv.satp).Fields{
-        .PPN = @truncate(@as(u64, @intFromPtr(ptable)) / 4096),
-        .MODE = .Sv32,
-        .ASID = 0,
-    });
-
     logger.info("add new executable", .{});
-    try manager.newWith(Process.TrapState{
-        .registers = .{ .pc = 0x10000000 },
-        .kernel_sp = undefined,
-        .satp = satp,
-    }, stack_usize[0..1024]);
+    const trap_ptr = try manager.new(ptable, 0x10000000, stack_usize[0..1024]);
+
+    const trap: u32 = @intFromPtr(trap_ptr) & ~@as(u32, 0xFFF);
+    try vm.map(ptable, trap, trap, 0x4000, vm.Perms.rw());
     logger.info("new executable added", .{});
 
     return ptable;
@@ -276,7 +266,6 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
     while (tp != 0) {}
 
     Clint.setNextTimerInterrupt();
-    //Clint.mtimecmp.* = 1 << 63;
 
     asm volatile (
         \\csrw mscratch,%[state]

@@ -58,17 +58,18 @@ pub extern fn run_user(*TrapState) callconv(.C) void;
 pub export var trap_states: [config.max_cpus]TrapState = undefined;
 
 pub const Process = struct {
-    state: TrapState,
+    state: *TrapState,
     stack: []usize,
+    ptable: ptable_t,
 };
 
-pub fn run_user_process(state: *TrapState) void {
+pub fn call_user(state: *TrapState) void {
     const cpuid = riscv.getTP();
     const trap_state = &trap_states[cpuid];
 
-    trap_state.* = state;
+    trap_state.* = state.*;
     run_user(trap_state);
-    state = trap_state.*;
+    state.* = trap_state.*;
 }
 
 // Process manager
@@ -94,12 +95,7 @@ pub const Manager = struct {
     }
 
     pub fn run(self: *Self) void {
-        const cpuid = riscv.getTP();
-        const trap_state = &trap_states[cpuid];
-
-        trap_state.* = self.processes.items[self.current].state;
-        run_user(trap_state);
-        self.processes.items[self.current].state = trap_state.*;
+        run_user(self.processes.items[self.current].state);
     }
 
     pub fn read(self: *Self, pid: usize, comptime reg: Register) usize {
@@ -110,32 +106,30 @@ pub const Manager = struct {
         @field(self.processes.items[pid].state.registers, @tagName(reg)) = val;
     }
 
-    // return the PID of the new process
-    // The process will start with it's PID in `a0`, and `args` in `a1`
-    pub fn new(self: *Self, pc: usize, stack_size: usize, args: ?*anyopaque, satp: usize) !usize {
-        var stack = try self.allocator.alloc(usize, stack_size);
-        const pid = self.processes.items.len;
-
-        logger.info("start process {}", .{pid});
+    // Return a pointer to it's trap state, such that the caller can add this
+    // into the page table of the process
+    pub fn new(self: *Self, ptable: ptable_t, pc: usize, stack: []usize) !*TrapState {
+        const satp: usize = @bitCast(@TypeOf(riscv.satp).Fields{
+            .PPN = @truncate(@as(u64, @intFromPtr(ptable)) / 4096),
+            .MODE = .Sv32,
+            .ASID = 0,
+        });
 
         const process = Process{
-            .state = .{ .registers = .{
-                .sp = @intFromPtr(&stack[stack_size - 1]),
-                .a1 = @intFromPtr(args),
-                .pc = pc,
-                .a0 = pid,
-            }, .kernel_sp = undefined, .satp = satp },
+            .state = try self.allocator.create(TrapState),
+            .ptable = ptable,
             .stack = stack,
         };
 
-        try self.processes.append(self.allocator, process);
-        return pid;
-    }
+        process.state.* = .{
+            .registers = .{ .pc = pc },
+            .kernel_sp = undefined,
+            .satp = satp,
+        };
 
-    pub fn newWith(self: *Self, state: TrapState, stack: []usize) !void {
-        const process = Process{ .state = state, .stack = stack };
-
         try self.processes.append(self.allocator, process);
+
+        return process.state;
     }
 
     pub fn next(self: *Self) void {
@@ -158,16 +152,16 @@ pub const Manager = struct {
         return input.*;
     }
 
-    pub inline fn exec(self: *Self, pid: usize, params: anytype) !void {
-        const new_pid = try self.new(params.pc, params.stack_size, params.args, 0);
-        self.setOutput(pid, .exec);
-        self.current = new_pid;
+    //pub inline fn exec(self: *Self, pid: usize, params: anytype) !void {
+    //    const new_pid = try self.new(params.pc, params.stack_size, params.args, 0);
+    //    self.setOutput(pid, .exec);
+    //    self.current = new_pid;
 
-        logger.info(
-            "exec syscall from {x} to {x}",
-            .{ self.read(pid, .pc), params.pc },
-        );
-    }
+    //    logger.info(
+    //        "exec syscall from {x} to {x}",
+    //        .{ self.read(pid, .pc), params.pc },
+    //    );
+    //}
 
     pub inline fn yield(self: *Self, pid: usize) void {
         logger.info("yield syscall from {x}", .{self.read(pid, .pc)});
@@ -186,7 +180,7 @@ pub const Manager = struct {
             return self.print(pid);
 
         switch (self.getInput(pid)) {
-            .exec => |params| try self.exec(pid, params),
+            .exec => {}, //try self.exec(pid, params),
             .yield => self.yield(pid),
         }
     }
