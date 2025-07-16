@@ -4,10 +4,13 @@ build/
 db/
 simulation/sim
 simulation/obj_dir
+log.txt
 sim
 Mem.hex
 Mem.ihex
-zig/firmware.asm
+zig/kernel.asm
+zig/user.asm
+zig/log.txt
 zig/zig-out
 zig/zig-cache
 zig/.zig-cache
