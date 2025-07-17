@@ -183,7 +183,7 @@ pub fn CSR(comptime packedT: type) type {
         pub fn modify(comptime self: Self, fields: anytype) void {
             var val = self.read();
 
-            inline for (@typeInfo(@TypeOf(fields)).Struct.fields) |field| {
+            inline for (@typeInfo(@TypeOf(fields)).@"struct".fields) |field| {
                 @field(val, field.name) = @field(fields, field.name);
             }
 
@@ -193,8 +193,8 @@ pub fn CSR(comptime packedT: type) type {
         pub fn modify2(comptime self: Self, fields: anytype) void {
             var val = self.read();
 
-            inline for (@typeInfo(@TypeOf(fields)).Struct.fields) |f1| {
-                inline for (@typeInfo(@TypeOf(@field(fields, f1.name))).Struct.fields) |f2| {
+            inline for (@typeInfo(@TypeOf(fields)).@"struct".fields) |f1| {
+                inline for (@typeInfo(@TypeOf(@field(fields, f1.name))).@"struct".fields) |f2| {
                     @field(@field(val, f1.name), f2.name) = @field(@field(fields, f1.name), f2.name);
                 }
             }
@@ -210,7 +210,7 @@ pub fn MMIO(packedT: type) type {
 
         const Self = @This();
 
-        const IntT = @Type(.{ .Int = .{
+        const IntT = @Type(.{ .int = .{
             .bits = @bitSizeOf(packedT),
             .signedness = .unsigned,
         } });
@@ -227,7 +227,7 @@ pub fn MMIO(packedT: type) type {
         pub fn modify(self: *volatile Self, fields: anytype) void {
             var val = self.read();
 
-            inline for (@typeInfo(@TypeOf(fields)).Struct.fields) |field| {
+            inline for (@typeInfo(@TypeOf(fields)).@"struct".fields) |field| {
                 @field(val, field.name) = @field(fields, field.name);
             }
 
@@ -253,7 +253,7 @@ pub const mcycle: CSR(usize) = .{ .tag = .mcycle };
 pub const mcycleh: CSR(usize) = .{ .tag = .mcycleh };
 
 pub fn UInt(comptime bits: comptime_int) type {
-    return @Type(.{ .Int = .{
+    return @Type(.{ .int = .{
         .bits = bits,
         .signedness = .unsigned,
     } });

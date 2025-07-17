@@ -19,6 +19,7 @@ pub fn allocator(self: *@This()) std.mem.Allocator {
         .ptr = self,
         .vtable = &.{
             .alloc = alloc,
+            .remap = remap,
             .resize = resize,
             .free = free,
         },
@@ -28,7 +29,7 @@ pub fn allocator(self: *@This()) std.mem.Allocator {
 pub fn alloc(
     ctx: *anyopaque,
     len: usize,
-    alignment: u8,
+    alignment: std.mem.Alignment,
     ret_addr: usize,
 ) ?[*]u8 {
     const self: *@This() = @ptrCast(@alignCast(ctx));
@@ -47,7 +48,7 @@ pub fn alloc(
 pub fn resize(
     ctx: *anyopaque,
     memory: []u8,
-    alignment: u8,
+    alignment: std.mem.Alignment,
     new_len: usize,
     ret_addr: usize,
 ) bool {
@@ -65,10 +66,31 @@ pub fn resize(
     );
 }
 
+pub fn remap(
+    ctx: *anyopaque,
+    memory: []u8,
+    alignment: std.mem.Alignment,
+    new_len: usize,
+    ret_addr: usize,
+) ?[*]u8 {
+    const self: *@This() = @ptrCast(@alignCast(ctx));
+
+    self.lock.lock();
+    defer self.lock.unlock();
+
+    return self.kalloc.vtable.remap(
+        self.kalloc.ptr,
+        memory,
+        alignment,
+        new_len,
+        ret_addr,
+    );
+}
+
 pub fn free(
     ctx: *anyopaque,
     memory: []u8,
-    alignment: u8,
+    alignment: std.mem.Alignment,
     ret_addr: usize,
 ) void {
     const self: *@This() = @ptrCast(@alignCast(ctx));

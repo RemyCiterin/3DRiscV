@@ -21,9 +21,16 @@ formal:
 test:
 	riscv32-none-elf-objcopy --strip-debug -O ihex zig/zig-out/bin/kernel.elf Mem.ihex
 	riscv32-none-elf-objcopy --strip-debug -O binary zig/zig-out/bin/user.elf zig/src/user.bin
-	./ihex-to-img.py Mem.ihex hex 2147483648 4 100000 1 > Mem.hex
+	./ihex-to-img.py Mem.ihex hex 2147483648 4 1000000 1 > Mem.hex
 	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -S > zig/kernel.asm
 	riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
+
+qemu:
+	qemu-system-riscv32 \
+  	-M virt -serial stdio -display \
+  	none -m 1024M -bios none \
+  	-kernel zig/zig-out/bin/kernel.elf \
+  	-cpu rv32,pmp=false
 
 #yosys:
 #	sed -i '/$$finish/d' Verilog/TestCore.v

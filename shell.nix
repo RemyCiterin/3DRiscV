@@ -14,6 +14,7 @@ pkgs.mkShell {
     pkgs.nextpnr
     pkgs.trellis
     pkgs.screen
+    pkgs.sail-riscv
 
     pkgs.graphviz
 

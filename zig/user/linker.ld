@@ -35,4 +35,7 @@ SECTIONS
     }
     . = ALIGN(4);
     PROVIDE(bss_end = .);
+
+    . = ALIGN(4);
+    malloc_buffer = .;
 }

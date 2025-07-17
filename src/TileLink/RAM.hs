@@ -73,7 +73,8 @@ makeTLRAM config = do
             , sink= config.sink }
 
     when (queue.canDeq .&&. channelD.canPut) do
-      channelD.put (queue.first{lane= ram.outBE} :: ChannelD p)
+      let lane = queue.first.opcode.isAccessAck ? (0, ram.outBE)
+      channelD.put (queue.first{lane} :: ChannelD p)
       queue.deq
 
   return

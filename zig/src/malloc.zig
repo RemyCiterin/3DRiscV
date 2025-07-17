@@ -14,6 +14,7 @@ pub var malloc: std.mem.Allocator = undefined;
 
 pub fn init() void {
     const logger = std.log.scoped(.kernel);
+
     logger.info("malloc: {*}", .{&malloc_buffer});
 
     // Use malloc_buffer to create the main memory allocator

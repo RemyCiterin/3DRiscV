@@ -1,8 +1,10 @@
 .section .text.trampoline
 .globl run_user
 .globl user_trap
+.globl machine_handler
 
 # a0 is a pointer to the trap context of type TRAP_STATE
+.align 4
 run_user:
   # calling convention
   addi sp, sp, -15*4
@@ -143,3 +145,71 @@ user_trap:
   lw s11, 14 * 4(sp)
   addi sp, sp, 15*4
   ret
+
+#define PRINT_HEX(code...)\
+  PRINT_BYTE(code; li a1, 0xFF000000; and a0, a0, a1; srli a0, a0, 24); \
+  PRINT_BYTE(code; li a1, 0x00FF0000; and a0, a0, a1; srli a0, a0, 16); \
+  PRINT_BYTE(code; li a1, 0x0000FF00; and a0, a0, a1; srli a0, a0, 8); \
+  PRINT_BYTE(code; li a1, 0x000000FF; and a0, a0, a1;);
+
+#define PRINT_ENDLINE \
+  la a0, 0x10000000;  \
+  la a1, 10;          \
+  sw a1, 0(a0)
+
+/*
+  Take the argument in a0, only use a1, a2 and a3
+*/
+#define PRINT_BYTE(code...) \
+  code;                     \
+  andi a1, a0, 0xF0;        \
+  srli a1, a1, 4;           \
+  li a3, 0x10000000;        \
+  li a2, 10;                \
+  blt a1, a2, 1f;           \
+  addi a1, a1, 0x41 - 10;   \
+  sb a1, 0(a3);             \
+  j 2f;                     \
+1:;                         \
+  addi a1, a1, 0x30;        \
+  sb a1, 0(a3);             \
+2:;                         \
+  code;                     \
+  andi a1, a0, 0x0F;        \
+  li a3, 0x10000000;        \
+  li a2, 10;                \
+  blt a1, a2, 1f;           \
+  addi a1, a1, 0x41 - 10;   \
+  sb a1, 0(a3);             \
+  j 2f;                     \
+1:;                         \
+  addi a1, a1, 0x30;        \
+  sb a1, 0(a3);             \
+2:;
+
+
+.align 4
+machine_handler:
+  csrrw a0,mscratch,a0
+  sw a1, 0 * 4(a0)
+  sw a2, 1 * 4(a0)
+  sw a3, 2 * 4(a0)
+  sw a4, 3 * 4(a0)
+
+  lw a1, 4 * 4(a0) // interval
+  lw a2, 5 * 4(a0) // *mtimecmp
+
+  lw a3, 0(a2)     // mtimecmp
+  add a3, a3, a1
+  sw a3, 0(a2)     // mtimecmp <- old(mtimecmp) + interval
+
+  li a1,2
+  csrs sip, a1 // Set bit 2 of sip
+
+  lw a1, 0 * 4(a0)
+  lw a2, 1 * 4(a0)
+  lw a3, 2 * 4(a0)
+  lw a4, 3 * 4(a0)
+  csrrw a0,mscratch,a0
+  mret
+

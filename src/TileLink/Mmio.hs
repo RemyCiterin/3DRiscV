@@ -63,7 +63,7 @@ makeTLMmio sink confs = do
   address :: Reg (Bit (AddrWidth p)) <- makeReg dontCare
 
   let align addr = addr .&. inv (laneSize' - 1)
-  lane :: Wire (Bit (8 * LaneWidth p)) <- makeWire dontCare
+  lane :: Wire (Bit (8 * LaneWidth p)) <- makeWire 0xaaaaaaaa
 
   always do
     when (channelA.canPeek .&&. channelD.canPut) do

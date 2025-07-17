@@ -89,7 +89,7 @@ pub fn setupExectable(manager: *Manager, binary: []const u8) anyerror!ptable_t {
     return ptable;
 }
 
-pub const std_options = .{
+pub const std_options = std.Options{
     .log_level = .info,
     .logFn = log,
 };
@@ -128,11 +128,10 @@ pub fn log(
 
     const id: u32 = riscv.getTP();
 
-    _ = level;
     const cycle: usize = @truncate(Clint.getTime());
 
     const prefix =
-        "[cpu {}: " ++ @tagName(scope) ++ " at cycle {}] ";
+        "[cpu {} " ++ comptime level.asText() ++ ": " ++ @tagName(scope) ++ " at cycle {}] ";
 
     UART.writer.print(prefix, .{ id, cycle }) catch unreachable;
     UART.writer.print(format, args) catch unreachable;
@@ -167,14 +166,17 @@ pub fn handler(manager: *Manager) callconv(.C) void {
 
         //riscv.sip.modify(.{ .SSIP = 0 });
         logger.info("exception sip.ssip: {any}", .{riscv.sip.read().SSIP});
-        logger.info("timecmp: {}", .{Clint.mtimecmp.*});
+        logger.info("timecmp: {x}", .{Clint.mtimecmp.*});
     } else {
         logger.info("interrupt sip.ssip: {any}", .{riscv.sip.read().SSIP});
         riscv.sip.modify(.{ .SSIP = 0 });
     }
 }
 
+pub export var global: u32 = 0x12345678;
+
 pub export fn machine_main() align(16) callconv(.C) noreturn {
+    UART.putString("Test\n");
     // Deleg all interrupts
     riscv.mideleg.modify(.{
         .UserSoftware = 1,
@@ -214,49 +216,20 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
         interval: usize = config.timer_step,
         mtimecmp: *volatile u64,
 
-        // TODO: use mtimecmp as u64 and not u32
-        export fn machine_handler() callconv(.Naked) void {
-            asm volatile (
-                \\csrrw a0,mscratch,a0
-                \\sw a1, 0 * 4(a0)
-                \\sw a2, 1 * 4(a0)
-                \\sw a3, 2 * 4(a0)
-                \\sw a4, 3 * 4(a0)
-                \\
-                \\lw a1, 4 * 4(a0) // interval
-                \\lw a2, 5 * 4(a0) // *mtimecmp
-                \\
-                \\lw a3, 0(a2)     // mtimecmp
-                \\add a3, a3, a1
-                \\sw a3, 0(a2)     // mtimecmp <- old(mtimecmp) + interval
-                \\
-                \\li a1,2
-                \\csrs sip, a1 // Set bit 2 of sip
-                \\
-                \\li a1, 0x10000000
-                \\li a2, 10
-                \\sw a2, 0(a1)
-                \\
-                \\lw a1, 0 * 4(a0)
-                \\lw a2, 1 * 4(a0)
-                \\lw a3, 2 * 4(a0)
-                \\lw a4, 3 * 4(a0)
-                \\csrrw a0,mscratch,a0
-                \\mret
-            );
-        }
+        pub extern fn machine_handler() callconv(.Naked) void;
     };
-
-    var state = MachineState{ .mtimecmp = &Clint.clint.mtimecmp };
-
-    riscv.mstatus.modify(.{ .MPP = 1, .MPIE = 1 });
-    riscv.mie.modify(.{ .MTIE = 1 });
-
-    riscv.mepc.write(@intFromPtr(&supervisor_main));
 
     const tp: u32 = asm volatile ("csrr %[x], mhartid"
         : [x] "=r" (-> u32),
     );
+
+    var state = MachineState{ .mtimecmp = Clint.mtimecmp };
+
+    riscv.mstatus.modify(.{ .MPP = 1, .MPIE = 1, .MIE = 0, .SPIE = 0 });
+    riscv.mie.modify(.{ .MTIE = 1 });
+
+    riscv.mepc.write(@intFromPtr(&supervisor_main));
+    riscv.satp.write(.{ .ASID = 0, .MODE = .Bare, .PPN = 0 });
 
     asm volatile ("move tp, %[tp]"
         :
@@ -266,6 +239,7 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
     while (tp != 0) {}
 
     Clint.setNextTimerInterrupt();
+    //Clint.mtimecmp.* = Clint.mtime.* +% (1 << 61);
 
     asm volatile (
         \\csrw mscratch,%[state]
@@ -287,7 +261,7 @@ pub export fn supervisor_main() align(16) callconv(.C) void {
     };
 }
 
-pub fn kernel_main() anyerror!noreturn {
+pub noinline fn kernel_main() anyerror!noreturn {
     const logger = std.log.scoped(.kernel);
 
     logger.info("=== Start DOoOM ===", .{});
@@ -313,8 +287,6 @@ pub fn kernel_main() anyerror!noreturn {
     try vm.map(ptable, 0x10000000, 0x10000000, 0x1000, vm.Perms.rw());
     try vm.map(ptable, 0x30000000, 0x30000000, 0x10000, vm.Perms.rw());
     try vm.map(ptable, 0x80000000, 0x80000000, 64 * 1024 * 1024, vm.Perms.rwx());
-
-    try vm.map(ptable, 0x20000000, 0x83000000, 4096, vm.Perms.rwx());
 
     riscv.satp.write(.{
         .PPN = @truncate(@as(u32, @intFromPtr(ptable)) / 4096),

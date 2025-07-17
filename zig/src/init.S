@@ -141,7 +141,7 @@ bss_init_finish:
 
 .section .bss
 .align 4
-  .skip 0x1000
+  .skip 0x4000
 stack_top0:
   .skip 0x4
 

@@ -401,6 +401,7 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
 
           if (commit.peek .&&. ptwOut.peek.success) then do
             when (phys === 0x10000000) $ displayAscii (slice @7 @0 beat)
+
             --when (addr === 0x10000000 .&&. slice @7 @0 beat === 0) finish
             when (isCached phys) ptwOut.consume
             when (isCached phys) input.consume

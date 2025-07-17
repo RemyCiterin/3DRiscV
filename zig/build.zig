@@ -5,38 +5,6 @@ const config = @import("src/config.zig").config;
 
 const XLEN = 32;
 
-const Command = struct {
-    allocator: std.mem.Allocator,
-
-    args: std.ArrayList([]u8),
-
-    pub fn append(this: *@This(), arg: []const u8) !void {
-        const copy = try this.allocator.alloc(u8, arg.len);
-        @memcpy(copy, arg);
-
-        try this.args.append(copy);
-    }
-
-    pub fn appendSlice(this: *@This(), args: []const []const u8) !void {
-        for (args) |arg| try this.append(arg);
-    }
-
-    pub fn init(allocator: std.mem.Allocator) @This() {
-        return .{
-            .allocator = allocator,
-            .args = std.ArrayList([]u8).init(allocator),
-        };
-    }
-
-    pub fn deinit(this: @This()) void {
-        for (this.args.items) |arg| {
-            this.allocator.free(arg);
-        }
-
-        this.args.deinit();
-    }
-};
-
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -47,7 +15,7 @@ pub fn build(b: *std.Build) !void {
         .cpu_features_add = Target.riscv.featureSet(&[_]Feature{
             .zicbom,
             .a,
-            .m,
+            //.m,
         }),
         .os_tag = .freestanding,
         .abi = .none, // .eabi
@@ -80,15 +48,15 @@ pub fn build(b: *std.Build) !void {
     //    .optimize = optimizeSmall,
     //});
 
-    exe.addAssemblyFile(.{ .cwd_relative = "src/trampoline.s" });
+    exe.addAssemblyFile(.{ .cwd_relative = "src/trampoline.S" });
     exe.addAssemblyFile(.{ .cwd_relative = "src/init.S" });
     user.addAssemblyFile(.{ .cwd_relative = "user/init.S" });
 
     //bootloader.addAssemblyFile(.{ .cwd_relative = "src/trampoline.s" });
     //bootloader.addAssemblyFile(.{ .cwd_relative = "src/init.S" });
 
-    user.setLinkerScriptPath(.{ .cwd_relative = "user/linker.ld" });
-    exe.setLinkerScriptPath(.{ .cwd_relative = "src/linker.ld" });
+    user.setLinkerScript(.{ .cwd_relative = "user/linker.ld" });
+    exe.setLinkerScript(.{ .cwd_relative = "src/linker.ld" });
     //bootloader.setLinkerScriptPath(.{ .cwd_relative = "src/linker_boot.ld" });
 
     b.installArtifact(exe);
