@@ -176,7 +176,6 @@ pub fn handler(manager: *Manager) callconv(.C) void {
 pub export var global: u32 = 0x12345678;
 
 pub export fn machine_main() align(16) callconv(.C) noreturn {
-    UART.putString("Test\n");
     // Deleg all interrupts
     riscv.mideleg.modify(.{
         .UserSoftware = 1,
