@@ -8,6 +8,13 @@ pub fn getTP() usize {
     );
 }
 
+pub fn setTP(tp: usize) void {
+    asm volatile ("move tp, %[tp]"
+        :
+        : [tp] "r" (tp),
+    );
+}
+
 pub const page_t = *align(4096) [4096]u8;
 
 pub const CSRenum = union(enum) {

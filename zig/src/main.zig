@@ -156,6 +156,7 @@ pub fn panic(
 pub fn handler(manager: *Manager) callconv(.C) void {
     const logger = std.log.scoped(.handler);
     const pid = manager.current;
+    const tp = riscv.getTP();
 
     if (riscv.scause.read().INTERRUPT == 0) {
         // logger.info("cause: {}", .{riscv.scause.read()});
@@ -166,14 +167,12 @@ pub fn handler(manager: *Manager) callconv(.C) void {
 
         //riscv.sip.modify(.{ .SSIP = 0 });
         logger.info("exception sip.ssip: {any}", .{riscv.sip.read().SSIP});
-        logger.info("timecmp: {x}", .{Clint.mtimecmp.*});
+        logger.info("timecmp: {x}", .{Clint.mtimecmp[tp]});
     } else {
         logger.info("interrupt sip.ssip: {any}", .{riscv.sip.read().SSIP});
         riscv.sip.modify(.{ .SSIP = 0 });
     }
 }
-
-pub export var global: u32 = 0x12345678;
 
 pub export fn machine_main() align(16) callconv(.C) noreturn {
     // Deleg all interrupts
@@ -215,14 +214,16 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
         interval: usize = config.timer_step,
         mtimecmp: *volatile u64,
 
+        // Defined in trampoline.S
         pub extern fn machine_handler() callconv(.Naked) void;
     };
 
-    const tp: u32 = asm volatile ("csrr %[x], mhartid"
-        : [x] "=r" (-> u32),
-    );
+    const tp: u32 = riscv.mhartid.read();
+    riscv.setTP(tp);
 
-    var state = MachineState{ .mtimecmp = Clint.mtimecmp };
+    var state = MachineState{ .mtimecmp = &Clint.mtimecmp[tp] };
+
+    Clint.setNextTimerInterrupt(tp);
 
     riscv.mstatus.modify(.{ .MPP = 1, .MPIE = 1, .MIE = 0, .SPIE = 0 });
     riscv.mie.modify(.{ .MTIE = 1 });
@@ -230,26 +231,13 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
     riscv.mepc.write(@intFromPtr(&supervisor_main));
     riscv.satp.write(.{ .ASID = 0, .MODE = .Bare, .PPN = 0 });
 
-    asm volatile ("move tp, %[tp]"
-        :
-        : [tp] "r" (tp),
-    );
-
     while (tp != 0) {}
 
-    Clint.setNextTimerInterrupt();
-    //Clint.mtimecmp.* = Clint.mtime.* +% (1 << 61);
+    riscv.mscratch.write(@intFromPtr(&state));
+    riscv.mtvec.write(@intFromPtr(&MachineState.machine_handler));
 
-    asm volatile (
-        \\csrw mscratch,%[state]
-        \\csrw mtvec,%[handler]
-        \\mret
-        :
-        : [state] "r" (&state),
-          [handler] "r" (&MachineState.machine_handler),
-    );
-
-    while (true) {}
+    asm volatile ("mret");
+    unreachable;
 }
 
 pub export fn supervisor_main() align(16) callconv(.C) void {
@@ -296,8 +284,8 @@ pub noinline fn kernel_main() anyerror!noreturn {
 
     var manager = try Manager.init(malloc);
 
-    riscv.sstatus.modify(.{ .SPIE = 1 });
-    riscv.sie.modify(.{ .SEIE = 0, .STIE = 1 });
+    riscv.sstatus.modify(.{ .SPIE = 1, .SIE = 0 });
+    riscv.sie.modify(.{ .SSIE = 1, .STIE = 1 });
     riscv.sstatus.modify(.{ .SPP = 0 });
 
     _ = try setupExectable(&manager, initial_user_program[0..]);

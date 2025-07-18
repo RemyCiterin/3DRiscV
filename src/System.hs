@@ -85,7 +85,7 @@ makeSystem hartId tlbFlush inputs = do
       ++ mieCSRs
       ++ mipCSRs
 
-  let canInterrupt :: Option CauseInterrupt = -- DONE
+  let canInterrupt :: Option CauseInterrupt =
         let ready :: Bit 16 = lower (mip.all .&. mie.all) in
         -- Machine mode
         let machine_mask :: Bit 16 =
@@ -104,7 +104,7 @@ makeSystem hartId tlbFlush inputs = do
         in
 
         if mask =!= 0 then
-          some $ unpack $ binaryEncode (firstHot ready)
+          some $ unpack $ binaryEncode (firstHot mask)
         else
           none
 
