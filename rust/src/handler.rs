@@ -1,18 +1,18 @@
-use riscv::register::mcause;
-use riscv::register::mepc;
+use riscv::register::scause;
+use riscv::register::sepc;
 
 use crate::trap::TrapState;
 
 pub extern "C" fn handler(state: &mut TrapState) {
-    let mcause = mcause::read();
+    let scause = scause::read();
 
-    match mcause.cause() {
-        mcause::Trap::Exception(exception) => {
-            println!("mcause: exception at {:x} {:?}", mepc::read(), exception);
-            state.mepc += 4;
+    match scause.cause() {
+        scause::Trap::Exception(exception) => {
+            println!("scause: exception at {:x} {:?}", sepc::read(), exception);
+            state.registers.pc += 4;
         }
-        mcause::Trap::Interrupt(_) => {
-            println!("mcause: interrupt");
+        scause::Trap::Interrupt(_) => {
+            println!("scause: interrupt");
             // TODO
         }
     }

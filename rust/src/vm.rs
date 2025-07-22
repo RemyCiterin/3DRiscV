@@ -2,6 +2,57 @@ use bitflags::bitflags;
 
 use crate::{constant, palloc, pointer::*};
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Mode { Bare, Sv32 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct Satp { bits: usize }
+
+impl Satp {
+    pub fn new() -> Self {
+        Self::from(0)
+    }
+
+    pub fn mode(&self) -> Mode {
+        if self.bits & (1 << 31) == 0 {
+            Mode::Sv32
+        } else {
+            Mode::Bare
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        if mode == Mode::Bare {
+            self.bits &= !(1 << 31);
+        } else {
+            self.bits |= 1 << 31;
+        }
+    }
+
+    pub fn ppn(&self) -> PhyPageNum {
+        PhyPageNum::from(self.bits & ((1 << 22) - 1))
+    }
+
+    pub fn set_ppn(&mut self, ppn: PhyPageNum) {
+        let mask: usize = (1 << 22) - 1;
+
+        assert!(usize::from(ppn) & !mask == 0);
+        self.bits = (self.bits & !mask) | usize::from(ppn);
+    }
+}
+
+impl From<usize> for Satp {
+    fn from(bits: usize) -> Self {
+        Self { bits }
+    }
+}
+
+impl From<Satp> for usize {
+    fn from(satp: Satp) -> usize {
+        satp.bits
+    }
+}
+
 bitflags! {
     #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Flags: usize {
@@ -108,10 +159,10 @@ impl Default for Entry {
 
 // allocate and inite a page table
 pub fn init_ptable() -> PhyPageNum {
-    let ppn = palloc::alloc().unwrap();
+    let ppn: PhyPageNum = palloc::alloc().unwrap();
 
-    let table = ppn.as_pte_mut();
-    for i in 0..512 {
+    let table: &'static mut [Entry] = ppn.as_pte_mut();
+    for i in 0..1024 {
         table[i] = Entry::new(PhyPageNum::from(0), Flags::from_bits_retain(0));
     }
 
@@ -185,7 +236,7 @@ pub fn map(
         let virt = first_virt + (constant::PAGE_SIZE * idx);
         let phys = first_phys + (constant::PAGE_SIZE * idx);
 
-        let entry = walk_and_alloc(2, table, virt);
+        let entry = walk_and_alloc(1, table, virt);
 
         if entry.valid() {
             panic!("remap");
@@ -213,7 +264,7 @@ pub fn unmap(table: PhyPageNum, first_virt: VirtAddr, size: usize, free: bool) {
     for idx in 0..(size / constant::PAGE_SIZE) {
         let virt = first_virt + (constant::PAGE_SIZE * idx);
 
-        let entry = walk(2, table, virt).unwrap();
+        let entry = walk(1, table, virt).unwrap();
 
         if !entry.valid() {
             panic!("unmap");

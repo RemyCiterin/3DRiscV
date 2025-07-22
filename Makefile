@@ -25,6 +25,13 @@ test:
 	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -S > zig/kernel.asm
 	riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
 
+test_rust:
+	riscv32-none-elf-objcopy --strip-debug -O ihex \
+		rust/target/riscv32ima-unknown-none-elf/release/SuperOS Mem.ihex
+	./ihex-to-img.py Mem.ihex hex 2147483648 4 1000000 1 > Mem.hex
+	riscv32-none-elf-objdump rust/target/riscv32ima-unknown-none-elf/release/SuperOS -D > rust/kernel.asm
+	# riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
+
 qemu:
 	qemu-system-riscv32 \
   	-M virt -serial stdio -display \

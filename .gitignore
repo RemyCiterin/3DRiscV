@@ -14,3 +14,4 @@ zig/log.txt
 zig/zig-out
 zig/zig-cache
 zig/.zig-cache
+rust/target

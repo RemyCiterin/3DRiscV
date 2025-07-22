@@ -99,9 +99,8 @@ impl VirtAddr {
 
     pub fn vpn(&self, level: usize) -> usize {
         match level {
-            0 => (self.0 >> 12) & ((1 << 9) - 1),
-            1 => (self.0 >> 21) & ((1 << 9) - 1),
-            2 => (self.0 >> 30) & ((1 << 9) - 1),
+            0 => (self.0 >> 12) & ((1 << 10) - 1),
+            1 => (self.0 >> 22) & ((1 << 10) - 1),
             _ => panic!(),
         }
     }

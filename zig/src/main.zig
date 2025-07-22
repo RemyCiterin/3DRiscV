@@ -70,7 +70,7 @@ pub fn setupExectable(manager: *Manager, binary: []const u8) anyerror!ptable_t {
         pos += 4096;
     }
 
-    for (0..10) |_| {
+    for (0..100) |_| {
         const page = try palloc.alloc();
         try vm.map(ptable, 0x10000000 + pos, @intFromPtr(page), 4096, vm.Perms.urwx());
         pos += 4096;

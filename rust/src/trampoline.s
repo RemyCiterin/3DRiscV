@@ -1,8 +1,10 @@
 .section .text.trampoline
 .globl run_user
 .globl user_trap
+.globl machine_handler
 
 # a0 is a pointer to the trap context of type TRAP_STATE
+.align 4
 run_user:
   # calling convention
   addi sp, sp, -15*4
@@ -23,14 +25,19 @@ run_user:
   sw s11, 14 * 4(sp)
 
   # save the trap state for the next trap
-  csrw mscratch, a0
+  csrw sscratch, a0
 
   # save the kernel stack in TRAP_STATE.kernel_sp
   sw sp, 32 * 4(a0)
 
   # write TRAP_STATE.mepc in sepc: address of the next instruction after sret
   lw t0, 31 * 4(a0)
-  csrw mepc, t0
+  csrw sepc, t0
+
+  lw t0, 33 * 4(a0)
+  csrrw t0, satp, t0
+  sfence.vma zero, zero
+  sw t0, 33 * 4(a0)
 
   # load the user general purpose registers from TRAP_STATE
   lw ra, 0 * 4(a0)
@@ -66,11 +73,11 @@ run_user:
   lw t6, 30 * 4(a0)
 
   lw a0, 9 * 4(a0)
-  mret
+  sret
 
 .align 4
 user_trap:
-  csrrw a0, mscratch, a0
+  csrrw a0, sscratch, a0
 
   # save the user general purpose registers to TRAP_STATE
   sw ra, 0 * 4(a0)
@@ -106,14 +113,19 @@ user_trap:
   sw t6, 30 * 4(a0)
 
   #save user-a0 in 9 * 4(a0)
-  csrr t0, mscratch
+  csrr t0, sscratch
   sw t0, 9 * 4(a0)
 
   # load the kernel stack pointer from TRAP_STATE.kernel_sp
   lw sp, 32 * 4(a0)
 
+  lw t0, 33 * 4(a0)
+  csrrw t0, satp, t0
+  sfence.vma zero, zero
+  sw t0, 33 * 4(a0)
+
   # save mepc into the stack
-  csrr t0, mepc
+  csrr t0, sepc
   sw t0, 31 * 4(a0)
 
   lw gp, 0 * 4(sp)
@@ -133,3 +145,29 @@ user_trap:
   lw s11, 14 * 4(sp)
   addi sp, sp, 15*4
   ret
+
+.align 4
+machine_handler:
+  csrrw a0,mscratch,a0
+  sw a1, 0 * 4(a0)
+  sw a2, 1 * 4(a0)
+  sw a3, 2 * 4(a0)
+  sw a4, 3 * 4(a0)
+
+  lw a1, 4 * 4(a0) // interval
+  lw a2, 5 * 4(a0) // *mtimecmp
+
+  lw a3, 0(a2)     // mtimecmp
+  add a3, a3, a1
+  sw a3, 0(a2)     // mtimecmp <- old(mtimecmp) + interval
+
+  li a1,2
+  csrs sip, a1 // Set bit 2 of sip
+
+  lw a1, 0 * 4(a0)
+  lw a2, 1 * 4(a0)
+  lw a3, 2 * 4(a0)
+  lw a4, 3 * 4(a0)
+  csrrw a0,mscratch,a0
+  mret
+

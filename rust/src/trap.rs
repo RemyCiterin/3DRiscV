@@ -1,4 +1,4 @@
-use riscv::register::{mtvec, utvec::TrapMode};
+use riscv::register::{stvec, utvec::TrapMode};
 
 #[repr(C)]
 pub struct Registers {
@@ -33,6 +33,7 @@ pub struct Registers {
     pub t4: usize,  // x29
     pub t5: usize,  // x30
     pub t6: usize,  // x31
+    pub pc: usize,  // sepc
 }
 
 impl Default for Registers {
@@ -69,6 +70,7 @@ impl Default for Registers {
             t4: 0,  // x29
             t5: 0,  // x30
             t6: 0,  // x31
+            pc: 0, // sepc
         }
     }
 }
@@ -76,13 +78,13 @@ impl Default for Registers {
 #[repr(C)]
 pub struct TrapState {
     pub registers: Registers,
-    pub mepc: usize,
     pub kernel_sp: usize,
+    pub satp: usize,
 }
 
 pub fn init() {
     unsafe {
-        mtvec::write(user_trap as usize, TrapMode::Direct);
+        stvec::write(user_trap as usize, TrapMode::Direct);
     }
 }
 
