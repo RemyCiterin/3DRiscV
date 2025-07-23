@@ -76,10 +76,20 @@ impl Default for Registers {
 }
 
 #[repr(C)]
-pub struct TrapState {
+pub struct Context {
     pub registers: Registers,
     pub kernel_sp: usize,
     pub satp: usize,
+}
+
+impl Default for Context{
+    fn default() -> Self {
+        Self {
+            registers: Default::default(),
+            kernel_sp: 0,
+            satp: 0,
+        }
+    }
 }
 
 pub fn init() {
@@ -89,6 +99,6 @@ pub fn init() {
 }
 
 extern "C" {
-    pub fn run_user(_: &mut TrapState) -> ();
+    pub fn run_user(_: &mut Context) -> ();
     pub fn user_trap() -> ();
 }

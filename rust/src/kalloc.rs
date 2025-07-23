@@ -1,6 +1,6 @@
 use core::alloc::Layout;
 
-use crate::linked_list_allocator::LockedHeap;
+use linked_list_allocator::LockedHeap;
 
 use crate::constant::KALLOC_SIZE;
 
@@ -16,6 +16,7 @@ pub fn init() {
     unsafe {
         println!("kalloc buffer base: {:p}", KALLOC_BUFFER.as_ptr());
         KERNEL_ALLOCATOR
+            .lock()
             .init(KALLOC_BUFFER.as_mut_ptr(), KALLOC_SIZE);
     }
 }

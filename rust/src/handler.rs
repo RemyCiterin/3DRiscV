@@ -1,9 +1,9 @@
 use riscv::register::scause;
 use riscv::register::sepc;
 
-use crate::trap::TrapState;
+use crate::trap::Context;
 
-pub extern "C" fn handler(state: &mut TrapState) {
+pub extern "C" fn handler(state: &mut Context) {
     let scause = scause::read();
 
     match scause.cause() {

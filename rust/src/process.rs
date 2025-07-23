@@ -7,13 +7,13 @@ pub struct Process {
     pub pid: ProcessId,
 
     /// Pointer to the page table of the process
-    pub ptable: PhyPageNum,
+    pub ptable: Page,
 
     pub registers: Registers,
 
     pub pc: usize,
 
-    pub ipc_buffer: PhyPageNum,
+    pub ipc_buffer: Page,
 
     free: bool,
 }

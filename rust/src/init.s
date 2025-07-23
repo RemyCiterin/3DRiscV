@@ -1,6 +1,5 @@
 .section .text.start
 .global _start
-.global user_binary
 _start:
   # a0 contains hartid
   # a1 contains device tree
@@ -18,17 +17,17 @@ _start:
 .bss_zero_loop_end:
 
   la sp, stack_top
-  jal kernel_main
+  jal machine_main
 .infinite_loop:
   j .infinite_loop
 
-.section .data
-.align 10
-user_binary:
-  .incbin "user.bin"
+// .section .data
+// .align 10
+// user_binary:
+//   .incbin "user.bin"
 
 .section .bss
 .align 4
-  .skip 0x1000
+  .skip 0x2000
 stack_top:
   .skip 0x100

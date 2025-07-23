@@ -290,6 +290,6 @@ pub fn unmap(
 
         if (va == last) return;
 
-        va -= if (megapage) mpsize else psize;
+        va += if (megapage) mpsize else psize;
     }
 }

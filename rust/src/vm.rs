@@ -8,6 +8,15 @@ pub enum Mode { Bare, Sv32 }
 #[derive(Copy, Clone, Debug)]
 pub struct Satp { bits: usize }
 
+/// Size of a page
+pub const PSIZE: usize = 0x1000;
+
+/// Size of a megapage
+pub const MPSIZE: usize = 0x400000;
+
+pub const PMASK: usize = PSIZE - 1;
+pub const MPMASK: usize = MPSIZE - 1;
+
 impl Satp {
     pub fn new() -> Self {
         Self::from(0)
@@ -29,11 +38,23 @@ impl Satp {
         }
     }
 
-    pub fn ppn(&self) -> PhyPageNum {
-        PhyPageNum::from(self.bits & ((1 << 22) - 1))
+    pub fn asid(&self) -> usize {
+        let mask: usize = (1 << 9) - 1;
+        (self.bits >> 22) & mask
     }
 
-    pub fn set_ppn(&mut self, ppn: PhyPageNum) {
+    pub fn set_asid(&mut self, asid: usize) {
+        let mask: usize = (1 << 9) - 1;
+
+        assert!(asid & !mask == 0);
+        self.bits = (self.bits & !(mask << 22)) | asid << 22;
+    }
+
+    pub fn ppn(&self) -> Page {
+        Page::from(self.bits & ((1 << 22) - 1))
+    }
+
+    pub fn set_ppn(&mut self, ppn: Page) {
         let mask: usize = (1 << 22) - 1;
 
         assert!(usize::from(ppn) & !mask == 0);
@@ -81,12 +102,12 @@ pub struct Perms {
 pub struct Entry(pub usize);
 
 impl Entry {
-    pub fn new(ppn: PhyPageNum, flags: Flags) -> Self {
+    pub fn new(ppn: Page, flags: Flags) -> Self {
         Self(flags.bits() | (usize::from(ppn) << 10))
     }
 
-    pub fn ppn(&self) -> PhyPageNum {
-        PhyPageNum::from(self.0 >> 10)
+    pub fn ppn(&self) -> Page {
+        Page::from(self.0 >> 10)
     }
 
     pub fn flags(&self) -> Flags {
@@ -102,7 +123,7 @@ impl Entry {
         }
     }
 
-    pub fn set_ppn(&mut self, ppn: PhyPageNum) {
+    pub fn set_ppn(&mut self, ppn: Page) {
         *self = Self::new(ppn, self.flags())
     }
 
@@ -149,6 +170,14 @@ impl Entry {
     pub fn set_valid(&mut self) {
         *self = Self::new(self.ppn(), self.flags() | Flags::V)
     }
+
+    pub fn set_global(&mut self) {
+        *self = Self::new(self.ppn(), self.flags() | Flags::G);
+    }
+
+    pub fn clear_global(&mut self) {
+        *self = Self::new(self.ppn(), self.flags() & !Flags::G);
+    }
 }
 
 impl Default for Entry {
@@ -158,69 +187,94 @@ impl Default for Entry {
 }
 
 // allocate and inite a page table
-pub fn init_ptable() -> PhyPageNum {
-    let ppn: PhyPageNum = palloc::alloc().unwrap();
+pub fn init_ptable() -> Page {
+    let ppn: Page = palloc::alloc().unwrap();
 
-    let table: &'static mut [Entry] = ppn.as_pte_mut();
-    for i in 0..1024 {
-        table[i] = Entry::new(PhyPageNum::from(0), Flags::from_bits_retain(0));
-    }
-
-    ppn
+    let ptable: &'static mut [Entry] = ppn.as_pte_mut();
+    ptable.fill(Default::default());
+    return ppn;
 }
 
 /// Return the last level page table entry associated with a vitrual address
 /// and allocate if necessary some new intermediate page tables
 pub fn walk_and_alloc(
-    level: usize,
-    ptable: PhyPageNum,
-    va: VirtAddr,
-) -> &'static mut Entry {
-    let entry: &'static mut Entry = &mut ptable.as_pte_mut()[va.vpn(level)];
+    mut ptable: Page,
+    va: VAddr,
+    megapage: bool
+) -> (&'static mut Entry, usize) {
+    let mut level = 1;
 
-    if level == 0 {
-        return entry;
+    loop {
+        let entry: &'static mut Entry = &mut ptable.as_pte_mut()[va.vpn(level)];
+
+        if level == 0 || entry.leaf() {
+            return (entry, level);
+        }
+
+        if !entry.valid() {
+            if megapage { return (entry, level) }
+
+            *entry = Entry::new(init_ptable(), Flags::V);
+        }
+
+        ptable = entry.ppn();
+        level -= 1;
+    }
+}
+
+/// Recursively free a page table, if free_leaf_ppn is set
+/// then it also free the pages mapped by the page table
+pub fn free_ptable(ptable: Page, free_leaf_ppn: bool) {
+    let entries: &'static mut[Entry] = ptable.as_pte_mut();
+
+    let mut counter = 0;
+
+    for &entry in entries.iter() {
+        if entry.valid() && !entry.leaf() {
+            free_ptable(entry.ppn(), free_leaf_ppn);
+        } else if entry.leaf() && free_leaf_ppn {
+            palloc::free(entry.ppn());
+        }
+
+        counter += 1;
     }
 
-    if entry.valid() {
-        return walk_and_alloc(level - 1, entry.ppn(), va);
-    }
-
-    *entry = Entry::new(init_ptable(), Flags::V);
-    return walk_and_alloc(level - 1, entry.ppn(), va);
+    palloc::free(ptable);
 }
 
 /// Return the last level page table entry associated with a virtual address
 /// or null if the address is not allocated
 pub fn walk(
-    level: usize,
-    ptable: PhyPageNum,
-    va: VirtAddr,
-) -> Option<&'static mut Entry> {
-    let entry: &'static mut Entry = &mut ptable.as_pte_mut()[va.vpn(level)];
+    mut ptable: Page,
+    va: VAddr,
+) -> (&'static mut Entry, usize) {
+    let mut level: usize = 1;
 
-    if level == 0 {
-        return Some(entry);
+    loop {
+        let entry: &'static mut Entry = &mut ptable.as_pte_mut()[va.vpn(level)];
+
+        if level == 0 || !entry.valid() || entry.leaf() {
+            return (entry, level);
+        }
+
+        ptable = entry.ppn();
+        level -= 1;
     }
-
-    if entry.valid() {
-        return walk(level - 1, entry.ppn(), va);
-    }
-
-    return None;
 }
 
 pub fn map(
-    table: PhyPageNum,
-    first_virt: VirtAddr,
-    first_phys: PhysAddr,
+    ptable: Page,
+    mut virt: VAddr,
+    mut phys: PAddr,
     size: usize,
     perms: Perms,
+    global: bool,
+    allow_megapage: bool
 ) {
-    if first_virt.offset() != 0 || first_phys.offset() != 0 {
+    if virt.offset() != 0 || phys.offset() != 0 {
         panic!(
             "map: alignment error phys: {:?} virt: {:?}",
-            first_virt, first_virt
+            virt, virt
         );
     }
 
@@ -232,25 +286,51 @@ pub fn map(
         );
     }
 
-    for idx in 0..(size / constant::PAGE_SIZE) {
-        let virt = first_virt + (constant::PAGE_SIZE * idx);
-        let phys = first_phys + (constant::PAGE_SIZE * idx);
+    println!("map [{:x}, {:x}] to [{:x}, {:x}]",
+        usize::from(phys), usize::from(phys)+size-1,
+        usize::from(virt), usize::from(virt)+size-1,
+    );
 
-        let entry = walk_and_alloc(1, table, virt);
+    let last = virt + size - PSIZE;
+
+    loop {
+        let va: usize = usize::from(virt);
+        let pa: usize = usize::from(phys);
+        let mut megapage: bool =
+            allow_megapage && usize::from(last) >= va + MPSIZE &&
+            pa % MPSIZE == 0 && va % MPSIZE == 0;
+
+        let (entry, level) =
+            walk_and_alloc(ptable, virt, megapage);
+        megapage = level == 1;
 
         if entry.valid() {
             panic!("remap");
         }
 
+        if global { entry.set_global(); }
         entry.set_ppn(phys.ppn());
         entry.set_perms(perms);
         entry.set_valid();
+
+        if virt == last { return; }
+
+        virt += if megapage {MPSIZE} else {PSIZE};
+        phys += if megapage {MPSIZE} else {PSIZE};
     }
 }
 
-pub fn unmap(table: PhyPageNum, first_virt: VirtAddr, size: usize, free: bool) {
-    if first_virt.offset() != 0 {
-        panic!("unmap: alignment error: {:?}", first_virt);
+/// unmap a set of address from a page table, `unmap` may fail if:
+/// - `virt` is not aligned on a page
+/// - `size` is not divisible by the size of a page
+/// - we try to unmap an unaligned address
+/// - we try to unmap a megapage but `virt` is not aligned on a megapage
+/// - we try to unmap a megapage but it is not fully include in the input region
+///
+/// If free is set then we also free the pages that we unmap
+pub fn unmap(ptable: Page, mut virt: VAddr, size: usize, free: bool) {
+    if virt.offset() != 0 {
+        panic!("unmap: alignment error: {:?}", virt);
     }
 
     if size % constant::PAGE_SIZE != 0 {
@@ -261,19 +341,35 @@ pub fn unmap(table: PhyPageNum, first_virt: VirtAddr, size: usize, free: bool) {
         );
     }
 
-    for idx in 0..(size / constant::PAGE_SIZE) {
-        let virt = first_virt + (constant::PAGE_SIZE * idx);
+    let last = virt + size - PSIZE;
 
-        let entry = walk(1, table, virt).unwrap();
+    loop {
+        let va: usize = usize::from(virt);
+        let (entry, level) = walk(ptable, virt);
+        let megapage = level == 1;
 
-        if !entry.valid() {
-            panic!("unmap");
-        }
+        if !entry.valid() || !entry.leaf() { panic!("unmap"); }
+        if megapage && va % MPSIZE != 0 { panic!("unmap megapage"); }
+        if megapage && last < virt + MPSIZE { panic!("unmap megapage"); }
 
-        if free {
-            palloc::free(entry.ppn());
-        }
-
+        if free { palloc::free(entry.ppn()); }
         *entry = Default::default();
+
+        if virt == last { return; }
+        virt += if megapage {MPSIZE} else {PSIZE};
     }
+}
+
+pub fn map_kernel_memory(ptable: Page) {
+    let perms = Perms{exec: true, read: true, write: true, user: false};
+
+    map(
+        ptable,
+        VAddr(0x8000_0000),
+        PAddr(0x8000_0000),
+        32*1024*1024,
+        perms,
+        true,
+        true
+    );
 }

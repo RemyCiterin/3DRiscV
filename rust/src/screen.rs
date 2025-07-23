@@ -1,4 +1,4 @@
-use crate::pointer::PhysAddr;
+use crate::pointer::PAddr;
 // use alloc::vec::Vec;
 // use alloc::collections::LinkedList;
 // use alloc::collections::BTreeSet;
@@ -37,7 +37,7 @@ impl Pixel {
 
     pub fn write_frame_buffer(&self, x: usize, y: usize) {
         let screen: &'static mut [u8] =
-            PhysAddr::from(SCREEN_BASE).as_slice_mut(320*240);
+            PAddr::from(SCREEN_BASE).as_slice_mut(320*240);
         screen[x + y * 320] = self.byte;
     }
 }

@@ -1,7 +1,7 @@
 //! This file define all the types of memory address:
 //! - Physical memory addresses
 //! - Virtual memory addresses
-//! - PhyPageNum pointer
+//! - Page pointer
 
 use core::{
     fmt,
@@ -14,35 +14,35 @@ use crate::{constant, vm};
 
 // Physical address
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct PhysAddr(pub usize);
+pub struct PAddr(pub usize);
 
 // Virtual address
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct VirtAddr(pub usize);
+pub struct VAddr(pub usize);
 
 // Physical Page Number
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct PhyPageNum(pub usize);
+pub struct Page(pub usize);
 
-impl fmt::Debug for PhysAddr {
+impl fmt::Debug for PAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PhysAddr({:x})", self.0)
+        write!(f, "PAddr({:x})", self.0)
     }
 }
 
-impl fmt::Debug for VirtAddr {
+impl fmt::Debug for VAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "VirtAddr({:x})", self.0)
+        write!(f, "VAddr({:x})", self.0)
     }
 }
 
-impl fmt::Debug for PhyPageNum {
+impl fmt::Debug for Page {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PhyPageNum({:x})", self.0)
+        write!(f, "Page({:x})", self.0)
     }
 }
 
-impl PhysAddr {
+impl PAddr {
     pub fn as_ref<T>(&self) -> &'static T {
         unsafe { (self.0 as *const T).as_ref().unwrap() }
     }
@@ -51,8 +51,8 @@ impl PhysAddr {
         unsafe { (self.0 as *mut T).as_mut().unwrap() }
     }
 
-    pub fn ppn(&self) -> PhyPageNum {
-        PhyPageNum(self.0 / constant::PAGE_SIZE)
+    pub fn ppn(&self) -> Page {
+        Page(self.0 / constant::PAGE_SIZE)
     }
 
     // return the offset of the physical address in a page
@@ -79,7 +79,7 @@ impl PhysAddr {
     }
 }
 
-impl VirtAddr {
+impl VAddr {
     pub fn as_ref<T>(&self) -> &'static T {
         unsafe { (self.0 as *const T).as_ref().unwrap() }
     }
@@ -88,8 +88,8 @@ impl VirtAddr {
         unsafe { (self.0 as *mut T).as_mut().unwrap() }
     }
 
-    pub fn ppn(&self) -> PhyPageNum {
-        PhyPageNum(self.0 / constant::PAGE_SIZE)
+    pub fn ppn(&self) -> Page {
+        Page(self.0 / constant::PAGE_SIZE)
     }
 
     // return the offset of the physical address in a page
@@ -106,7 +106,7 @@ impl VirtAddr {
     }
 }
 
-impl PhyPageNum {
+impl Page {
     pub fn as_bytes(&self) -> &'static [u8] {
         unsafe {
             slice::from_raw_parts(
@@ -144,122 +144,122 @@ impl PhyPageNum {
     }
 }
 
-impl Add<usize> for PhysAddr {
+impl Add<usize> for PAddr {
     type Output = Self;
     fn add(self, rhs: usize) -> Self {
         Self(self.0 + rhs)
     }
 }
 
-impl Add<usize> for VirtAddr {
+impl Add<usize> for VAddr {
     type Output = Self;
     fn add(self, rhs: usize) -> Self {
         Self(self.0 + rhs)
     }
 }
 
-impl Add<usize> for PhyPageNum {
+impl Add<usize> for Page {
     type Output = Self;
     fn add(self, rhs: usize) -> Self {
         Self(self.0 + rhs)
     }
 }
 
-impl Sub<usize> for PhysAddr {
+impl Sub<usize> for PAddr {
     type Output = Self;
     fn sub(self, rhs: usize) -> Self {
         Self(self.0 - rhs)
     }
 }
 
-impl Sub<usize> for VirtAddr {
+impl Sub<usize> for VAddr {
     type Output = Self;
     fn sub(self, rhs: usize) -> Self {
         Self(self.0 - rhs)
     }
 }
 
-impl Sub<usize> for PhyPageNum {
+impl Sub<usize> for Page {
     type Output = Self;
     fn sub(self, rhs: usize) -> Self {
         Self(self.0 - rhs)
     }
 }
 
-impl AddAssign<usize> for PhysAddr {
+impl AddAssign<usize> for PAddr {
     fn add_assign(&mut self, rhs: usize) {
         *self = *self + rhs;
     }
 }
 
-impl AddAssign<usize> for VirtAddr {
+impl AddAssign<usize> for VAddr {
     fn add_assign(&mut self, rhs: usize) {
         *self = *self + rhs;
     }
 }
 
-impl AddAssign<usize> for PhyPageNum {
+impl AddAssign<usize> for Page {
     fn add_assign(&mut self, rhs: usize) {
         *self = *self + rhs;
     }
 }
 
-impl SubAssign<usize> for PhysAddr {
+impl SubAssign<usize> for PAddr {
     fn sub_assign(&mut self, rhs: usize) {
         *self = *self - rhs;
     }
 }
 
-impl SubAssign<usize> for VirtAddr {
+impl SubAssign<usize> for VAddr {
     fn sub_assign(&mut self, rhs: usize) {
         *self = *self - rhs;
     }
 }
 
-impl SubAssign<usize> for PhyPageNum {
+impl SubAssign<usize> for Page {
     fn sub_assign(&mut self, rhs: usize) {
         *self = *self - rhs;
     }
 }
 
-impl From<usize> for VirtAddr {
+impl From<usize> for VAddr {
     fn from(ptr: usize) -> Self {
         Self(ptr)
     }
 }
 
-impl From<usize> for PhysAddr {
+impl From<usize> for PAddr {
     fn from(ptr: usize) -> Self {
         Self(ptr)
     }
 }
 
-impl From<usize> for PhyPageNum {
+impl From<usize> for Page {
     fn from(ptr: usize) -> Self {
         Self(ptr)
     }
 }
 
-impl From<VirtAddr> for usize {
-    fn from(ptr: VirtAddr) -> usize {
+impl From<VAddr> for usize {
+    fn from(ptr: VAddr) -> usize {
         ptr.0
     }
 }
 
-impl From<PhysAddr> for usize {
-    fn from(ptr: PhysAddr) -> usize {
+impl From<PAddr> for usize {
+    fn from(ptr: PAddr) -> usize {
         ptr.0
     }
 }
 
-impl From<PhyPageNum> for usize {
-    fn from(ptr: PhyPageNum) -> usize {
+impl From<Page> for usize {
+    fn from(ptr: Page) -> usize {
         ptr.0
     }
 }
 
-impl From<PhyPageNum> for PhysAddr {
-    fn from(ppn: PhyPageNum) -> PhysAddr {
-        PhysAddr(ppn.0 * constant::PAGE_SIZE)
+impl From<Page> for PAddr {
+    fn from(ppn: Page) -> PAddr {
+        PAddr(ppn.0 * constant::PAGE_SIZE)
     }
 }

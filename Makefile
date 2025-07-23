@@ -39,6 +39,13 @@ qemu:
   	-kernel zig/zig-out/bin/kernel.elf \
   	-cpu rv32,pmp=false
 
+qemu_rust:
+	qemu-system-riscv32 \
+  	-M virt -serial stdio -display \
+  	none -m 1024M -bios none \
+  	-kernel rust/target/riscv32ima-unknown-none-elf/release/SuperOS \
+  	-cpu rv32,pmp=false
+
 #yosys:
 #	sed -i '/$$finish/d' Verilog/TestCore.v
 #	yosys \
