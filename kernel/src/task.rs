@@ -1,9 +1,7 @@
 use crate::pointer::{Page, PAddr, VAddr};
 use crate::object::*;
-use crate::channel;
 
 use alloc::sync::Arc;
-use alloc::sync::Weak;
 use spinning_top::Spinlock;
 use spinning_top::RwSpinlock;
 use crate::vm;
@@ -16,6 +14,10 @@ use core::sync::atomic::Ordering;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Capability(u32);
+
+impl From<usize> for Capability {
+    fn from(x: usize) -> Capability { Capability(x as u32) }
+}
 
 #[derive(Clone)]
 pub enum State {
@@ -124,7 +126,8 @@ impl Task {
         })
     }
 
-    pub fn map_buffer(&mut self, mut virt: VAddr, buf: &[u8], perms: vm::Perms) -> usize {
+    pub fn map_buffer(&mut self, mut virt: VAddr, buf: &[u8], perms: vm::Perms)
+        -> usize {
         let mut num_pages = buf.len() / vm::PSIZE;
         if buf.len() & vm::PMASK != 0 { num_pages += 1; }
 
@@ -175,7 +178,7 @@ impl Task {
         let ptable =
             self.ptable.lock().clone();
 
-        for i in 0..size / vm::PSIZE {
+        for _ in 0..size / vm::PSIZE {
             let page = palloc::alloc().unwrap();
 
             page
@@ -203,6 +206,17 @@ impl Task {
         let new_capa = self.next_capa.fetch_add(1, Ordering::SeqCst);
         self.capabilities.lock().insert(Capability(new_capa), obj);
         return Capability(new_capa);
+    }
+
+    /// Generate a new pipe
+    pub fn new_pipe(&mut self) -> (Capability, Capability) {
+        let (source, sink) =
+            crate::channel::new_channel(self.id);
+
+        let c1: Capability = self.new_capability(source);
+        let c2: Capability = self.new_capability(sink);
+
+        (c1, c2)
     }
 }
 

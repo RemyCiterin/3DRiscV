@@ -29,8 +29,6 @@ fn panic(info: &PanicInfo) -> ! {
 #[no_mangle]
 unsafe extern "C" fn user_main() -> () {
     println!("Hello world!");
-    println!("Hello world!");
-    println!("Hello world!");
-    println!("Hello world!");
+    loop {}
 }
 

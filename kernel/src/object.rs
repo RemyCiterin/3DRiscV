@@ -14,8 +14,14 @@ pub fn new_object_id() -> ObjectId {
     ObjectId(OBJECT_ID_COUNTER.fetch_add(1, Ordering::SeqCst))
 }
 
+pub struct KERNEL;
+
 pub trait Object : DowncastSync {
     fn id(&self) -> ObjectId;
 }
 
 impl_downcast!(sync Object);
+
+impl Object for KERNEL {
+  fn id(&self) -> ObjectId { KERNEL_ID }
+}

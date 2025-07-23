@@ -1,15 +1,11 @@
-use alloc::vec::Vec;
 use alloc::collections::VecDeque;
-use alloc::collections::BTreeSet;
-use alloc::boxed::Box;
 use alloc::sync::{Arc, Weak};
-use core::cell::RefCell;
 use spinning_top::Spinlock;
 
 use crate::object::*;
 
 /// Message source
-pub struct Source{
+pub struct Source {
     /// Unique ID of the source
     pub id: ObjectId,
 
@@ -18,10 +14,14 @@ pub struct Source{
 
     /// A list of tasks waiting for their messages to be received,
     /// those tasks are blocked if they are on this list
-    pub block: Spinlock<VecDeque<ObjectId>>,
+    pub block: Spinlock<VecDeque<Arc<dyn Object>>>,
 
     /// The sink associated with this source
     pub sink: Option<Weak<Sink>>,
+}
+
+impl Object for Source {
+    fn id(&self) -> ObjectId { self.id }
 }
 
 /// Message source
@@ -34,10 +34,14 @@ pub struct Sink{
 
     /// A list of tasks waiting for a message from this queue,
     /// those tasks are blocked if they are on this list
-    pub block: Spinlock<VecDeque<ObjectId>>,
+    pub block: Spinlock<VecDeque<Arc<dyn Object>>>,
 
     /// The source associated with this sink
     pub source: Option<Weak<Source>>,
+}
+
+impl Object for Sink {
+    fn id(&self) -> ObjectId { self.id }
 }
 
 /// To ensure forward progress in the message transmissions, we must ensure that
@@ -87,7 +91,8 @@ pub enum ChannelError {
 impl Source {
     /// Return the id of a task that wait for a message
     /// and unlock it, block the task otherwise
-    pub fn send(&mut self, task: ObjectId) -> Result<Option<ObjectId>, ChannelError> {
+    pub fn send(&mut self, task: Arc<dyn Object>)
+        -> Result<Option<Arc<dyn Object>>, ChannelError> {
         if !self.block.lock().is_empty() {
             // Another task is already waiting
             self.block.lock().push_back(task);
@@ -109,7 +114,7 @@ impl Source {
                 None => Err(ChannelError::Disconected)
             }
         } else {
-            Ok(Some(KERNEL_ID))
+            Ok(Some(Arc::new(KERNEL{})))
         }
     }
 }
@@ -117,7 +122,8 @@ impl Source {
 impl Sink {
     /// Return the id of a task that wait for a message to be received
     /// and unlock it, block the task otherwise
-    pub fn receive(&mut self, task: ObjectId) -> Result<Option<ObjectId>, ChannelError> {
+    pub fn receive(&mut self, task: Arc<dyn Object>)
+        -> Result<Option<Arc<dyn Object>>, ChannelError> {
         if !self.block.lock().is_empty() {
             // Another task is already waiting
             self.block.lock().push_back(task);
@@ -139,7 +145,7 @@ impl Sink {
                 None => Err(ChannelError::Disconected)
             }
         } else {
-            Ok(Some(KERNEL_ID))
+            Ok(Some(Arc::new(KERNEL{})))
         }
     }
 }

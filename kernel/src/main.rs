@@ -23,6 +23,8 @@ mod vm;
 mod channel;
 mod object;
 mod task;
+mod syscall;
+mod scheduler;
 
 use core::{
     arch::{asm, global_asm},
@@ -64,58 +66,6 @@ unsafe extern "C" fn machine_main() -> () {
     register::satp::set(register::satp::Mode::Bare, 0, 0);
     register::mepc::write(supervisor_main as usize);
     asm!("mret");
-}
-
-fn setup_initial_user(state: &mut Context, file: &[u8], heap_size: usize) {
-    let user_stack = palloc::alloc().unwrap();
-    let ptable = vm::init_ptable();
-
-    let urw = vm::Perms{write: true, read: true, exec: true, user: false};
-    let urwx = vm::Perms{write: true, read: true, exec: true, user: true};
-
-    for i in 0..1 + (file.len() + heap_size) / 0x1000 {
-        let page = palloc::alloc().unwrap();
-
-        if file.len() >= i * 0x1000 {
-            let a = i * 0x1000;
-            let b = core::cmp::min(a + 0x1000, file.len());
-
-            page
-                .as_bytes_mut()[0..b-a]
-                .copy_from_slice(&file[a..b]);
-        }
-
-        vm::map(
-            ptable,
-            VAddr::from(0x1000_0000 + i * 0x1000),
-            PAddr::from(page),
-            0x1000,
-            urwx,
-            false,
-            false,
-        );
-    }
-
-    vm::map(
-        ptable,
-        VAddr::from(0x2000_0000),
-        PAddr::from(user_stack),
-        0x1000,
-        urw,
-        false,
-        false,
-    );
-
-    vm::map_kernel_memory(ptable);
-
-    state.registers.pc = 0x1000_0000;
-    state.registers.sp = 0x2000_0FFC;
-
-    let mut satp = vm::Satp::new();
-    satp.set_mode(vm::Mode::Sv32);
-    satp.set_ppn(ptable);
-
-    state.satp = usize::from(satp);
 }
 
 extern "C" fn  supervisor_main() {
