@@ -26,10 +26,13 @@ test:
 	riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
 
 test_rust:
+	riscv32-none-elf-objcopy --strip-debug -O binary \
+		user/target/riscv32ima-unknown-none-elf/release/user \
+		kernel/src/user.bin
 	riscv32-none-elf-objcopy --strip-debug -O ihex \
-		rust/target/riscv32ima-unknown-none-elf/release/SuperOS Mem.ihex
+		kernel/target/riscv32ima-unknown-none-elf/release/kernel Mem.ihex
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 1000000 1 > Mem.hex
-	riscv32-none-elf-objdump rust/target/riscv32ima-unknown-none-elf/release/SuperOS -D > rust/kernel.asm
+	riscv32-none-elf-objdump kernel/target/riscv32ima-unknown-none-elf/release/kernel -D > kernel/kernel.asm
 	# riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
 
 qemu:
@@ -43,7 +46,7 @@ qemu_rust:
 	qemu-system-riscv32 \
   	-M virt -serial stdio -display \
   	none -m 1024M -bios none \
-  	-kernel rust/target/riscv32ima-unknown-none-elf/release/SuperOS \
+  	-kernel kernel/target/riscv32ima-unknown-none-elf/release/kernel \
   	-cpu rv32,pmp=false
 
 #yosys:

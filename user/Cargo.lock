@@ -3,18 +3,6 @@
 version = 4
 
 [[package]]
-name = "SuperOS"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "downcast-rs",
- "lazy_static",
- "linked_list_allocator",
- "riscv",
- "spinning_top 0.3.0",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -136,6 +124,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d96d2d1d716fb500937168cc09353ffdc7a012be8475ac7308e1bdf0e3923300"
 dependencies = [
  "lock_api",
+]
+
+[[package]]
+name = "user"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "downcast-rs",
+ "lazy_static",
+ "linked_list_allocator",
+ "riscv",
+ "spinning_top 0.3.0",
 ]
 
 [[package]]
