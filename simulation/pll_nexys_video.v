@@ -30,7 +30,7 @@ module clk_wiz
     .CLKOUT1_DIVIDE       (5), // 1000 MHz / 5 = 200 MHz
     .CLKOUT1_PHASE        (0.000),
     .CLKOUT1_DUTY_CYCLE   (0.500),
-    .CLKOUT2_DIVIDE       (3), // 1000 MHz / 5 = 333.333 MHz
+    .CLKOUT2_DIVIDE       (3), // 1000 MHz / 3 = 333.333 MHz
     .CLKOUT2_PHASE        (0.000),
     .CLKOUT2_DUTY_CYCLE   (0.500),
     .CLKOUT3_DIVIDE       (3), // 1000 MHz / 3 = 333.333 MHz, 90 phase

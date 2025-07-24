@@ -116,7 +116,7 @@ makeTestSpi = do
   (spi, response) <- makeSpi (toStream requestQ)
 
   (printer, uart) <- makePrinter
-  tx <- makeTxUart (div 83_000_000 115200) uart
+  tx <- makeTxUart (div 50_000_000 115200) uart
 
   counter :: Reg (Bit 32) <- makeReg 0
 

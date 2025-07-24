@@ -16,7 +16,9 @@ zig/zig-cache
 zig/.zig-cache
 kernel/target
 user/target
+bootloader/target
 kernel/log.txt
 user/log.txt
 kernel/kernel.asm
 user/user.asm
+bootloader/bootloader.asm

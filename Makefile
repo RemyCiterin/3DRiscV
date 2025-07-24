@@ -35,6 +35,12 @@ test_rust:
 	riscv32-none-elf-objdump kernel/target/riscv32ima-unknown-none-elf/release/kernel -D > kernel/kernel.asm
 	# riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
 
+test_bootloader:
+	riscv32-none-elf-objcopy --strip-debug -O ihex \
+		bootloader/target/riscv32ima-unknown-none-elf/release/bootloader Mem.ihex
+	./ihex-to-img.py Mem.ihex hex 2147483648 4 50000 1 > Mem.hex
+	riscv32-none-elf-objdump bootloader/target/riscv32ima-unknown-none-elf/release/bootloader -D > bootloader/bootloader.asm
+
 qemu:
 	qemu-system-riscv32 \
   	-M virt -serial stdio -display \
@@ -99,10 +105,12 @@ program:
 
 yosys:
 	sed -i '/$$finish/d' Verilog/TestCore.v
-	sed -i '/$$write/d' Verilog/TestCore.v
-	sed -i '/$$write/d' Verilog/Uart.v
-	sed -i '/$$write/d' Verilog/TestSpi.v
-	sed -i '/$$write/d' Verilog/TestDDR3.v
+	# sed -i '/$$write/d' Verilog/TestCore.v
+	# sed -i '/$$write/d' Verilog/Uart.v
+	# sed -i '/$$write/d' Verilog/TestSpi.v
+	# sed -i '/$$write/d' Verilog/TestDDR3.v
+	sed -i 's|$$write (.*);||g' Verilog/TestCore.v
+	sed -i 's|$$finish;||g' Verilog/TestCore.v
 	yosys -q -p \
 		"synth_xilinx -flatten -abc9 -arch xc7 -top mkTop; write_json build/mkTop.json" \
 		$(LIB) $(DDR3)

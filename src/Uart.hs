@@ -83,7 +83,6 @@ makeTxUart timePerBit stream = do
 
       when (stream.canPeek) do
         buf <== ones # stream.peek # (0b0 :: Bit 1)
-        display stream.peek
         stream.consume
         valid <== ones
         count <== 0
@@ -93,8 +92,6 @@ makeTxUart timePerBit stream = do
       if (count.val .>=. fromInteger timePerBit) then do
         valid <== (0b0 :: Bit 1) # upper valid.val
         buf   <== (0b1 :: Bit 1) # upper buf.val
-        display "valid: " (formatBin 24 valid.val)
-        display "buffer: " (formatBin 24 buf.val)
         count <== 0
       else do
         count <== count.val + 1

@@ -67,7 +67,7 @@ makeWrapperDDR3 inputs = do
           , wb_we }
 
   printQ :: Queue (Bit 8) <- makeQueue
-  tx <- makeTxUart (div 83_000_000 115200) (toSource printQ)
+  tx <- makeTxUart (div 50_000_000 115200) (toSource printQ)
 
   let debug =
         DDR3Debug

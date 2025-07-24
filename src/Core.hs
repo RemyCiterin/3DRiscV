@@ -750,25 +750,39 @@ makeCore
 
   return (imaster, dmaster)
 
-makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, Bit 1, [Mmio TLConfig])
+makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, [Mmio TLConfig])
 makeUartMmio cycles rx = do
   inputs <- makeRxUart cycles rx
 
   outputQ :: Queue (Bit 8) <- makeQueue
   tx <- makeTxUart cycles (toSource outputQ)
 
-  let canPeek :: Reg (Bit 8) = readOnlyReg (zeroExtend inputs.canPeek)
-  let canPut :: Reg (Bit 8) = readOnlyReg (zeroExtend outputQ.notFull)
+  let canPeek :: Bit 8 = zeroExtend inputs.canPeek
+  let canPut :: Bit 8 = zeroExtend outputQ.notFull
 
   let value :: Reg (Bit 8) =
         Reg
           { readReg= inputs.peek
           , writeReg= when outputQ.notFull . outputQ.enq }
 
-  return (tx, inputs.canPeek, [])
+  let mmio =
+        Mmio
+          { address= 0x10000000
+          , read= \ mask -> do
+              when (at @0 mask .&&. inputs.canPeek) inputs.consume
+              return $ (0::Bit 8) # canPeek # canPut # inputs.peek
+          , write= \ lane mask -> do
+              when (at @0 mask .&&. outputQ.notFull) do
+                outputQ.enq (slice @7 @0 lane)
+                --displayAscii (slice @7 @0 lane)
+          }
 
-makeFakeTestCore :: Bit 1 -> Module (Bit 1)
-makeFakeTestCore _ = mdo
+  return (tx, [mmio])
+
+makeTestCore :: Bit 1 -> Module (Bit 1)
+makeTestCore rx = mdo
+  (tx, uartMmio) <- makeUartMmio (div 40_000_000 115200) rx
+
   let config =
         TLRAMConfig
           { fileName= Just "Mem.hex"
@@ -802,17 +816,24 @@ makeFakeTestCore _ = mdo
 
   ([master0,master1], [slave0,slave1,slave2,slave3]) <-
     withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
-  uncoherentSlave <- withName "memory" $ makeTLRAM @25 @TLConfig' config
+  --uncoherentSlave <- withName "memory" $ makeTLRAM @25 @TLConfig' config
+  uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
+
+  always do
+    when slave2.channelB.canPeek do
+      display "errorB"
+    when slave2.channelD.canPeek do
+      display "errorD"
 
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0
   withName "xbar" $ makeConnection dmaster0 slave1
-  withName "xbar" $ makeConnection imaster1 slave2
-  withName "xbar" $ makeConnection dmaster1 slave3
+  --withName "xbar" $ makeConnection imaster1 slave2
+  --withName "xbar" $ makeConnection dmaster1 slave3
   withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
 
   (clintMmio, clint) <- withName "clint" $ makeClint @TLConfig 2 0x30000000
-  clintSlave <- makeTLMmio @TLConfig 1 clintMmio
+  clintSlave <- makeTLMmio @TLConfig 1 (clintMmio ++ uartMmio)
   withName "clint" $ makeConnection master1 clintSlave
 
   let systemInputs0 =
@@ -845,22 +866,17 @@ makeFakeTestCore _ = mdo
           , itlbSource= 8
           , dtlbSource= 9
           , hartId= 1 }
-  (imaster1, dmaster1) <- withName "core" $ makeCore coreconfig1 systemInputs1
+  --(imaster1, dmaster1) <- withName "core" $ makeCore coreconfig1 systemInputs1
 
   let bconfig =
         BroadcastConfig
           { sources=
               [ coreconfig0.fetchSource
-              , coreconfig0.dataSource
-              , coreconfig1.fetchSource
-              , coreconfig1.dataSource ]
+              , coreconfig0.dataSource ]
+              -- , coreconfig1.fetchSource
+              -- , coreconfig1.dataSource ]
           , logSize= 6
           , baseSink= 0 }
   (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
 
-  return imaster0.channelA.canPeek
-
-makeTestCore :: Module ()
-makeTestCore = mdo
-  _ <- makeFakeTestCore false
-  return ()
+  return tx
