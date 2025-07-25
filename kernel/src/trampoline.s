@@ -124,7 +124,7 @@ user_trap:
   sfence.vma zero, zero
   sw t0, 33 * 4(a0)
 
-  # save mepc into the stack
+  # save mepc
   csrr t0, sepc
   sw t0, 31 * 4(a0)
 

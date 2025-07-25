@@ -4,6 +4,10 @@ _start:
   # a0 contains hartid
   # a1 contains device tree
 
+  la t0, 0x10000004
+  li t1, 0xAA
+  sb t1, (t0)
+
   csrr t0, mhartid
   bnez t0, .infinite_loop
 

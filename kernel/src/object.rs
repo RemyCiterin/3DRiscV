@@ -3,7 +3,7 @@ use core::sync::atomic::Ordering;
 use downcast_rs::DowncastSync;
 use downcast_rs::impl_downcast;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ObjectId(u32);
 
 static OBJECT_ID_COUNTER: AtomicU32 = AtomicU32::new(1);

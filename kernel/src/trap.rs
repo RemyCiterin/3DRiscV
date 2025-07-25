@@ -1,6 +1,7 @@
 use riscv::register::{stvec, utvec::TrapMode};
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct Registers {
     pub ra: usize,  // x1
     pub sp: usize,  // x2
@@ -76,6 +77,7 @@ impl Default for Registers {
 }
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct Context {
     pub registers: Registers,
     pub kernel_sp: usize,

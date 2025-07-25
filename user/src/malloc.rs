@@ -2,7 +2,7 @@ use core::alloc::Layout;
 
 use linked_list_allocator::LockedHeap;
 
-pub const MALLOC_SIZE: usize = 0x1000;
+pub const MALLOC_SIZE: usize = 0x10000;
 
 #[global_allocator]
 pub static MAIN_ALLOCATOR: LockedHeap = LockedHeap::empty();

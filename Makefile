@@ -5,6 +5,7 @@ XDC ?= nexysvideo.xdc
 
 LIB = \
 			src/Top.v \
+			src/Top_ulx3s.v \
 			simulation/Block*v \
 			simulation/pll_nexys_video.v \
 			Verilog/*.v
@@ -55,22 +56,23 @@ qemu_rust:
   	-kernel kernel/target/riscv32ima-unknown-none-elf/release/kernel \
   	-cpu rv32,pmp=false
 
-#yosys:
-#	sed -i '/$$finish/d' Verilog/TestCore.v
-#	yosys \
-#		-DULX3S -q -p "synth_ecp5 -abc9 -abc2 -top mkTop -json ./build/mkTop.json" \
-#		$(LIB)
+yosys_ulx3s:
+	yosys \
+		-DULX3S -q -p "synth_ecp5 -abc9 -abc2 -top mkTopULX3S -json ./build/mkTop.json" \
+		$(LIB)
 
-#nextpnr:
-#	nextpnr-ecp5 --force --timing-allow-fail --json ./build/mkTop.json --lpf ulx3s.lpf \
-#		--textcfg ./build/mkTop_out.config --85k --freq 40 --package CABGA381
+nextpnr_ulx3s:
+	nextpnr-ecp5 --force --timing-allow-fail --json ./build/mkTop.json --lpf ulx3s.lpf \
+		--textcfg ./build/mkTop_out.config --85k --freq 25 --package CABGA381
 
 ecppack:
 	ecppack --compress --svf-rowsize 100000 --svf ./build/mkTop.svf \
 		./build/mkTop_out.config ./build/mkTop.bit
 
-prog:
+prog_ulx3s:
 	sudo fujprog build/mkTop.bit -t
+
+ulx3s: yosys_ulx3s nextpnr_ulx3s ecppack prog_ulx3s
 
 verilator: compile
 	make -C simulation all

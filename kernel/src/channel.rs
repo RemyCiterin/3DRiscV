@@ -61,7 +61,9 @@ pub fn new_channel(owner: ObjectId) -> (Arc<Source>, Arc<Sink>) {
         owner
     });
 
-    Arc::get_mut(&mut sink).unwrap().source = Some(Arc::downgrade(&source));
+    unsafe {
+        Arc::get_mut_unchecked(&mut sink).source = Some(Arc::downgrade(&source));
+    }
 
     (source, sink)
 }
@@ -88,41 +90,10 @@ pub enum ChannelError {
     Disconected,
 }
 
-impl Source {
+impl Sink {
     /// Return the id of a task that wait for a message
     /// and unlock it, block the task otherwise
-    pub fn send(&mut self, task: Arc<dyn Object>)
-        -> Result<Option<Arc<dyn Object>>, ChannelError> {
-        if !self.block.lock().is_empty() {
-            // Another task is already waiting
-            self.block.lock().push_back(task);
-            return Ok(None);
-        }
-
-        if let Some(ref sink) = self.sink {
-            match sink.upgrade() {
-                Some(sink) => {
-                    if sink.block.lock().is_empty() {
-                        self.block.lock().push_back(task);
-                        Ok(None)
-                    } else {
-                        let x = sink.block.lock().front().unwrap().clone();
-                        sink.block.lock().pop_front();
-                        Ok(Some(x))
-                    }
-                }
-                None => Err(ChannelError::Disconected)
-            }
-        } else {
-            Ok(Some(Arc::new(KERNEL{})))
-        }
-    }
-}
-
-impl Sink {
-    /// Return the id of a task that wait for a message to be received
-    /// and unlock it, block the task otherwise
-    pub fn receive(&mut self, task: Arc<dyn Object>)
+    pub fn send(&self, task: Arc<dyn Object>)
         -> Result<Option<Arc<dyn Object>>, ChannelError> {
         if !self.block.lock().is_empty() {
             // Another task is already waiting
@@ -139,6 +110,37 @@ impl Sink {
                     } else {
                         let x = source.block.lock().front().unwrap().clone();
                         source.block.lock().pop_front();
+                        Ok(Some(x))
+                    }
+                }
+                None => Err(ChannelError::Disconected)
+            }
+        } else {
+            Ok(Some(Arc::new(KERNEL{})))
+        }
+    }
+}
+
+impl Source {
+    /// Return the id of a task that wait for a message to be received
+    /// and unlock it, block the task otherwise
+    pub fn receive(&self, task: Arc<dyn Object>)
+        -> Result<Option<Arc<dyn Object>>, ChannelError> {
+        if !self.block.lock().is_empty() {
+            // Another task is already waiting
+            self.block.lock().push_back(task);
+            return Ok(None);
+        }
+
+        if let Some(ref sink) = self.sink {
+            match sink.upgrade() {
+                Some(sink) => {
+                    if sink.block.lock().is_empty() {
+                        self.block.lock().push_back(task);
+                        Ok(None)
+                    } else {
+                        let x = sink.block.lock().front().unwrap().clone();
+                        sink.block.lock().pop_front();
                         Ok(Some(x))
                     }
                 }

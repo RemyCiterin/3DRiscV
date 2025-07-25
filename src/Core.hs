@@ -594,9 +594,9 @@ makeCore
   systemQ :: Queue ExecInput <- withName "system" makeQueue
   systemBuf :: Reg ExecOutput <- withName "system" $ makeReg dontCare
 
-  redirectQ :: Queue Redirection <- withName "fetch" makeBypassQueue
+  redirectQ :: Queue Redirection <- withName "fetch" makeQueue
 
-  window :: Queue DecodeOutput <- makeSizedQueueCore 5
+  window :: Queue DecodeOutput <- withName "pipeline" $ makeSizedQueueCore 5
 
   (imaster, fetch, trainHit, trainMis, itlbFlush) <- withName "fetch" $
     makeFetch systemUnit.vmInfo fetchSource itlbSource (toStream redirectQ)
@@ -625,7 +625,7 @@ makeCore
 
   cycle :: Reg (Bit 32) <- makeReg 0
 
-  always do
+  withName "pipeline" $ always do
     cycle <== cycle.val + 1
 
     when (decode.canPeek .&&. window.notFull) do
@@ -750,12 +750,14 @@ makeCore
 
   return (imaster, dmaster)
 
-makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, [Mmio TLConfig])
+makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, Bit 8, [Mmio TLConfig])
 makeUartMmio cycles rx = do
   inputs <- makeRxUart cycles rx
 
   outputQ :: Queue (Bit 8) <- makeQueue
   tx <- makeTxUart cycles (toSource outputQ)
+
+  leds :: Reg (Bit 8) <- makeReg 0
 
   let canPeek :: Bit 8 = zeroExtend inputs.canPeek
   let canPut :: Bit 8 = zeroExtend outputQ.notFull
@@ -765,7 +767,7 @@ makeUartMmio cycles rx = do
           { readReg= inputs.peek
           , writeReg= when outputQ.notFull . outputQ.enq }
 
-  let mmio =
+  let uartMmio =
         Mmio
           { address= 0x10000000
           , read= \ mask -> do
@@ -777,11 +779,22 @@ makeUartMmio cycles rx = do
                 --displayAscii (slice @7 @0 lane)
           }
 
-  return (tx, [mmio])
+  let ledsMmio =
+        Mmio
+          { address= 0x10000004
+          , read= \_ -> pure ((0 :: Bit 24) # leds.val)
+          , write= \ lane mask -> do
+              when (at @0 mask) do
+                leds <== slice @7 @0 lane
+                display_ "leds <= 0b"
+                sequence_ [ display_ x | x <- reverse $ toBitList (slice @7 @0 lane) ]
+                display "" }
 
-makeTestCore :: Bit 1 -> Module (Bit 1)
+  return (tx, leds.val, [uartMmio, ledsMmio])
+
+makeTestCore :: Bit 1 -> Module (Bit 1, Bit 8)
 makeTestCore rx = mdo
-  (tx, uartMmio) <- makeUartMmio (div 40_000_000 115200) rx
+  (tx, leds, uartMmio) <- makeUartMmio 217 rx
 
   let config =
         TLRAMConfig
@@ -816,14 +829,8 @@ makeTestCore rx = mdo
 
   ([master0,master1], [slave0,slave1,slave2,slave3]) <-
     withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
-  --uncoherentSlave <- withName "memory" $ makeTLRAM @25 @TLConfig' config
-  uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
-
-  always do
-    when slave2.channelB.canPeek do
-      display "errorB"
-    when slave2.channelD.canPeek do
-      display "errorD"
+  uncoherentSlave <- withName "memory" $ makeTLRAM @25 @TLConfig' config
+  --uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
 
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0
@@ -856,7 +863,7 @@ makeTestCore rx = mdo
           , itlbSource= 3
           , dtlbSource= 4
           , hartId= 0 }
-  (imaster0, dmaster0) <- withName "core" $ makeCore coreconfig0 systemInputs0
+  (imaster0, dmaster0) <- withName "core0" $ makeCore coreconfig0 systemInputs0
 
   let coreconfig1 =
         CoreConfig
@@ -866,7 +873,7 @@ makeTestCore rx = mdo
           , itlbSource= 8
           , dtlbSource= 9
           , hartId= 1 }
-  --(imaster1, dmaster1) <- withName "core" $ makeCore coreconfig1 systemInputs1
+  --(imaster1, dmaster1) <- withName "core1" $ makeCore coreconfig1 systemInputs1
 
   let bconfig =
         BroadcastConfig
@@ -879,4 +886,4 @@ makeTestCore rx = mdo
           , baseSink= 0 }
   (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
 
-  return tx
+  return (tx, leds)

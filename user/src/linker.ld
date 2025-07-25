@@ -9,8 +9,6 @@ SECTIONS {
         *(.text.start)
         . = ALIGN(16);
         *(.text .text.*)
-        . = ALIGN(4096);
-        *(.text.trampoline)
     }
 
     PROVIDE(__global_pointer$ = .);

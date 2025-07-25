@@ -105,8 +105,8 @@ data TestUartIfc = TestUartIfc {
 
 testUart :: Bit 1 -> Module TestUartIfc
 testUart rx = mdo
-  rxuart <- makeRxUart (div 83_000_000 115200) rx
-  tx <- makeTxUart (div 83_000_000 115200) rxuart
+  rxuart <- makeRxUart 217 rx
+  tx <- makeTxUart 217 rxuart
 
   led :: Reg (Bit 8) <- makeReg 0
 

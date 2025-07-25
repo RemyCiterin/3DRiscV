@@ -19,6 +19,10 @@ impl From<usize> for Capability {
     fn from(x: usize) -> Capability { Capability(x as u32) }
 }
 
+impl From<Capability> for usize {
+    fn from(x: Capability) -> usize { x.0 as usize }
+}
+
 #[derive(Clone)]
 pub enum State {
     /// The process is blocked because if wait to receive data from a source,
@@ -48,7 +52,7 @@ pub struct Task {
     pub state: RwSpinlock<State>,
 
     /// Interprocess-communication-buffer
-    pub ipc_buffer: RwSpinlock<Page>,
+    pub ipc_buffer: Spinlock<Page>,
 
     /// Parent of the task
     pub owner: ObjectId,
@@ -77,9 +81,13 @@ pub struct TaskConfig {
 
 impl Task {
     pub fn new(owner: ObjectId) -> Option<Self> {
+        let stack = palloc::alloc()?;
+        Task::new_with_stack(owner, stack)
+    }
+
+    pub fn new_with_stack(owner: ObjectId, stack: Page) -> Option<Self> {
         let ipc_buffer = palloc::alloc()?;
         let ptable = vm::init_ptable();
-        let stack = palloc::alloc()?;
 
         // Ensure the content of trampoline.s and the context are visible as
         // supervisor memory in the user address space
@@ -107,7 +115,7 @@ impl Task {
         let mut context: Context = Default::default();
 
         context.registers.pc = 0x1000_0000;
-        context.registers.sp = 0x2000_0FFC;
+        context.registers.sp = 0x2000_0FF0;
         let mut satp = vm::Satp::new();
         satp.set_mode(vm::Mode::Sv32);
         satp.set_ppn(ptable);
@@ -121,12 +129,34 @@ impl Task {
             mapping: RwSpinlock::new(mapping),
             ptable: Spinlock::new(ptable),
             state: RwSpinlock::new(State::Idle),
-            ipc_buffer: RwSpinlock::new(ipc_buffer),
+            ipc_buffer: Spinlock::new(ipc_buffer),
             context: RwSpinlock::new(context)
         })
     }
 
-    pub fn map_buffer(&mut self, mut virt: VAddr, buf: &[u8], perms: vm::Perms)
+    pub fn fork(&self) -> Option<Task> {
+        let stack = palloc::alloc()?;
+
+        for (virt, page) in self.mapping.read().iter() {
+            if virt == &VAddr::from(0x2000_0000) {
+                stack.as_bytes_mut().copy_from_slice(page.as_bytes());
+            }
+        }
+
+        let task = Task::new_with_stack(self.id(), stack)?;
+
+        for (virt, page) in self.mapping.read().iter() {
+            if virt == &VAddr::from(0x2000_0000) { continue; }
+            if virt == &VAddr::from(0x3000) { continue; }
+
+            let perms = vm::Perms{user: true, read: true, write: true, exec: true};
+            task.map_buffer(virt.clone(), page.as_bytes(), perms);
+        }
+
+        Some(task)
+    }
+
+    pub fn map_buffer(&self, mut virt: VAddr, buf: &[u8], perms: vm::Perms)
         -> usize {
         let mut num_pages = buf.len() / vm::PSIZE;
         if buf.len() & vm::PMASK != 0 { num_pages += 1; }
@@ -170,7 +200,7 @@ impl Task {
         return num_pages * vm::PSIZE;
     }
 
-    pub fn map_zeros(&mut self, mut virt: VAddr, size: usize, perms: vm::Perms) {
+    pub fn map_zeros(&self, mut virt: VAddr, size: usize, perms: vm::Perms) {
         assert!(size % vm::PSIZE == 0);
 
         let mapping =
@@ -202,14 +232,14 @@ impl Task {
     }
 
     /// Return a new capability for a given object
-    pub fn new_capability(&mut self, obj: Arc<dyn Object>) -> Capability {
+    pub fn new_capability(&self, obj: Arc<dyn Object>) -> Capability {
         let new_capa = self.next_capa.fetch_add(1, Ordering::SeqCst);
         self.capabilities.lock().insert(Capability(new_capa), obj);
         return Capability(new_capa);
     }
 
     /// Generate a new pipe
-    pub fn new_pipe(&mut self) -> (Capability, Capability) {
+    pub fn new_pipe(&self) -> (Capability, Capability) {
         let (source, sink) =
             crate::channel::new_channel(self.id);
 
@@ -218,6 +248,76 @@ impl Task {
 
         (c1, c2)
     }
+
+    pub fn to_blocked(&self, obj: Arc<dyn Object>) {
+        self.state.write().clone_from(&State::Blocked(obj));
+    }
+
+    pub fn to_idle(&self) {
+        self.state.write().clone_from(&State::Idle);
+    }
+
+    pub fn to_busy(&self) {
+        self.state.write().clone_from(&State::Busy);
+    }
+}
+
+/// Try to send a message to a channel, return None in case of a failure,
+/// this procedure can set the current task as blocked and unlock another thread
+pub fn send(task: Arc<Task>, capability: Capability) -> Option<()> {
+    let arc = task.capabilities.lock().get(&capability).cloned()?;
+
+    let sink =
+        arc.downcast_arc::<crate::channel::Sink>().ok()?;
+
+    let send_to = sink.send(task.clone()).ok()?;
+
+    if let Some(obj) = send_to {
+        let other =
+            &obj.clone().downcast_arc::<Task>().ok()?;
+        let buf1 = task.ipc_buffer.lock();
+        let buf2 = other.ipc_buffer.lock();
+
+        println!("copy from id: {:?} to id: {:?}", task.id(), other.id());
+
+        other.to_idle();
+        buf2
+            .as_bytes_mut()
+            .copy_from_slice(buf1.as_bytes());
+    } else {
+        task.to_blocked(sink.clone());
+    }
+
+    Some(())
+}
+
+/// Try to receive a message from a channel, return None in case of a failure,
+/// this procedure can set the current task as blocked and unlock another thread
+pub fn receive(task: Arc<Task>, capability: Capability) -> Option<()> {
+    let arc = task.capabilities.lock().get(&capability).cloned()?;
+
+    let source =
+        arc.downcast_arc::<crate::channel::Source>().ok()?;
+
+    let send_to = source.receive(task.clone()).ok()?;
+
+    if let Some(obj) = send_to {
+        let other =
+            &obj.clone().downcast_arc::<Task>().ok()?;
+        let buf1 = task.ipc_buffer.lock();
+        let buf2 = other.ipc_buffer.lock();
+
+        println!("copy from id: {:?} to id: {:?}", other.id(), task.id());
+
+        other.to_idle();
+        buf1
+            .as_bytes_mut()
+            .copy_from_slice(buf2.as_bytes());
+    } else {
+        task.to_blocked(source.clone());
+    }
+
+    Some(())
 }
 
 impl Drop for Task {

@@ -3,6 +3,7 @@
 #![feature(alloc_error_handler)]
 #![feature(allocator_api)]
 #![feature(alloc_layout_extra)]
+#![feature(get_mut_unchecked)]
 #![allow(dead_code)]
 
 #[macro_use]
@@ -24,6 +25,7 @@ mod channel;
 mod object;
 mod task;
 mod syscall;
+mod mapping;
 mod scheduler;
 
 use core::{
@@ -96,20 +98,31 @@ extern "C" fn  supervisor_main() {
     }
 
     let file = include_bytes!("user.bin");
-    //setup_initial_user(&mut state, file, 0x10000);
 
     let perms = vm::Perms{write: true, read: true, exec: true, user: true};
-    let mut task = Task::new(KERNEL_ID).unwrap();
+    let task = Task::new(KERNEL_ID).unwrap();
     let size = task.map_buffer(VAddr::from(0x1000_0000), file, perms);
     task.map_zeros(VAddr::from(0x1000_0000) + size, 0x10000, perms);
 
-    print!("Hello world!\n");
+    let scheduler = scheduler::Scheduler::new();
+
+    scheduler.push(alloc::sync::Arc::new(task));
+
+    print!("{} pages allocated and {} are still busy\n", palloc::count(), palloc::size());
 
     loop {
-        let state =
-            &mut task.context.write();
-        unsafe { trap::run_user(state) };
-        println!("scause: {:?}", register::scause::read().bits());
-        handler::handler(state);
+        scheduler.canonicalize();
+        if let Some(task) = scheduler.choose_task() {
+            unsafe { trap::run_user(&mut task.context.write()) };
+            task.to_idle();
+
+            //if task.context.read().registers.a0 != 0 || register::scause::read().bits() != 8 {
+            //    println!("scause: {:?} task: {:?}", register::scause::read().bits(), task.id());
+            //}
+
+            syscall::handle_syscall(&scheduler, task.clone());
+            task.context.write().registers.pc += 4;
+            //handler::handler(state);
+        }
     }
 }

@@ -4,12 +4,17 @@ use core::arch::asm;
 
 struct Writer;
 
+pub fn putc(c: u8) {
+    let mut code: usize = 5;
+    //while unsafe{*UART_LSR & UART_LSR_EMPTY_MASK} == 0 {}
+    unsafe { asm!("ecall", inout("a0") code, in("a1") c); }
+    assert!(code == 0);
+}
+
 impl Write for Writer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for c in s.bytes() {
-            //while unsafe{*UART_LSR & UART_LSR_EMPTY_MASK} == 0 {}
-            let code: usize = 0;
-            unsafe { asm!("ecall", in("a0") code, in("a1") c); }
+            putc(c);
         }
 
         Ok(())
