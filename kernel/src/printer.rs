@@ -1,6 +1,6 @@
 use core::fmt::{self, Write};
-use crate::constant::*;
 use core::ptr::write_volatile;
+use crate::params::*;
 
 struct Writer;
 

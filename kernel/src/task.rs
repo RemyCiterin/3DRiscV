@@ -1,5 +1,6 @@
 use crate::pointer::{Page, PAddr, VAddr};
 use crate::object::*;
+use crate::params::*;
 
 use alloc::sync::Arc;
 use spinning_top::Spinlock;
@@ -96,7 +97,7 @@ impl Task {
         let urw = vm::Perms{read: true, write: true, exec: false, user: true};
 
         let mapping = vec![
-            (VAddr::from(0x2000_0000), stack),
+            (VAddr::from(0x2000), stack),
             (VAddr::from(0x3000), ipc_buffer),
         ];
 
@@ -105,7 +106,7 @@ impl Task {
                 ptable,
                 virt,
                 PAddr::from(phys),
-                vm::PSIZE,
+                PAGE_SIZE,
                 urw,
                 false,
                 false
@@ -114,8 +115,8 @@ impl Task {
 
         let mut context: Context = Default::default();
 
-        context.registers.pc = 0x1000_0000;
-        context.registers.sp = 0x2000_0FF0;
+        context.registers.pc = 0x5000;
+        context.registers.sp = 0x2FF0;
         let mut satp = vm::Satp::new();
         satp.set_mode(vm::Mode::Sv32);
         satp.set_ppn(ptable);
@@ -138,15 +139,19 @@ impl Task {
         let stack = palloc::alloc()?;
 
         for (virt, page) in self.mapping.read().iter() {
-            if virt == &VAddr::from(0x2000_0000) {
+            if virt == &VAddr::from(0x2000) {
                 stack.as_bytes_mut().copy_from_slice(page.as_bytes());
             }
         }
 
         let task = Task::new_with_stack(self.id(), stack)?;
+        task.next_capa.store(
+            self.next_capa.load(Ordering::Relaxed),
+            Ordering::Relaxed
+        );
 
         for (virt, page) in self.mapping.read().iter() {
-            if virt == &VAddr::from(0x2000_0000) { continue; }
+            if virt == &VAddr::from(0x2000) { continue; }
             if virt == &VAddr::from(0x3000) { continue; }
 
             let perms = vm::Perms{user: true, read: true, write: true, exec: true};
@@ -158,8 +163,8 @@ impl Task {
 
     pub fn map_buffer(&self, mut virt: VAddr, buf: &[u8], perms: vm::Perms)
         -> usize {
-        let mut num_pages = buf.len() / vm::PSIZE;
-        if buf.len() & vm::PMASK != 0 { num_pages += 1; }
+        let mut num_pages = buf.len() / PAGE_SIZE;
+        if buf.len() % PAGE_SIZE != 0 { num_pages += 1; }
 
         let mapping =
             &mut self.mapping.write();
@@ -169,16 +174,16 @@ impl Task {
         for i in 0..num_pages {
             let page = palloc::alloc().unwrap();
 
-            if buf.len() >= i * vm::PSIZE {
-                let a = i * vm::PSIZE;
-                let b = core::cmp::min(a + vm::PSIZE, buf.len());
+            if buf.len() >= i * PAGE_SIZE {
+                let a = i * PAGE_SIZE;
+                let b = core::cmp::min(a + PAGE_SIZE, buf.len());
 
                 page
                     .as_bytes_mut()[0..b-a]
                     .copy_from_slice(&buf[a..b]);
 
                 page
-                    .as_bytes_mut()[b-a..vm::PSIZE]
+                    .as_bytes_mut()[b-a..PAGE_SIZE]
                     .fill(0);
             }
 
@@ -186,7 +191,7 @@ impl Task {
                 ptable,
                 virt,
                 PAddr::from(page),
-                vm::PSIZE,
+                PAGE_SIZE,
                 perms,
                 false,
                 false,
@@ -194,21 +199,21 @@ impl Task {
 
             mapping.push((virt, page));
 
-            virt += vm::PSIZE;
+            virt += PAGE_SIZE;
         }
 
-        return num_pages * vm::PSIZE;
+        return num_pages * PAGE_SIZE;
     }
 
     pub fn map_zeros(&self, mut virt: VAddr, size: usize, perms: vm::Perms) {
-        assert!(size % vm::PSIZE == 0);
+        assert!(size % PAGE_SIZE == 0);
 
         let mapping =
             &mut self.mapping.write();
         let ptable =
             self.ptable.lock().clone();
 
-        for _ in 0..size / vm::PSIZE {
+        for _ in 0..size / PAGE_SIZE {
             let page = palloc::alloc().unwrap();
 
             page
@@ -219,7 +224,7 @@ impl Task {
                 ptable,
                 virt,
                 PAddr::from(page),
-                vm::PSIZE,
+                PAGE_SIZE,
                 perms,
                 false,
                 false,
@@ -227,7 +232,7 @@ impl Task {
 
             mapping.push((virt, page));
 
-            virt += vm::PSIZE;
+            virt += PAGE_SIZE;
         }
     }
 
@@ -264,13 +269,13 @@ impl Task {
 
 /// Try to send a message to a channel, return None in case of a failure,
 /// this procedure can set the current task as blocked and unlock another thread
-pub fn send(task: Arc<Task>, capability: Capability) -> Option<()> {
+pub fn send(task: Arc<Task>, capability: Capability, size: usize) -> Option<()> {
     let arc = task.capabilities.lock().get(&capability).cloned()?;
 
     let sink =
         arc.downcast_arc::<crate::channel::Sink>().ok()?;
 
-    let send_to = sink.send(task.clone()).ok()?;
+    let send_to = sink.send(task.clone(), size).ok()?;
 
     if let Some(obj) = send_to {
         let other =
@@ -278,12 +283,11 @@ pub fn send(task: Arc<Task>, capability: Capability) -> Option<()> {
         let buf1 = task.ipc_buffer.lock();
         let buf2 = other.ipc_buffer.lock();
 
-        println!("copy from id: {:?} to id: {:?}", task.id(), other.id());
-
+        other.context.write().registers.a2 = size;
         other.to_idle();
         buf2
-            .as_bytes_mut()
-            .copy_from_slice(buf1.as_bytes());
+            .as_bytes_mut()[0..size]
+            .copy_from_slice(&buf1.as_bytes()[0..size]);
     } else {
         task.to_blocked(sink.clone());
     }
@@ -293,7 +297,7 @@ pub fn send(task: Arc<Task>, capability: Capability) -> Option<()> {
 
 /// Try to receive a message from a channel, return None in case of a failure,
 /// this procedure can set the current task as blocked and unlock another thread
-pub fn receive(task: Arc<Task>, capability: Capability) -> Option<()> {
+pub fn receive(task: Arc<Task>, capability: Capability) -> Option<usize> {
     let arc = task.capabilities.lock().get(&capability).cloned()?;
 
     let source =
@@ -301,23 +305,24 @@ pub fn receive(task: Arc<Task>, capability: Capability) -> Option<()> {
 
     let send_to = source.receive(task.clone()).ok()?;
 
-    if let Some(obj) = send_to {
+    if let Some((obj, size)) = send_to {
         let other =
             &obj.clone().downcast_arc::<Task>().ok()?;
         let buf1 = task.ipc_buffer.lock();
         let buf2 = other.ipc_buffer.lock();
 
-        println!("copy from id: {:?} to id: {:?}", other.id(), task.id());
-
         other.to_idle();
         buf1
-            .as_bytes_mut()
-            .copy_from_slice(buf2.as_bytes());
+            .as_bytes_mut()[0..size]
+            .copy_from_slice(&buf2.as_bytes()[0..size]);
+        Some(size)
     } else {
         task.to_blocked(source.clone());
-    }
 
-    Some(())
+        // Return a fake size because this size will be overwriten during
+        // the coresponding send
+        Some(0)
+    }
 }
 
 impl Drop for Task {
@@ -325,8 +330,8 @@ impl Drop for Task {
         let ptable = self.ptable.lock();
         let maps = self.mapping.read();
 
-        for &(virt, phys) in maps.iter() {
-            vm::unmap(ptable.clone(), virt, vm::PSIZE, true);
+        for &(virt, _) in maps.iter() {
+            vm::unmap(ptable.clone(), virt, PAGE_SIZE, true);
         }
 
         vm::free_ptable(ptable.clone(), false);

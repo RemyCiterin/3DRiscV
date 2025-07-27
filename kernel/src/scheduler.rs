@@ -43,12 +43,10 @@ impl Scheduler {
             match state.clone() {
                 State::Idle => {
                     state.clone_from(&State::Busy);
-                    tasks.push_back(task.clone());
+                    blocked.push(task.clone());
                     return Some(task.clone());
                 }
-                _ => {
-                    blocked.push(task.clone());
-                }
+                _ => blocked.push(task.clone())
             }
         }
 

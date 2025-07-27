@@ -1,21 +1,12 @@
 use bitflags::bitflags;
 
-use crate::{constant, palloc, pointer::*};
+use crate::{params::*, palloc, pointer::*};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Mode { Bare, Sv32 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct Satp { bits: usize }
-
-/// Size of a page
-pub const PSIZE: usize = 0x1000;
-
-/// Size of a megapage
-pub const MPSIZE: usize = 0x400000;
-
-pub const PMASK: usize = PSIZE - 1;
-pub const MPMASK: usize = MPSIZE - 1;
 
 impl Satp {
     pub fn new() -> Self {
@@ -227,16 +218,12 @@ pub fn walk_and_alloc(
 pub fn free_ptable(ptable: Page, free_leaf_ppn: bool) {
     let entries: &'static mut[Entry] = ptable.as_pte_mut();
 
-    let mut counter = 0;
-
     for &entry in entries.iter() {
         if entry.valid() && !entry.leaf() {
             free_ptable(entry.ppn(), free_leaf_ppn);
         } else if entry.leaf() && free_leaf_ppn {
             palloc::free(entry.ppn());
         }
-
-        counter += 1;
     }
 
     palloc::free(ptable);
@@ -278,10 +265,10 @@ pub fn map(
         );
     }
 
-    if size % constant::PAGE_SIZE != 0 {
+    if size % PAGE_SIZE != 0 {
         panic!(
             "map: size must be divisible by {}, found {}",
-            constant::PAGE_SIZE,
+            PAGE_SIZE,
             size
         );
     }
@@ -291,14 +278,14 @@ pub fn map(
         usize::from(virt), usize::from(virt)+size-1,
     );
 
-    let last = virt + size - PSIZE;
+    let last = virt + size - PAGE_SIZE;
 
     loop {
         let va: usize = usize::from(virt);
         let pa: usize = usize::from(phys);
         let mut megapage: bool =
-            allow_megapage && usize::from(last) >= va + MPSIZE &&
-            pa % MPSIZE == 0 && va % MPSIZE == 0;
+            allow_megapage && usize::from(last) >= va + MEGAPAGE_SIZE &&
+            pa % MEGAPAGE_SIZE == 0 && va % MEGAPAGE_SIZE == 0;
 
         let (entry, level) =
             walk_and_alloc(ptable, virt, megapage);
@@ -315,8 +302,8 @@ pub fn map(
 
         if virt == last { return; }
 
-        virt += if megapage {MPSIZE} else {PSIZE};
-        phys += if megapage {MPSIZE} else {PSIZE};
+        virt += if megapage {MEGAPAGE_SIZE} else {PAGE_SIZE};
+        phys += if megapage {MEGAPAGE_SIZE} else {PAGE_SIZE};
     }
 }
 
@@ -333,15 +320,15 @@ pub fn unmap(ptable: Page, mut virt: VAddr, size: usize, free: bool) {
         panic!("unmap: alignment error: {:?}", virt);
     }
 
-    if size % constant::PAGE_SIZE != 0 {
+    if size % PAGE_SIZE != 0 {
         panic!(
             "unmap: size must be divisible by {}, found {}",
-            constant::PAGE_SIZE,
+            PAGE_SIZE,
             size
         );
     }
 
-    let last = virt + size - PSIZE;
+    let last = virt + size - PAGE_SIZE;
 
     loop {
         let va: usize = usize::from(virt);
@@ -349,14 +336,14 @@ pub fn unmap(ptable: Page, mut virt: VAddr, size: usize, free: bool) {
         let megapage = level == 1;
 
         if !entry.valid() || !entry.leaf() { panic!("unmap"); }
-        if megapage && va % MPSIZE != 0 { panic!("unmap megapage"); }
-        if megapage && last < virt + MPSIZE { panic!("unmap megapage"); }
+        if megapage && va % MEGAPAGE_SIZE != 0 { panic!("unmap megapage"); }
+        if megapage && last < virt + MEGAPAGE_SIZE { panic!("unmap megapage"); }
 
         if free { palloc::free(entry.ppn()); }
         *entry = Default::default();
 
         if virt == last { return; }
-        virt += if megapage {MPSIZE} else {PSIZE};
+        virt += if megapage {MEGAPAGE_SIZE} else {PAGE_SIZE};
     }
 }
 

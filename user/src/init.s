@@ -11,4 +11,5 @@ _start:
 .bss_zero_loop_end:
   jal user_main
 .infinite_loop:
+  call yield_syscall
   j .infinite_loop

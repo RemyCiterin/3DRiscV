@@ -2,7 +2,7 @@ use core::alloc::Layout;
 
 use linked_list_allocator::LockedHeap;
 
-use crate::constant::KALLOC_SIZE;
+use crate::params::KALLOC_SIZE;
 
 #[global_allocator]
 pub static KERNEL_ALLOCATOR: LockedHeap = LockedHeap::empty();

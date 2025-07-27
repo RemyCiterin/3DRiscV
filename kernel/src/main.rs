@@ -11,7 +11,7 @@ extern crate alloc;
 
 #[macro_use]
 mod printer;
-mod constant;
+mod params;
 mod handler;
 mod kalloc;
 mod palloc;
@@ -101,8 +101,8 @@ extern "C" fn  supervisor_main() {
 
     let perms = vm::Perms{write: true, read: true, exec: true, user: true};
     let task = Task::new(KERNEL_ID).unwrap();
-    let size = task.map_buffer(VAddr::from(0x1000_0000), file, perms);
-    task.map_zeros(VAddr::from(0x1000_0000) + size, 0x10000, perms);
+    let size = task.map_buffer(VAddr::from(0x5000), file, perms);
+    task.map_zeros(VAddr::from(0x5000) + size, 0x10000, perms);
 
     let scheduler = scheduler::Scheduler::new();
 
@@ -111,7 +111,6 @@ extern "C" fn  supervisor_main() {
     print!("{} pages allocated and {} are still busy\n", palloc::count(), palloc::size());
 
     loop {
-        scheduler.canonicalize();
         if let Some(task) = scheduler.choose_task() {
             unsafe { trap::run_user(&mut task.context.write()) };
             task.to_idle();
@@ -123,6 +122,8 @@ extern "C" fn  supervisor_main() {
             syscall::handle_syscall(&scheduler, task.clone());
             task.context.write().registers.pc += 4;
             //handler::handler(state);
+        } else {
+            scheduler.canonicalize();
         }
     }
 }

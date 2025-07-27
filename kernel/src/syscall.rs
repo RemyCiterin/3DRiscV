@@ -1,6 +1,7 @@
 use crate::scheduler::*;
-use crate::task::*;
 use alloc::sync::Arc;
+use crate::params::*;
+use crate::task::*;
 
 pub enum SyscallError {
     OutOfMemory,
@@ -54,8 +55,14 @@ pub fn handle_syscall(scheduler: &Scheduler, task: Arc<Task>) {
             }
         }
         SYS_SEND => {
+            let size: usize = ctx.registers.a2;
+            if ctx.registers.a2 > PAGE_SIZE {
+                ctx.registers.a0 = 1;
+                return;
+            }
+
             let sink = Capability::from(ctx.registers.a1);
-            if let Some(_) = send(task.clone(), sink) {
+            if let Some(_) = send(task.clone(), sink, size) {
                 ctx.registers.a0 = 0;
             } else {
                 ctx.registers.a0 = 1;
@@ -63,7 +70,8 @@ pub fn handle_syscall(scheduler: &Scheduler, task: Arc<Task>) {
         }
         SYS_RECEIVE => {
             let source = Capability::from(ctx.registers.a1);
-            if let Some(_) = receive(task.clone(), source) {
+            if let Some(size) = receive(task.clone(), source) {
+                ctx.registers.a2 = size;
                 ctx.registers.a0 = 0;
             } else {
                 ctx.registers.a0 = 1;

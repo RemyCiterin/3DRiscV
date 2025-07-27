@@ -34,7 +34,7 @@ pub struct Sink{
 
     /// A list of tasks waiting for a message from this queue,
     /// those tasks are blocked if they are on this list
-    pub block: Spinlock<VecDeque<Arc<dyn Object>>>,
+    pub block: Spinlock<VecDeque<(Arc<dyn Object>, usize)>>,
 
     /// The source associated with this sink
     pub source: Option<Weak<Source>>,
@@ -93,11 +93,11 @@ pub enum ChannelError {
 impl Sink {
     /// Return the id of a task that wait for a message
     /// and unlock it, block the task otherwise
-    pub fn send(&self, task: Arc<dyn Object>)
+    pub fn send(&self, task: Arc<dyn Object>, size: usize)
         -> Result<Option<Arc<dyn Object>>, ChannelError> {
         if !self.block.lock().is_empty() {
             // Another task is already waiting
-            self.block.lock().push_back(task);
+            self.block.lock().push_back((task, size));
             return Ok(None);
         }
 
@@ -105,7 +105,7 @@ impl Sink {
             match source.upgrade() {
                 Some(source) => {
                     if source.block.lock().is_empty() {
-                        self.block.lock().push_back(task);
+                        self.block.lock().push_back((task, size));
                         Ok(None)
                     } else {
                         let x = source.block.lock().front().unwrap().clone();
@@ -125,7 +125,7 @@ impl Source {
     /// Return the id of a task that wait for a message to be received
     /// and unlock it, block the task otherwise
     pub fn receive(&self, task: Arc<dyn Object>)
-        -> Result<Option<Arc<dyn Object>>, ChannelError> {
+        -> Result<Option<(Arc<dyn Object>, usize)>, ChannelError> {
         if !self.block.lock().is_empty() {
             // Another task is already waiting
             self.block.lock().push_back(task);
@@ -139,7 +139,8 @@ impl Source {
                         self.block.lock().push_back(task);
                         Ok(None)
                     } else {
-                        let x = sink.block.lock().front().unwrap().clone();
+                        let x =
+                            sink.block.lock().front().unwrap().clone();
                         sink.block.lock().pop_front();
                         Ok(Some(x))
                     }
@@ -147,7 +148,7 @@ impl Source {
                 None => Err(ChannelError::Disconected)
             }
         } else {
-            Ok(Some(Arc::new(KERNEL{})))
+            Ok(Some((Arc::new(KERNEL{}), 0)))
         }
     }
 }

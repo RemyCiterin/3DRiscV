@@ -1,7 +1,7 @@
 //! Page allocator
 
 use lazy_static::lazy_static;
-use crate::{constant, pointer::*};
+use crate::{params::*, pointer::*};
 use spinning_top::Spinlock;
 
 pub struct PageAlloc {
@@ -63,8 +63,8 @@ pub fn init() {
     println!("palloc base: 0x{:x}", KALLOC_BUFFER as usize);
 
     PAGE_ALLOCATOR.lock().init(
-        PAddr::from(KALLOC_BUFFER as usize + constant::KALLOC_SIZE).ppn() + 1,
-        PAddr::from(constant::MEMORY_SIZE).ppn() - 1,
+        PAddr::from(KALLOC_BUFFER as usize + KALLOC_SIZE).ppn() + 1,
+        PAddr::from(MEMORY_END).ppn() - 1,
     );
 }
 

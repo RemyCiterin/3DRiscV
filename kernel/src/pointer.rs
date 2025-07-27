@@ -10,7 +10,7 @@ use core::{
     slice,
 };
 
-use crate::{constant, vm};
+use crate::{params::*, vm};
 
 // Physical address
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
@@ -52,12 +52,12 @@ impl PAddr {
     }
 
     pub fn ppn(&self) -> Page {
-        Page(self.0 / constant::PAGE_SIZE)
+        Page(self.0 / PAGE_SIZE)
     }
 
     // return the offset of the physical address in a page
     pub fn offset(&self) -> usize {
-        self.0 % constant::PAGE_SIZE
+        self.0 % PAGE_SIZE
     }
 
     pub fn as_slice<T>(&self, size: usize) -> &'static [T] {
@@ -89,12 +89,12 @@ impl VAddr {
     }
 
     pub fn ppn(&self) -> Page {
-        Page(self.0 / constant::PAGE_SIZE)
+        Page(self.0 / PAGE_SIZE)
     }
 
     // return the offset of the physical address in a page
     pub fn offset(&self) -> usize {
-        self.0 % constant::PAGE_SIZE
+        self.0 % PAGE_SIZE
     }
 
     pub fn vpn(&self, level: usize) -> usize {
@@ -110,8 +110,8 @@ impl Page {
     pub fn as_bytes(&self) -> &'static [u8] {
         unsafe {
             slice::from_raw_parts(
-                (self.0 * constant::PAGE_SIZE) as *const u8,
-                constant::PAGE_SIZE / mem::size_of::<u8>(),
+                (self.0 * PAGE_SIZE) as *const u8,
+                PAGE_SIZE / mem::size_of::<u8>(),
             )
         }
     }
@@ -119,8 +119,8 @@ impl Page {
     pub fn as_bytes_mut(&self) -> &'static mut [u8] {
         unsafe {
             slice::from_raw_parts_mut(
-                (self.0 * constant::PAGE_SIZE) as *mut u8,
-                constant::PAGE_SIZE / mem::size_of::<u8>(),
+                (self.0 * PAGE_SIZE) as *mut u8,
+                PAGE_SIZE / mem::size_of::<u8>(),
             )
         }
     }
@@ -128,8 +128,8 @@ impl Page {
     pub fn as_pte(&self) -> &'static [vm::Entry] {
         unsafe {
             slice::from_raw_parts(
-                (self.0 * constant::PAGE_SIZE) as *const vm::Entry,
-                constant::PAGE_SIZE / mem::size_of::<vm::Entry>(),
+                (self.0 * PAGE_SIZE) as *const vm::Entry,
+                PAGE_SIZE / mem::size_of::<vm::Entry>(),
             )
         }
     }
@@ -137,8 +137,8 @@ impl Page {
     pub fn as_pte_mut(&self) -> &'static mut [vm::Entry] {
         unsafe {
             slice::from_raw_parts_mut(
-                (self.0 * constant::PAGE_SIZE) as *mut vm::Entry,
-                constant::PAGE_SIZE / mem::size_of::<vm::Entry>(),
+                (self.0 * PAGE_SIZE) as *mut vm::Entry,
+                PAGE_SIZE / mem::size_of::<vm::Entry>(),
             )
         }
     }
@@ -260,6 +260,6 @@ impl From<Page> for usize {
 
 impl From<Page> for PAddr {
     fn from(ppn: Page) -> PAddr {
-        PAddr(ppn.0 * constant::PAGE_SIZE)
+        PAddr(ppn.0 * PAGE_SIZE)
     }
 }

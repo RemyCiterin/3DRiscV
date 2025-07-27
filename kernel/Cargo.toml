@@ -16,3 +16,4 @@ lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
 downcast-rs = { version = "*", default-features = false, features = [ "sync" ] }
 # peg = { version = "*", default-features = false, features = [ ] }
 # serde = { version = "1.0", default-features = false }
+slotmap = { version = "1.0", default-features = false }
