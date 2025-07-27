@@ -114,6 +114,7 @@ makeBCacheCoreWith :: forall w kw iw ow atomic p.
   , KnownNat ow
   , KnownNat kw
   , KnownNat w
+  , FShow atomic
   , KnownNat (w+(iw+ow))
   , KnownNat (Log2 (LaneWidth p))
   , KnownNat (kw+(iw+(ow+Log2 (LaneWidth p)))))
@@ -157,6 +158,8 @@ makeBCacheCoreWith source slave execAtomic = do
   address :: Reg (Bit (AddrWidth p)) <- makeReg dontCare
   cap :: Reg TLPerm <- makeReg dontCare
 
+  setDirty :: Wire (Bit 1) <- makeWire dataRamA.storeActiveBE
+
   let execOp :: Bit w -> Action () = \ way -> do
         reserved <== request.val `isTagged` #LoadR
         when (request.val `isTagged` #Load .||. request.val `isTagged` #LoadR) do
@@ -165,6 +168,7 @@ makeBCacheCoreWith source slave execAtomic = do
         when (request.val `isTagged` #Atomic) do
           dataQueue.enq (some (untag #Atomic request.val, way # index.val # offset.val))
           dataRamA.loadBE (way # index.val # offset.val)
+          setDirty <== true
         when (request.val `isTagged` #Store) do
           let (mask,lane) = untag #Store request.val
           dataRamA.storeBE (way # index.val # offset.val) mask lane
@@ -172,7 +176,7 @@ makeBCacheCoreWith source slave execAtomic = do
           dynamicAssert (scResponseQ.notFull) "enq into a full queue"
           scResponseQ.enq reserved.val
           when (reserved.val) do
-            let (mask,lane) = untag #Store request.val
+            let (mask,lane) = untag #StoreC request.val
             dataRamA.storeBE (way # index.val # offset.val) mask lane
 
   let baseAddr :: Bit kw -> Bit (AddrWidth p) = \ key ->
@@ -194,7 +198,10 @@ makeBCacheCoreWith source slave execAtomic = do
       storeListRAM permRam way.val index.val (dataRamA.storeActiveBE ? (dirty,perm))
 
   always do
-    when ((state.read 1 === st_idle .||. state.read 1 === st_acquire) .&&. probeM.start.canPeek) do
+    let canProbe =
+          probeM.start.canPeek
+          .&&. (state.read 1 === st_idle .||. state.read 1 === st_acquire)
+    when canProbe do
       let (addr, perm) = probeM.start.peek
       --display "lookup probe 0x" (formatHex 0 addr) " " perm
       let (_,idx,_) = decode @p @kw @iw @ow addr
@@ -266,8 +273,7 @@ makeBCacheCoreWith source slave execAtomic = do
               t.load idx
               | (p,t) <- zip permRam keyRam]
       , canMatch=
-          inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `isTagged` #Store)
-          .&&. inv (dataQueue.canDeq .&&. dataQueue.first.valid .&&. request.val `isTagged` #StoreC)
+          inv (dataQueue.canDeq .&&. dataQueue.first.valid)
           .&&. state.read 0 === st_lookup
           .&&. scResponseQ.notFull
           .&&. dataQueue.notFull
@@ -292,7 +298,7 @@ makeBCacheCoreWith source slave execAtomic = do
             --  display source " hit " (formatHex 0 (baseAddr msb))
             execOp hitWay
             state.write 0 st_idle
-            when (dataRamA.storeActiveBE) do
+            when setDirty.val do
               storeListRAM permRam hitWay index.val dirty
           else do
             way <== hitWay
@@ -300,6 +306,7 @@ makeBCacheCoreWith source slave execAtomic = do
             if outListRAM permRam hitWay =!= nothing .&&. outListRAM keyRam hitWay =!= msb then do
               let oldPerm = outListRAM permRam hitWay
               let oldKey = outListRAM keyRam hitWay
+              --display "release " (formatHex 0 (baseAddr oldKey))
 
               -- writeback only if the choosen block is dirty
               when (oldPerm === dirty) do
@@ -338,6 +345,9 @@ makeBCacheCoreWith source slave execAtomic = do
             , consume= do
                 let (op,pos) = dataQueue.first.val
                 dataRamA.storeBE pos ones (execAtomic op dataRamA.outBE)
+                --display
+                --  "atomic value: " (formatHex 0 dataRamA.outBE) " op: " op
+                --  " result: " (formatHex 0 $ execAtomic op dataRamA.outBE)
                 dataQueue.deq
             , peek= dataRamA.outBE}}
 
@@ -348,6 +358,7 @@ makeBCacheCore :: forall w kw iw ow atomic p.
   , KnownNat ow
   , KnownNat kw
   , KnownNat w
+  , FShow atomic
   , KnownNat (w+(iw+ow))
   , KnownNat (Log2 (LaneWidth p))
   , KnownNat (kw+(iw+(ow+Log2 (LaneWidth p)))))

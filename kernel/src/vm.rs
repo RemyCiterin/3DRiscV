@@ -338,6 +338,7 @@ pub fn unmap(ptable: Page, mut virt: VAddr, size: usize, free: bool) {
         if !entry.valid() || !entry.leaf() { panic!("unmap"); }
         if megapage && va % MEGAPAGE_SIZE != 0 { panic!("unmap megapage"); }
         if megapage && last < virt + MEGAPAGE_SIZE { panic!("unmap megapage"); }
+        if !entry.flags().contains(Flags::G) { panic!("unmap global") }
 
         if free { palloc::free(entry.ppn()); }
         *entry = Default::default();
@@ -347,16 +348,106 @@ pub fn unmap(ptable: Page, mut virt: VAddr, size: usize, free: bool) {
     }
 }
 
-pub fn map_kernel_memory(ptable: Page) {
+/// Map RAM memory as supervisor memory, used by users to ensure `trampoline.s` and
+/// their context are defined by their ptage table
+pub fn map_ram(ptable: Page) {
     let perms = Perms{exec: true, read: true, write: true, user: false};
 
     map(
         ptable,
-        VAddr(0x8000_0000),
-        PAddr(0x8000_0000),
-        32*1024*1024,
+        VAddr(RAM_BEGIN),
+        PAddr(RAM_BEGIN),
+        RAM_SIZE,
         perms,
         true,
         true
     );
+}
+
+/// A frame is a pointer to a memory page, it can be initialized using a
+/// conversion from an usize, or it can be initialized from the page allocator
+/// using `Frame::alloc()`, in this case the page is free at the deinitialisation
+/// of the frame using the `Drop` trait
+pub struct Frame{
+    page: Page,
+    from_palloc: bool,
+}
+
+impl From<usize> for Frame {
+    fn from(x: usize) -> Frame {
+        Self { page: Page::from(x), from_palloc: false }
+    }
+}
+
+impl From<&Frame> for PAddr {
+    fn from(x: &Frame) -> PAddr { PAddr::from(x.page) }
+}
+
+impl Frame {
+    /// Allocate a frame, in this case the frame will be free
+    /// when the frame will be drop
+    pub fn alloc() -> Option<Self> {
+        Some(Self{
+            page: palloc::alloc()?,
+            from_palloc: true,
+        })
+    }
+
+    pub fn as_bytes(&self) -> &'static [u8] {
+        self.page.as_bytes()
+    }
+
+    pub fn as_bytes_mut(&self) -> &'static mut [u8] {
+        self.page.as_bytes_mut()
+    }
+}
+
+impl Drop for Frame {
+    fn drop(&mut self) {
+        if self.from_palloc { palloc::free(self.page); }
+    }
+}
+
+/// A generic page table type, the memory allocated for this page table is recursively free
+/// using the `Drop` trait.
+pub struct PTable(Page);
+
+impl PTable {
+    pub fn new() -> Self {
+        PTable(init_ptable())
+    }
+
+    /// Map memory locally (those entries can be GC using sfence.vma, and can't use megapages)
+    pub fn map_local(&self, virt: VAddr, frame: &Frame, size: usize, perms: Perms) {
+        map(self.0, virt, PAddr::from(frame), size, perms, false, false);
+    }
+
+    /// Map memory globally (this memory can use megapages)
+    pub fn map_global(&self, virt: VAddr, frame: &Frame, size: usize, perms: Perms) {
+        map(self.0, virt, PAddr::from(frame), size, perms, true, true);
+    }
+
+    /// Map all the RAM memory into the address space defined by this frame as supervisor memory
+    pub fn map_ram(&self) {
+        map_ram(self.0)
+    }
+
+    /// Unmap memory
+    pub fn unmap(&self, virt: VAddr, size: usize) {
+        unmap(self.0, virt, size, false);
+    }
+
+    pub fn satp(&self, asid: usize) -> Satp {
+        let mut satp = Satp::new();
+        satp.set_mode(Mode::Sv32);
+        satp.set_ppn(self.0);
+        satp.set_asid(asid);
+        satp
+    }
+}
+
+impl Drop for PTable {
+    fn drop(&mut self) {
+        free_ptable(self.0, false)
+    }
 }

@@ -90,7 +90,7 @@ extern "C" fn  supervisor_main() {
         false,
     );
 
-    vm::map_kernel_memory(ptable);
+    vm::map_ram(ptable);
 
     unsafe {
         register::satp::set(register::satp::Mode::Sv32, 0, usize::from(ptable));
@@ -114,10 +114,6 @@ extern "C" fn  supervisor_main() {
         if let Some(task) = scheduler.choose_task() {
             unsafe { trap::run_user(&mut task.context.write()) };
             task.to_idle();
-
-            //if task.context.read().registers.a0 != 0 || register::scause::read().bits() != 8 {
-            //    println!("scause: {:?} task: {:?}", register::scause::read().bits(), task.id());
-            //}
 
             syscall::handle_syscall(&scheduler, task.clone());
             task.context.write().registers.pc += 4;

@@ -5,13 +5,15 @@ use crate::params::*;
 use alloc::sync::Arc;
 use spinning_top::Spinlock;
 use spinning_top::RwSpinlock;
-use crate::vm;
-use crate::palloc;
 use crate::trap::Context;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
+
+use crate::vm;
+use crate::vm::Frame;
+use crate::vm::PTable;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Capability(u32);
@@ -44,16 +46,16 @@ pub struct Task {
     next_capa: AtomicU32,
 
     /// Mapping from virtual addresses to physical addresses
-    pub mapping: RwSpinlock<Vec<(VAddr, Page)>>,
+    pub mapping: RwSpinlock<Vec<(VAddr, Arc<Frame>)>>,
 
     /// Root page table of the process
-    pub ptable: Spinlock<Page>,
+    pub ptable: Spinlock<PTable>,
 
     /// State of the process
     pub state: RwSpinlock<State>,
 
     /// Interprocess-communication-buffer
-    pub ipc_buffer: Spinlock<Page>,
+    pub ipc_buffer: Spinlock<Arc<Frame>>,
 
     /// Parent of the task
     pub owner: ObjectId,
@@ -82,44 +84,34 @@ pub struct TaskConfig {
 
 impl Task {
     pub fn new(owner: ObjectId) -> Option<Self> {
-        let stack = palloc::alloc()?;
+        let stack = Arc::new(Frame::alloc()?);
         Task::new_with_stack(owner, stack)
     }
 
-    pub fn new_with_stack(owner: ObjectId, stack: Page) -> Option<Self> {
-        let ipc_buffer = palloc::alloc()?;
-        let ptable = vm::init_ptable();
+    pub fn new_with_stack(owner: ObjectId, stack: Arc<Frame>) -> Option<Self> {
+        let ipc_buffer = Arc::new(Frame::alloc()?);
+        let ptable = PTable::new();
 
         // Ensure the content of trampoline.s and the context are visible as
         // supervisor memory in the user address space
-        vm::map_kernel_memory(ptable);
+        ptable.map_ram();
 
         let urw = vm::Perms{read: true, write: true, exec: false, user: true};
 
         let mapping = vec![
+            (VAddr::from(0x3000), ipc_buffer.clone()),
             (VAddr::from(0x2000), stack),
-            (VAddr::from(0x3000), ipc_buffer),
         ];
 
-        for &(virt, phys) in mapping.iter() {
-            vm::map(
-                ptable,
-                virt,
-                PAddr::from(phys),
-                PAGE_SIZE,
-                urw,
-                false,
-                false
-            );
+        for (virt, frame) in mapping.iter() {
+            ptable.map_local(*virt, &frame, PAGE_SIZE, urw);
         }
 
         let mut context: Context = Default::default();
 
         context.registers.pc = 0x5000;
         context.registers.sp = 0x2FF0;
-        let mut satp = vm::Satp::new();
-        satp.set_mode(vm::Mode::Sv32);
-        satp.set_ppn(ptable);
+        let satp = ptable.satp(0);
         context.satp = usize::from(satp);
 
         Some(Self {
@@ -136,7 +128,7 @@ impl Task {
     }
 
     pub fn fork(&self) -> Option<Task> {
-        let stack = palloc::alloc()?;
+        let stack = Arc::new(Frame::alloc()?);
 
         for (virt, page) in self.mapping.read().iter() {
             if virt == &VAddr::from(0x2000) {
@@ -169,35 +161,27 @@ impl Task {
         let mapping =
             &mut self.mapping.write();
         let ptable =
-            self.ptable.lock().clone();
+            self.ptable.lock();
 
         for i in 0..num_pages {
-            let page = palloc::alloc().unwrap();
+            let frame = Arc::new(Frame::alloc().unwrap());
 
             if buf.len() >= i * PAGE_SIZE {
                 let a = i * PAGE_SIZE;
                 let b = core::cmp::min(a + PAGE_SIZE, buf.len());
 
-                page
+                frame
                     .as_bytes_mut()[0..b-a]
                     .copy_from_slice(&buf[a..b]);
 
-                page
+                frame
                     .as_bytes_mut()[b-a..PAGE_SIZE]
                     .fill(0);
             }
 
-            vm::map(
-                ptable,
-                virt,
-                PAddr::from(page),
-                PAGE_SIZE,
-                perms,
-                false,
-                false,
-            );
+            ptable.map_local(virt, &frame, PAGE_SIZE, perms);
 
-            mapping.push((virt, page));
+            mapping.push((virt, frame));
 
             virt += PAGE_SIZE;
         }
@@ -211,24 +195,16 @@ impl Task {
         let mapping =
             &mut self.mapping.write();
         let ptable =
-            self.ptable.lock().clone();
+            self.ptable.lock();
 
         for _ in 0..size / PAGE_SIZE {
-            let page = palloc::alloc().unwrap();
+            let page = Arc::new(Frame::alloc().unwrap());
 
             page
                 .as_bytes_mut()
                 .fill(0);
 
-            vm::map(
-                ptable,
-                virt,
-                PAddr::from(page),
-                PAGE_SIZE,
-                perms,
-                false,
-                false,
-            );
+            ptable.map_local(virt, &page, PAGE_SIZE, perms);
 
             mapping.push((virt, page));
 
@@ -322,18 +298,5 @@ pub fn receive(task: Arc<Task>, capability: Capability) -> Option<usize> {
         // Return a fake size because this size will be overwriten during
         // the coresponding send
         Some(0)
-    }
-}
-
-impl Drop for Task {
-    fn drop(&mut self) {
-        let ptable = self.ptable.lock();
-        let maps = self.mapping.read();
-
-        for &(virt, _) in maps.iter() {
-            vm::unmap(ptable.clone(), virt, PAGE_SIZE, true);
-        }
-
-        vm::free_ptable(ptable.clone(), false);
     }
 }

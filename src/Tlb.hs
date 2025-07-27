@@ -401,8 +401,8 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
                   stop <== true
                 else if inv pte.validPTE .||. index.val === 0 then do
                   -- Address translation failure
-                  display "Invalid address translation with:\n\t" pte "\n\tat " (formatHex 0 lsb)
-                  display "\t" slave.channelD.peek
+                  --display "Invalid address translation with:\n\t" pte "\n\tat " (formatHex 0 lsb)
+                  --display "\t" slave.channelD.peek
                   abort <== true
                   stop <== true
                   pf_fail

@@ -441,13 +441,15 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
 
           let beat :: Bit 32 = responseLoad .>>. ((slice @1 @0 virt) # (0b000 :: Bit 3))
           let rd :: Bit 32 =
-                select [
-                  isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
-                  isHalf .&&. req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
-                  isByte .&&. inv req.instr.isUnsigned --> signExtend (slice @7 @0 beat),
-                  isHalf .&&. inv req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
-                  isWord --> beat
-                ]
+                opcode `is` [LOAD] ?
+                  ( select [
+                      isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
+                      isHalf .&&. req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
+                      isByte .&&. inv req.instr.isUnsigned --> signExtend (slice @7 @0 beat),
+                      isHalf .&&. inv req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
+                      isWord --> beat
+                    ]
+                  , beat)
 
           outputQ.enq (out{rd} :: ExecOutput)
           state <== 3
@@ -701,34 +703,40 @@ makeCore
             alu.consume
 
         when (req.epoch === epoch.read 0) do
-          when (instr.opcode === 0) do
-            display "exec invalid instruction at pc= 0x" (formatHex 0 req.pc)
+          --when (instr.opcode === 0) do
+          --  display "exec invalid instruction at pc= 0x" (formatHex 0 req.pc)
 
           let resp = instr.isMemAccess ? (lsu.peek, instr.isSystem ? (systemBuf.val, alu.peek))
 
           systemUnit.instret
 
-          if resp.exception .||. req.exception then do
+          let exception :: Bit 1 =
+                resp.exception .||. req.exception
+
+          let interrupt :: Bit 1 =
+                systemUnit.canInterrupt.valid .&&. inv instr.isMemAccess .&&. inv instr.isSystem
+
+          if exception then do
             let tval = req.exception ? (req.pc, resp.tval)
             let cause = req.exception ? (req.cause, resp.cause)
             trapPc <- systemUnit.exception req.pc cause tval
             redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
             epoch.write 0 (epoch.read 0 + 1)
 
-            display
-              "exception at pc= 0x" (formatHex 0 req.pc)
-              " to pc= 0x" (formatHex 0 trapPc) " " cause " " (formatHex 0 tval)
-          else if systemUnit.canInterrupt.valid .&&. inv instr.isMemAccess .&&. inv instr.isSystem then do
+            --display
+            --  "exception at pc= 0x" (formatHex 0 req.pc)
+            --  " to pc= 0x" (formatHex 0 trapPc) " " cause " " (formatHex 0 tval)
+          else if interrupt then do
             let cause = systemUnit.canInterrupt.val
             trapPc <- systemUnit.interrupt req.pc cause dontCare
 
             redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
             epoch.write 0 (epoch.read 0 + 1)
 
-            display
-              "interrupt at pc= 0x" (formatHex 0 req.pc)
-              " to pc= 0x" (formatHex 0 trapPc)
-              " " cause
+            --display
+            --  "interrupt at pc= 0x" (formatHex 0 req.pc)
+            --  " to pc= 0x" (formatHex 0 trapPc)
+            --  " " cause
           else do
             --when (hartId == 0) do
             --  display
@@ -829,7 +837,7 @@ makeTestCore rx = mdo
 
   ([master0,master1], [slave0,slave1,slave2,slave3]) <-
     withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
-  uncoherentSlave <- withName "memory" $ makeTLRAM @25 @TLConfig' config
+  uncoherentSlave <- withName "memory" $ makeTLRAM @28 @TLConfig' config
   --uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
 
   withName "xbar" $ makeConnection master0 slave

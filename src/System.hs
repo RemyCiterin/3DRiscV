@@ -160,7 +160,7 @@ makeSystem hartId tlbFlush inputs = do
                 status.mie <== status.mpie.val
               else do
                 status.sie <== status.mpie.val
-              display "mret to 0x" (formatHex 0 trap.mepc.val)
+              --display "mret to 0x" (formatHex 0 trap.mepc.val)
               return
                 ExecOutput
                   { cause= dontCare
@@ -188,7 +188,7 @@ makeSystem hartId tlbFlush inputs = do
               priv <== newPriv
               status.spp <== 0
 
-              display "sret to 0x" (formatHex 0 trap.sepc.val)
+              --display "sret to 0x" (formatHex 0 trap.sepc.val)
               return
                 ExecOutput
                   { cause= dontCare
