@@ -227,7 +227,7 @@ makeTestSpi = do
       spi.setDivider 128
       spi.setCS 1
 
-      counter <== 10000
+      counter <== 10000000
 
     while (counter.val =!= 0) do
       action do counter <== counter.val - 1

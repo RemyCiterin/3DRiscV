@@ -17,3 +17,4 @@ downcast-rs = { version = "*", default-features = false, features = [ "sync" ] }
 # peg = { version = "*", default-features = false, features = [ ] }
 # serde = { version = "1.0", default-features = false }
 slotmap = { version = "1.0", default-features = false }
+fdt = "*"

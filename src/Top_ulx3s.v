@@ -18,6 +18,11 @@ module mkTopULX3S (
   TestCore inst (
     .out_0(ftdi_rxd),
     .out_1(led),
+    .out_2_miso_0(sd_miso),
+    .out_2_miso_en(1),
+    .out_2_clk(sd_clk),
+    .out_2_mosi(sd_mosi),
+    .out_2_cs(sd_cs),
     .in0(ftdi_txd),
     .clock(CLK),
     .reset(RST)

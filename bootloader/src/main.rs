@@ -11,6 +11,7 @@ extern crate alloc;
 #[macro_use]
 mod printer;
 mod malloc;
+mod sdcard;
 
 use core::{
     arch::{global_asm},
@@ -29,6 +30,7 @@ fn panic(info: &PanicInfo) -> ! {
 #[no_mangle]
 unsafe extern "C" fn bootloader_main() -> () {
     println!("Hello world!");
+    sdcard::init();
     loop {}
 }
 

@@ -18,6 +18,7 @@ import System
 import Instr
 import Clint
 import Uart
+import Spi
 import Alu
 import CSR
 import Tlb
@@ -757,6 +758,38 @@ makeCore
 
   return (imaster, dmaster)
 
+makeSpiMmio :: Bit 32 -> Module (SpiFabric, [Mmio TLConfig])
+makeSpiMmio baseAddr = do
+  outputs :: Queue (Bit 8) <- makeQueue
+  (io, inputs) <- makeSpi (toSource outputs)
+
+  let canPeek :: Bit 8 = zeroExtend inputs.canPeek
+  let canPut :: Bit 8 = zeroExtend outputs.notFull
+  div :: Reg (Bit 32) <- makeReg 32
+
+  always do
+    io.setDivider div.val
+
+  let spiMmio =
+        Mmio
+          { address= baseAddr
+          , read= \ mask -> do
+              when (at @0 mask .&&. inputs.canPeek) do
+                display "consume spi mmio"
+                inputs.consume
+              return $ (0 :: Bit 8) # canPeek # canPut # inputs.peek
+          , write= \ lane mask -> do
+              when (at @0 mask .&&. outputs.notFull) do
+                display "send spi: " (formatHex 0 (slice @7 @0 lane))
+                outputs.enq (slice @7 @0 lane)
+              when (at @3 mask) do
+                display "set spi cs: " (at @24 lane)
+                io.setCS (at @24 lane)}
+  let divMmio = regToMmio (baseAddr + 4) div
+
+  return (io.fabric, [spiMmio, divMmio])
+
+
 makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, Bit 8, [Mmio TLConfig])
 makeUartMmio cycles rx = do
   inputs <- makeRxUart cycles rx
@@ -768,11 +801,6 @@ makeUartMmio cycles rx = do
 
   let canPeek :: Bit 8 = zeroExtend inputs.canPeek
   let canPut :: Bit 8 = zeroExtend outputQ.notFull
-
-  let value :: Reg (Bit 8) =
-        Reg
-          { readReg= inputs.peek
-          , writeReg= when outputQ.notFull . outputQ.enq }
 
   let uartMmio =
         Mmio
@@ -799,9 +827,10 @@ makeUartMmio cycles rx = do
 
   return (tx, leds.val, [uartMmio, ledsMmio])
 
-makeTestCore :: Bit 1 -> Module (Bit 1, Bit 8)
+makeTestCore :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric)
 makeTestCore rx = mdo
   (tx, leds, uartMmio) <- makeUartMmio 217 rx
+  (spi, spiMmio) <- makeSpiMmio 0x10001000
 
   let config =
         TLRAMConfig
@@ -836,8 +865,8 @@ makeTestCore rx = mdo
 
   ([master0,master1], [slave0,slave1,slave2,slave3]) <-
     withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
-  uncoherentSlave <- withName "memory" $ makeTLRAM @28 @TLConfig' config
-  --uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
+  --uncoherentSlave <- withName "memory" $ makeTLRAM @28 @TLConfig' config
+  uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
 
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0
@@ -847,7 +876,7 @@ makeTestCore rx = mdo
   withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
 
   (clintMmio, clint) <- withName "clint" $ makeClint @TLConfig 2 0x30000000
-  clintSlave <- makeTLMmio @TLConfig 1 (clintMmio ++ uartMmio)
+  clintSlave <- makeTLMmio @TLConfig 1 (clintMmio ++ uartMmio ++ spiMmio)
   withName "clint" $ makeConnection master1 clintSlave
 
   let systemInputs0 =
@@ -893,4 +922,4 @@ makeTestCore rx = mdo
           , baseSink= 0 }
   (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
 
-  return (tx, leds)
+  return (tx, leds, spi)

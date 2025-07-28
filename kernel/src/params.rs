@@ -1,5 +1,6 @@
 pub const KALLOC_SIZE: usize = 10 * 1024 * 1024;
 
+pub const SDCARD_BASE: usize = 0x1000_1000;
 
 pub const RAM_BEGIN: usize = 0x8000_0000;
 pub const RAM_SIZE: usize = 32 * 1024 * 1024;
