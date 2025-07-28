@@ -46,6 +46,26 @@ type BCacheRequest atomic p =
     , "StoreC" ::: (Bit (LaneWidth p), Bit (8 * LaneWidth p))
     , "Store" ::: (Bit (LaneWidth p), Bit (8 * LaneWidth p))]
 
+formatBCacheRequest :: forall atomic p. (KnownTLParams p, FShow atomic, Bits atomic) =>
+  BCacheRequest atomic p -> Format
+formatBCacheRequest request =
+  formatCond (request `isTagged` #Load) formatLoad
+  <> formatCond (request `isTagged` #LoadR) formatLoadR
+  <> formatCond (request `isTagged` #Atomic) formatAtomic
+  <> formatCond (request `isTagged` #Store)  formatStore
+  <> formatCond (request `isTagged` #StoreC) formatStoreC
+    where
+      formatLoad = fshow "#Load"
+      formatLoadR = fshow "#LoadR"
+      formatStore =
+        let (mask, lane) = untag #Store request in
+        fshow "#Store{mask: " <> fshow mask <> fshow ", data: " <> (formatHex 0 lane) <> fshow "}"
+      formatStoreC =
+        let (mask, lane) = untag #StoreC request in
+        fshow "#StoreC{mask: " <> fshow mask <> fshow ", data: " <> (formatHex 0 lane) <> fshow "}"
+      formatAtomic =
+        fshow "#Atomic{" <> fshow (untag #Atomic request) <> fshow "}"
+
 needPermTrunk :: forall atomic p.
   (Bits atomic, KnownTLParams p) => BCacheRequest atomic p -> Bit 1
 needPermTrunk req = inv (req `isTagged` #Load)
@@ -167,7 +187,10 @@ makeBCacheCoreWith source slave execAtomic = do
   dirty_w :: Wire (Bit 1) <- makeWire dataRamA.storeActiveBE
 
   -- Ensure a `probe` doesn't start at the same time than a `match`
-  matching_w :: Wire (Bit 1) <- makeWire false
+  exec_w :: Wire (Bit 1) <- makeWire false
+
+  let canExecOp :: Bit 1 =
+        inv (dataQueue.canDeq .&&. dataQueue.first.valid)
 
   let execOp :: Bit w -> Action () = \ way -> do
         reserved <== request.val `isTagged` #LoadR
@@ -198,20 +221,20 @@ makeBCacheCoreWith source slave execAtomic = do
       state.write 0 st_acquire
       releaseM.ack.consume
 
-    when (state.read 0 === st_acquire .&&. acquireM.canAcquireAck) do
+    when (state.read 0 === st_acquire .&&. acquireM.canAcquireAck .&&. canExecOp) do
       storeListRAM keyRam way.val index.val key.val
 
       execOp way.val
+      exec_w <== true
       state.write 0 st_idle
       perm <- acquireM.acquireAck
-      storeListRAM permRam way.val index.val (dataRamA.storeActiveBE ? (dirty,perm))
+      storeListRAM permRam way.val index.val (dirty_w.val ? (dirty,perm))
 
   always do
     let canProbe =
           probeM.start.canPeek
-          -- .&&. dataQueue.notFull
+          .&&. inv exec_w.val
           .&&. inv dataQueue.canDeq
-          .&&. inv matching_w.val
           .&&. (state.read 1 === st_idle .||. state.read 1 === st_acquire)
     when canProbe do
       let (addr, perm) = probeM.start.peek
@@ -293,7 +316,7 @@ makeBCacheCoreWith source slave execAtomic = do
           .&&. acquireM.canAcquire
           .&&. releaseM.start.canPut
       , match= \ msb -> do
-          matching_w <== true
+          exec_w <== true
           dynamicAssert (state.read 0 === st_lookup) "matching with an unexpected state"
           key <== msb
 

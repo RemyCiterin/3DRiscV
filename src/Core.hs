@@ -503,21 +503,21 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
         when (state.val === 2 .&&. cache.canLookup .&&. commit.canPeek .&&. commit.peek) do
           -- start executing a cached atomic operation when branch prediction is confirmed
           commit.consume
-          state <== 3
+          state <== 4
 
           if instr.isAMO then do
             lookup (tag #Atomic (opcode, req.rs2))
           else do
             lookup (tag #StoreC (ones, req.rs2))
 
-        when (state.val === 3 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
+        when (state.val === 4 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
           outputQ.enq (out{rd= zeroExtend $ inv cache.scResponse.peek} :: ExecOutput)
           cache.scResponse.consume
           ptwOut.consume
           input.consume
           state <== 0
 
-        when (state.val === 3 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
+        when (state.val === 4 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
           outputQ.enq (out{rd= cache.atomicResponse.peek} :: ExecOutput)
           cache.atomicResponse.consume
           ptwOut.consume
@@ -723,7 +723,7 @@ makeCore
             epoch.write 0 (epoch.read 0 + 1)
 
             --display
-            --  "exception at pc= 0x" (formatHex 0 req.pc)
+            --  "\texception at pc= 0x" (formatHex 0 req.pc)
             --  " to pc= 0x" (formatHex 0 trapPc) " " cause " " (formatHex 0 tval)
           else if interrupt then do
             let cause = systemUnit.canInterrupt.val
@@ -733,18 +733,18 @@ makeCore
             epoch.write 0 (epoch.read 0 + 1)
 
             --display
-            --  "interrupt at pc= 0x" (formatHex 0 req.pc)
+            --  "\tinterrupt at pc= 0x" (formatHex 0 req.pc)
             --  " to pc= 0x" (formatHex 0 trapPc)
             --  " " cause
           else do
-            when (hartId == 0) do
-              display
-                "\t[" hartId "@" cycle.val "] retire pc: "
-                (formatHex 8 req.pc) " instr: " (fshow instr)
+            --when (hartId == 0) do
+            --  display
+            --    "\t[" hartId "@" cycle.val "] retire pc: "
+            --    (formatHex 8 req.pc) " instr: " (fshow instr)
 
             when (rd =!= 0) do
-              when (hartId == 0) do
-                display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
+              --when (hartId == 0) do
+              --  display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
               registers.write rd resp.rd
 
             if (resp.pc =!= req.prediction .||. resp.flush) then do

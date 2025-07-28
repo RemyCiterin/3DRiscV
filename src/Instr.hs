@@ -241,45 +241,47 @@ decodeInstr instr =
 instance FShow Instr where
   fshow instr =
     formatCond (instr.opcode === 0) (fshow "invalid-instr") <>
-    formatCond (instr.opcode `is` [LUI    ]) (formatUtype      LUI  ) <>
-    formatCond (instr.opcode `is` [AUIPC  ]) (formatUtype      AUIPC) <>
-    formatCond (instr.opcode `is` [ADD    ]) (formatRItype     ADD  ) <>
-    formatCond (instr.opcode `is` [SLT    ]) (formatRItype     SLT  ) <>
-    formatCond (instr.opcode `is` [SLTU   ]) (formatRItype     SLTU ) <>
-    formatCond (instr.opcode `is` [AND    ]) (formatRItype     AND  ) <>
-    formatCond (instr.opcode `is` [OR     ]) (formatRItype     OR   ) <>
-    formatCond (instr.opcode `is` [XOR    ]) (formatRItype     XOR  ) <>
-    formatCond (instr.opcode `is` [SLL    ]) (formatRItype     SLL  ) <>
-    formatCond (instr.opcode `is` [SRL    ]) (formatRItype     SRL  ) <>
-    formatCond (instr.opcode `is` [SRA    ]) (formatRItype     SRA  ) <>
-    formatCond (instr.opcode `is` [SUB    ]) (formatRtype      SUB  ) <>
-    formatCond (instr.opcode `is` [JAL    ]) (formatJtype      JAL  ) <>
-    formatCond (instr.opcode `is` [JALR   ]) (formatItype      JALR ) <>
-    formatCond (instr.opcode `is` [BEQ    ]) (formatBtype      BEQ  ) <>
-    formatCond (instr.opcode `is` [BNE    ]) (formatBtype      BNE  ) <>
-    formatCond (instr.opcode `is` [BLT    ]) (formatBtype      BLT  ) <>
-    formatCond (instr.opcode `is` [BLTU   ]) (formatBtype      BLTU ) <>
-    formatCond (instr.opcode `is` [BGE    ]) (formatBtype      BGE  ) <>
-    formatCond (instr.opcode `is` [BGEU   ]) (formatBtype      BGEU ) <>
-    formatCond (instr.opcode `is` [LOAD   ]) (formatLtype           ) <>
-    formatCond (instr.opcode `is` [STORE  ]) (formatStype           ) <>
-    formatCond (instr.opcode `is` [CSRRW  ]) (formatCSRRW      CSRRW) <>
-    formatCond (instr.opcode `is` [CSRRS  ]) (formatCSRRS      CSRRS) <>
-    formatCond (instr.opcode `is` [CSRRC  ]) (formatCSRRC      CSRRC) <>
-    formatCond (instr.opcode `is` [FENCE  ]) (fshow "fence" ) <>
-    formatCond (instr.opcode `is` [ECALL  ]) (fshow "ecall" ) <>
-    formatCond (instr.opcode `is` [EBREAK ]) (fshow "ebreak") <>
-    formatCond (instr.opcode `is` [AMOADD ]) (formatAMO AMOADD ) <>
-    formatCond (instr.opcode `is` [AMOOR  ]) (formatAMO AMOOR  ) <>
-    formatCond (instr.opcode `is` [AMOSWAP]) (formatAMO AMOSWAP) <>
-    formatCond (instr.opcode `is` [AMOAND ]) (formatAMO AMOAND ) <>
-    formatCond (instr.opcode `is` [AMOXOR ]) (formatAMO AMOXOR ) <>
-    formatCond (instr.opcode `is` [AMOMIN ]) (formatAMO AMOMIN ) <>
-    formatCond (instr.opcode `is` [AMOMAX ]) (formatAMO AMOMAX ) <>
-    formatCond (instr.opcode `is` [AMOMINU]) (formatAMO AMOMINU) <>
-    formatCond (instr.opcode `is` [AMOMAXU]) (formatAMO AMOMAXU) <>
-    formatCond (instr.opcode `is` [STOREC ]) (formatAMO STOREC) <>
-    formatCond (instr.opcode `is` [LOADR  ]) (formatLR LOADR)
+    formatCond (instr.opcode `is` [LUI       ]) (formatUtype      LUI  ) <>
+    formatCond (instr.opcode `is` [AUIPC     ]) (formatUtype      AUIPC) <>
+    formatCond (instr.opcode `is` [ADD       ]) (formatRItype     ADD  ) <>
+    formatCond (instr.opcode `is` [SLT       ]) (formatRItype     SLT  ) <>
+    formatCond (instr.opcode `is` [SLTU      ]) (formatRItype     SLTU ) <>
+    formatCond (instr.opcode `is` [AND       ]) (formatRItype     AND  ) <>
+    formatCond (instr.opcode `is` [OR        ]) (formatRItype     OR   ) <>
+    formatCond (instr.opcode `is` [XOR       ]) (formatRItype     XOR  ) <>
+    formatCond (instr.opcode `is` [SLL       ]) (formatRItype     SLL  ) <>
+    formatCond (instr.opcode `is` [SRL       ]) (formatRItype     SRL  ) <>
+    formatCond (instr.opcode `is` [SRA       ]) (formatRItype     SRA  ) <>
+    formatCond (instr.opcode `is` [SUB       ]) (formatRtype      SUB  ) <>
+    formatCond (instr.opcode `is` [JAL       ]) (formatJtype      JAL  ) <>
+    formatCond (instr.opcode `is` [JALR      ]) (formatItype      JALR ) <>
+    formatCond (instr.opcode `is` [BEQ       ]) (formatBtype      BEQ  ) <>
+    formatCond (instr.opcode `is` [BNE       ]) (formatBtype      BNE  ) <>
+    formatCond (instr.opcode `is` [BLT       ]) (formatBtype      BLT  ) <>
+    formatCond (instr.opcode `is` [BLTU      ]) (formatBtype      BLTU ) <>
+    formatCond (instr.opcode `is` [BGE       ]) (formatBtype      BGE  ) <>
+    formatCond (instr.opcode `is` [BGEU      ]) (formatBtype      BGEU ) <>
+    formatCond (instr.opcode `is` [LOAD      ]) (formatLtype           ) <>
+    formatCond (instr.opcode `is` [STORE     ]) (formatStype           ) <>
+    formatCond (instr.opcode `is` [CSRRW     ]) (formatCSRRW      CSRRW) <>
+    formatCond (instr.opcode `is` [CSRRS     ]) (formatCSRRS      CSRRS) <>
+    formatCond (instr.opcode `is` [CSRRC     ]) (formatCSRRC      CSRRC) <>
+    formatCond (instr.opcode `is` [FENCE_I   ]) (fshow "fence.i" ) <>
+    formatCond (instr.opcode `is` [SFENCE_VMA]) (fshow "sfence.vma" ) <>
+    formatCond (instr.opcode `is` [FENCE     ]) (fshow "fence" ) <>
+    formatCond (instr.opcode `is` [ECALL     ]) (fshow "ecall" ) <>
+    formatCond (instr.opcode `is` [EBREAK    ]) (fshow "ebreak") <>
+    formatCond (instr.opcode `is` [AMOADD    ]) (formatAMO AMOADD ) <>
+    formatCond (instr.opcode `is` [AMOOR     ]) (formatAMO AMOOR  ) <>
+    formatCond (instr.opcode `is` [AMOSWAP   ]) (formatAMO AMOSWAP) <>
+    formatCond (instr.opcode `is` [AMOAND    ]) (formatAMO AMOAND ) <>
+    formatCond (instr.opcode `is` [AMOXOR    ]) (formatAMO AMOXOR ) <>
+    formatCond (instr.opcode `is` [AMOMIN    ]) (formatAMO AMOMIN ) <>
+    formatCond (instr.opcode `is` [AMOMAX    ]) (formatAMO AMOMAX ) <>
+    formatCond (instr.opcode `is` [AMOMINU   ]) (formatAMO AMOMINU) <>
+    formatCond (instr.opcode `is` [AMOMAXU   ]) (formatAMO AMOMAXU) <>
+    formatCond (instr.opcode `is` [STOREC    ]) (formatAMO STOREC) <>
+    formatCond (instr.opcode `is` [LOADR     ]) (formatLR LOADR)
     where
       imm = toSigned instr.imm.val
       immHex = fshow "0x" <> formatHex 0 instr.imm.val

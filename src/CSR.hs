@@ -105,11 +105,21 @@ import Instr
 
 data Priv =
   Priv (Bit 2)
-  deriving(Bits, Generic, Cmp, FShow)
+  deriving(Bits, Generic, Cmp)
+
 
 user_priv = Priv 0
 supervisor_priv = Priv 1
 machine_priv = Priv 3
+
+instance FShow Priv where
+  fshow priv = formatUser <> formatMachine <> formatSupervisor <> formatUnknown
+    where
+      formatUser = formatCond (priv === user_priv) (fshow "U")
+      formatSupervisor = formatCond (priv === supervisor_priv) (fshow "S")
+      formatMachine = formatCond (priv === machine_priv) (fshow "M")
+      formatUnknown = formatCond (priv === Priv 2) (fshow "Unknown")
+
 
 minPrivCSR :: Bit 12 -> Priv
 minPrivCSR id = Priv (slice @9 @8 id)
@@ -467,7 +477,22 @@ data Satp =
     { useSv32 :: Bit 1
     , asid :: Bit 9
     , ppn :: Bit 22 }
-  deriving(Bits, Generic, Interface, FShow)
+  deriving(Bits, Generic, Interface)
+
+instance FShow Satp where
+  fshow satp =
+    fshowMode
+    <> formatCond satp.useSv32
+      ( fshow "{"
+        <> fshow "asid: "
+        <> fshow satp.asid
+        <> fshow ", addr: 0x"
+        <> formatHex 0 (satp.ppn # (0 :: Bit 12))
+        <> fshow "}" )
+    where
+      fshowMode =
+        formatCond satp.useSv32 (fshow "Sv32") <>
+        formatCond (inv satp.useSv32) (fshow "Bare")
 
 makeSatpCSRs :: Module ([CSR], Reg Satp)
 makeSatpCSRs = do

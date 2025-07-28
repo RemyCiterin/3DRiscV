@@ -16,3 +16,4 @@ for line in sys.stdin:
 
     if len(s) > 0:
         file.write(s[-1])
+        file.flush()

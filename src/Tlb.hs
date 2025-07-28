@@ -20,7 +20,10 @@ data VirtAddr =
     { vpn1 :: Bit 10
     , vpn0 :: Bit 10
     , offset :: Bit 12 }
-  deriving(Generic, Bits, FShow)
+  deriving(Generic, Bits)
+
+instance FShow VirtAddr where
+  fshow addr = formatHex 0 (pack addr)
 
 -- Nodes:
 --    - A supervisor software can access to a user PTE if SUM is set
@@ -387,6 +390,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
               let pte = unpack slave.channelD.peek.lane
               action do
                 slave.channelD.consume
+                --display "\tptw at: " (formatHex 0 lsb) "pte: " pte
                 if isLeafPTE pte then do
                   let out =
                         TlbEntry
@@ -401,7 +405,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
                   stop <== true
                 else if inv pte.validPTE .||. index.val === 0 then do
                   -- Address translation failure
-                  --display "Invalid address translation with:\n\t" pte "\n\tat " (formatHex 0 lsb)
+                  --display "\tInvalid address translation with:\n\t" pte "\n\tat " (formatHex 0 lsb) "\n\t" inputs.first
                   --display "\t" slave.channelD.peek
                   abort <== true
                   stop <== true
