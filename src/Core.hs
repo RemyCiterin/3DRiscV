@@ -183,8 +183,7 @@ makeFetch vminfo fetchSource ptwSource redirection = do
 
   outputQ :: Queue FetchOutput <- makeQueue
 
-  responseQ :: Queue PtwResponse <- makeSizedQueueCore 4
-
+  responseQ :: Queue PtwResponse <- makeSizedQueueCore 8
 
   always do
     when (cache.resps.canPeek .&&. responseQ.notFull) do
@@ -738,14 +737,14 @@ makeCore
             --  " to pc= 0x" (formatHex 0 trapPc)
             --  " " cause
           else do
-            --when (hartId == 0) do
-            --  display
-            --    "\t[" hartId "@" cycle.val "] retire pc: "
-            --    (formatHex 8 req.pc) " instr: " (fshow instr)
+            when (hartId == 0) do
+              display
+                "\t[" hartId "@" cycle.val "] retire pc: "
+                (formatHex 8 req.pc) " instr: " (fshow instr)
 
             when (rd =!= 0) do
-              --when (hartId == 0) do
-              --  display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
+              when (hartId == 0) do
+                display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
               registers.write rd resp.rd
 
             if (resp.pc =!= req.prediction .||. resp.flush) then do

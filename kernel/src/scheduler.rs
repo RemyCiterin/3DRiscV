@@ -4,7 +4,7 @@ use crate::object::*;
 use alloc::collections::VecDeque;
 use alloc::vec::*;
 
-use spinning_top::{Spinlock, RwSpinlock};
+use spinning_top::{Spinlock};
 
 use alloc::sync::Arc;
 
@@ -31,6 +31,19 @@ impl Scheduler {
 
         tasks.extend(blocked.iter().cloned());
         blocked.clear();
+    }
+
+    pub fn remove(&self, task: Arc<Task>) {
+        let tasks = &mut self.tasks.lock();
+        let blocked = &mut self.blocked.lock();
+
+        for i in 0..tasks.len() {
+            if tasks[i].id() == task.id() { tasks.remove(i); }
+        }
+
+        for i in 0..blocked.len() {
+            if blocked[i].id() == task.id() { blocked.remove(i); }
+        }
     }
 
     pub fn choose_task(&self) -> Option<Arc<Task>> {

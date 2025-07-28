@@ -45,6 +45,16 @@ pub fn fork() -> bool {
     return name == 0;
 }
 
+pub fn spawn() -> bool {
+    let mut name = 0;
+    let mut code = 6;
+
+    unsafe {asm!("ecall", inout("a0") code, inout("a1") name); }
+    assert!(code == 0);
+
+    return name == 0;
+}
+
 pub fn pipe() -> (Source, Sink) {
     let mut source = 0;
     let mut sink = 0;
@@ -102,6 +112,14 @@ pub extern "C" fn yield_syscall() {
     }
 }
 
+pub fn kill() {
+    let code = 7;
+
+    unsafe {
+        asm!("ecall", in("a0") code);
+    }
+}
+
 /// Main program function
 #[no_mangle]
 unsafe extern "C" fn user_main() -> () {
@@ -129,4 +147,6 @@ unsafe extern "C" fn user_main() -> () {
             });
         }
     }
+
+    kill();
 }

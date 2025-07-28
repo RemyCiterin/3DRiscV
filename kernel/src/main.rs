@@ -79,21 +79,18 @@ extern "C" fn  supervisor_main() {
 
     unsafe { register::sstatus::set_spp(register::sstatus::SPP::User); }
 
-    let ptable = vm::init_ptable();
-    vm::map(
-        ptable,
+    let ptable = vm::PTable::new();
+    ptable.map_global(
         VAddr::from(0x1000_0000),
-        PAddr::from(0x1000_0000),
-        0x1000,
+        &vm::Frame::from(PAddr::from(0x1000_0000)),
+        params::PAGE_SIZE,
         vm::Perms{write: true, read: true, exec: false, user: false},
-        false,
-        false,
     );
 
-    vm::map_ram(ptable);
+    ptable.map_ram();
 
     unsafe {
-        register::satp::set(register::satp::Mode::Sv32, 0, usize::from(ptable));
+        register::satp::write(usize::from(ptable.satp(0)));
         asm!("sfence.vma zero, zero");
     }
 

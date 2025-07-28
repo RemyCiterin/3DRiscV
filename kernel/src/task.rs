@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
 
-use crate::vm;
+use crate::vm::Perms;
 use crate::vm::Frame;
 use crate::vm::PTable;
 
@@ -96,7 +96,7 @@ impl Task {
         // supervisor memory in the user address space
         ptable.map_ram();
 
-        let urw = vm::Perms{read: true, write: true, exec: false, user: true};
+        let urw = Perms{read: true, write: true, exec: false, user: true};
 
         let mapping = vec![
             (VAddr::from(0x3000), ipc_buffer.clone()),
@@ -146,14 +146,41 @@ impl Task {
             if virt == &VAddr::from(0x2000) { continue; }
             if virt == &VAddr::from(0x3000) { continue; }
 
-            let perms = vm::Perms{user: true, read: true, write: true, exec: true};
+            let perms = Perms{user: true, read: true, write: true, exec: true};
             task.map_buffer(virt.clone(), page.as_bytes(), perms);
         }
 
         Some(task)
     }
 
-    pub fn map_buffer(&self, mut virt: VAddr, buf: &[u8], perms: vm::Perms)
+    pub fn spawn(&self) -> Option<Task> {
+        let stack = Arc::new(Frame::alloc()?);
+
+        for (virt, page) in self.mapping.read().iter() {
+            if virt == &VAddr::from(0x2000) {
+                stack.as_bytes_mut().copy_from_slice(page.as_bytes());
+            }
+        }
+
+        let task = Task::new_with_stack(self.id(), stack)?;
+        task.next_capa.store(
+            self.next_capa.load(Ordering::Relaxed),
+            Ordering::Relaxed
+        );
+
+        for (virt, page) in self.mapping.read().iter() {
+            if virt == &VAddr::from(0x2000) { continue; }
+            if virt == &VAddr::from(0x3000) { continue; }
+
+            let perms = Perms{user: true, read: true, write: true, exec: true};
+            task.ptable.lock().map_local(*virt, page, PAGE_SIZE, perms);
+            task.mapping.write().push((*virt, page.clone()));
+        }
+
+        Some(task)
+    }
+
+    pub fn map_buffer(&self, mut virt: VAddr, buf: &[u8], perms: Perms)
         -> usize {
         let mut num_pages = buf.len() / PAGE_SIZE;
         if buf.len() % PAGE_SIZE != 0 { num_pages += 1; }
@@ -189,7 +216,7 @@ impl Task {
         return num_pages * PAGE_SIZE;
     }
 
-    pub fn map_zeros(&self, mut virt: VAddr, size: usize, perms: vm::Perms) {
+    pub fn map_zeros(&self, mut virt: VAddr, size: usize, perms: Perms) {
         assert!(size % PAGE_SIZE == 0);
 
         let mapping =

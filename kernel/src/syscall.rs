@@ -37,8 +37,9 @@ pub fn handle_syscall(scheduler: &Scheduler, task: Arc<Task>) {
     let ctx = &mut task.context.write();
 
     match ctx.registers.a0 {
-        SYS_SPAWN => {
-            if let Some(new) = task.fork() {
+        SYS_FORK | SYS_SPAWN => {
+            let spawn = ctx.registers.a0 == SYS_SPAWN;
+            if let Some(new) = if spawn {task.spawn()} else {task.fork()} {
                 let new: Arc<Task> = Arc::new(new);
                 new.context.write().registers = ctx.registers.clone();
                 new.context.write().registers.pc += 4;
@@ -77,6 +78,9 @@ pub fn handle_syscall(scheduler: &Scheduler, task: Arc<Task>) {
                 ctx.registers.a0 = 1;
             }
         }
+        SYS_KILL => {
+            scheduler.remove(task.clone());
+        }
         SYS_PIPE => {
             let (source, sink) = task.new_pipe();
             ctx.registers.a1 = usize::from(source);
@@ -100,8 +104,8 @@ pub fn handle_syscall(scheduler: &Scheduler, task: Arc<Task>) {
 /// Syscall to yield
 pub const SYS_YIELD: usize = 0;
 
-/// Syscall to spawn a new process
-pub const SYS_SPAWN: usize = 1;
+/// Syscall to fork a new process
+pub const SYS_FORK: usize = 1;
 
 /// Syscall to send a message to a channel
 pub const SYS_SEND: usize = 2;
@@ -115,3 +119,8 @@ pub const SYS_PIPE: usize = 4;
 /// Syscall code to print a character
 pub const SYS_PUTC: usize = 5;
 
+/// Syscall code to fork a process
+pub const SYS_SPAWN: usize = 6;
+
+/// Syscall code to kill a process
+pub const SYS_KILL: usize = 7;

@@ -90,22 +90,22 @@ pub struct Perms {
 // Definition of a Page Table Entry
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Entry(pub usize);
+pub struct Entry(usize);
 
 impl Entry {
-    pub fn new(ppn: Page, flags: Flags) -> Self {
+    fn new(ppn: Page, flags: Flags) -> Self {
         Self(flags.bits() | (usize::from(ppn) << 10))
     }
 
-    pub fn ppn(&self) -> Page {
+    fn ppn(&self) -> Page {
         Page::from(self.0 >> 10)
     }
 
-    pub fn flags(&self) -> Flags {
+    fn flags(&self) -> Flags {
         Flags::from_bits(self.0 & ((1 << 10) - 1)).unwrap()
     }
 
-    pub fn perms(&self) -> Perms {
+    fn perms(&self) -> Perms {
         Perms {
             write: self.flags().contains(Flags::W),
             read: self.flags().contains(Flags::R),
@@ -114,11 +114,11 @@ impl Entry {
         }
     }
 
-    pub fn set_ppn(&mut self, ppn: Page) {
+    fn set_ppn(&mut self, ppn: Page) {
         *self = Self::new(ppn, self.flags())
     }
 
-    pub fn set_perms(&mut self, perms: Perms) {
+    fn set_perms(&mut self, perms: Perms) {
         let mut flags = self.flags();
 
         flags = if perms.write {
@@ -145,28 +145,28 @@ impl Entry {
         *self = Self::new(self.ppn(), flags);
     }
 
-    pub fn valid(&self) -> bool {
+    fn valid(&self) -> bool {
         self.flags().contains(Flags::V)
     }
 
-    pub fn leaf(&self) -> bool {
+    fn leaf(&self) -> bool {
         let p = self.perms();
         p.exec || p.read || p.write
     }
 
-    pub fn clear_valid(&mut self) {
+    fn clear_valid(&mut self) {
         *self = Self::new(self.ppn(), self.flags() & !Flags::V)
     }
 
-    pub fn set_valid(&mut self) {
+    fn set_valid(&mut self) {
         *self = Self::new(self.ppn(), self.flags() | Flags::V)
     }
 
-    pub fn set_global(&mut self) {
+    fn set_global(&mut self) {
         *self = Self::new(self.ppn(), self.flags() | Flags::G);
     }
 
-    pub fn clear_global(&mut self) {
+    fn clear_global(&mut self) {
         *self = Self::new(self.ppn(), self.flags() & !Flags::G);
     }
 }
@@ -178,7 +178,7 @@ impl Default for Entry {
 }
 
 // allocate and inite a page table
-pub fn init_ptable() -> Page {
+fn init_ptable() -> Page {
     let ppn: Page = palloc::alloc().unwrap();
 
     let ptable: &'static mut [Entry] = ppn.as_pte_mut();
@@ -188,7 +188,7 @@ pub fn init_ptable() -> Page {
 
 /// Return the last level page table entry associated with a vitrual address
 /// and allocate if necessary some new intermediate page tables
-pub fn walk_and_alloc(
+fn walk_and_alloc(
     mut ptable: Page,
     va: VAddr,
     megapage: bool
@@ -215,7 +215,7 @@ pub fn walk_and_alloc(
 
 /// Recursively free a page table, if free_leaf_ppn is set
 /// then it also free the pages mapped by the page table
-pub fn free_ptable(ptable: Page, free_leaf_ppn: bool) {
+fn free_ptable(ptable: Page, free_leaf_ppn: bool) {
     let entries: &'static mut[Entry] = ptable.as_pte_mut();
 
     for &entry in entries.iter() {
@@ -231,7 +231,7 @@ pub fn free_ptable(ptable: Page, free_leaf_ppn: bool) {
 
 /// Return the last level page table entry associated with a virtual address
 /// or null if the address is not allocated
-pub fn walk(
+fn walk(
     mut ptable: Page,
     va: VAddr,
 ) -> (&'static mut Entry, usize) {
@@ -249,7 +249,7 @@ pub fn walk(
     }
 }
 
-pub fn map(
+fn map(
     ptable: Page,
     mut virt: VAddr,
     mut phys: PAddr,
@@ -315,7 +315,7 @@ pub fn map(
 /// - we try to unmap a megapage but it is not fully include in the input region
 ///
 /// If free is set then we also free the pages that we unmap
-pub fn unmap(ptable: Page, mut virt: VAddr, size: usize, free: bool) {
+fn unmap(ptable: Page, mut virt: VAddr, size: usize, free: bool) {
     if virt.offset() != 0 {
         panic!("unmap: alignment error: {:?}", virt);
     }
@@ -350,7 +350,7 @@ pub fn unmap(ptable: Page, mut virt: VAddr, size: usize, free: bool) {
 
 /// Map RAM memory as supervisor memory, used by users to ensure `trampoline.s` and
 /// their context are defined by their ptage table
-pub fn map_ram(ptable: Page) {
+fn map_ram(ptable: Page) {
     let perms = Perms{exec: true, read: true, write: true, user: false};
 
     map(
@@ -376,6 +376,13 @@ pub struct Frame{
 impl From<usize> for Frame {
     fn from(x: usize) -> Frame {
         Self { page: Page::from(x), from_palloc: false }
+    }
+}
+
+impl From<PAddr> for Frame {
+    fn from(a: PAddr) -> Frame {
+        assert!(usize::from(a) % PAGE_SIZE == 0);
+        Self{ page: Page::from(usize::from(a) / PAGE_SIZE), from_palloc: false }
     }
 }
 

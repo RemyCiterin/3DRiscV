@@ -107,6 +107,10 @@ decode addr =(key, index, offset)
     startIndex = startOffset + valueOf @ow
     startKey = startIndex + valueOf @iw
 
+-- To have dead-lock free cache coherency, users of a cache must ensure
+-- that they always have enough space for the answer of the request before
+-- sending it, otherwise a probe request may be blocked, resulting
+-- in a cycle of agents waiting for each other.
 makeBCacheCoreWith :: forall w kw iw ow atomic p.
   ( Bits atomic
   , KnownTLParams p
@@ -158,7 +162,12 @@ makeBCacheCoreWith source slave execAtomic = do
   address :: Reg (Bit (AddrWidth p)) <- makeReg dontCare
   cap :: Reg TLPerm <- makeReg dontCare
 
-  setDirty :: Wire (Bit 1) <- makeWire dataRamA.storeActiveBE
+  -- We use a wire in addition to `dataRamA.storeActiveBE` because in case
+  -- of an atomic operation, the write is delayed by at least one cycle
+  dirty_w :: Wire (Bit 1) <- makeWire dataRamA.storeActiveBE
+
+  -- Ensure a `probe` doesn't start at the same time than a `match`
+  matching_w :: Wire (Bit 1) <- makeWire false
 
   let execOp :: Bit w -> Action () = \ way -> do
         reserved <== request.val `isTagged` #LoadR
@@ -168,7 +177,7 @@ makeBCacheCoreWith source slave execAtomic = do
         when (request.val `isTagged` #Atomic) do
           dataQueue.enq (some (untag #Atomic request.val, way # index.val # offset.val))
           dataRamA.loadBE (way # index.val # offset.val)
-          setDirty <== true
+          dirty_w <== true
         when (request.val `isTagged` #Store) do
           let (mask,lane) = untag #Store request.val
           dataRamA.storeBE (way # index.val # offset.val) mask lane
@@ -200,6 +209,9 @@ makeBCacheCoreWith source slave execAtomic = do
   always do
     let canProbe =
           probeM.start.canPeek
+          -- .&&. dataQueue.notFull
+          .&&. inv dataQueue.canDeq
+          .&&. inv matching_w.val
           .&&. (state.read 1 === st_idle .||. state.read 1 === st_acquire)
     when canProbe do
       let (addr, perm) = probeM.start.peek
@@ -232,7 +244,8 @@ makeBCacheCoreWith source slave execAtomic = do
               [key === t.out .&&. p.out .>. nothing --> (constant i, p.out)
                 | (t,p,i) <- zip3 keyRam permRam [0..]]
 
-      --display "match probe 0x" (formatHex 0 address.val) " " perm
+      --when (perm .>. nothing) do
+      --  display "match probe 0x" (formatHex 0 address.val) " " perm
 
       when (perm === nothing) do
         probeM.evict.put (n2n, none)
@@ -280,6 +293,7 @@ makeBCacheCoreWith source slave execAtomic = do
           .&&. acquireM.canAcquire
           .&&. releaseM.start.canPut
       , match= \ msb -> do
+          matching_w <== true
           dynamicAssert (state.read 0 === st_lookup) "matching with an unexpected state"
           key <== msb
 
@@ -298,7 +312,7 @@ makeBCacheCoreWith source slave execAtomic = do
             --  display source " hit " (formatHex 0 (baseAddr msb))
             execOp hitWay
             state.write 0 st_idle
-            when setDirty.val do
+            when dirty_w.val do
               storeListRAM permRam hitWay index.val dirty
           else do
             way <== hitWay
@@ -345,9 +359,6 @@ makeBCacheCoreWith source slave execAtomic = do
             , consume= do
                 let (op,pos) = dataQueue.first.val
                 dataRamA.storeBE pos ones (execAtomic op dataRamA.outBE)
-                --display
-                --  "atomic value: " (formatHex 0 dataRamA.outBE) " op: " op
-                --  " result: " (formatHex 0 $ execAtomic op dataRamA.outBE)
                 dataQueue.deq
             , peek= dataRamA.outBE}}
 
