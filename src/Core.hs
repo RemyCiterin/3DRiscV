@@ -21,7 +21,7 @@ import Uart
 import Spi
 import Alu
 import CSR
-import Tlb
+import MMU
 
 import TileLink
 import TileLink.CoherentBCache
@@ -87,19 +87,19 @@ type TLConfig' = TLParams 32 4 4 8 0
 makeICache ::
   VMInfo
   -> TLSlave TLConfig -- cache slave
-  -> TLSlave TLConfig -- ptw slave
+  -> TLSlave TLConfig -- mmu slave
   -> Bit (SourceWidth TLConfig) -- cache source
-  -> Bit (SourceWidth TLConfig) -- ptw source
-  -> Module (Server (Bit 32) PtwResponse, Action ())
-makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
+  -> Bit (SourceWidth TLConfig) -- mmu source
+  -> Module (Server (Bit 32) MmuResponse, Action ())
+makeICache vminfo cacheSlave mmuSlave cacheSource mmuSource = do
   cache <-
     withName "icache" $
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
-  (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <- withName "ITLB" $
-    makePtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
+  (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "ITLB" $
+    makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
 
-  tagQ :: Queue PtwResponse <- makeQueue
+  tagQ :: Queue MmuResponse <- makeQueue
 
   key :: Reg (Bit 20) <- makeReg dontCare
 
@@ -107,20 +107,20 @@ makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
     when (cache.canMatch) do
       cache.match key.val
 
-    when (cache.canLookup .&&. ptwOut.canPeek .&&. tagQ.notFull) do
-      when (ptwOut.peek.success) do
-        let phys = ptwOut.peek.rd
+    when (cache.canLookup .&&. mmuOut.canPeek .&&. tagQ.notFull) do
+      when (mmuOut.peek.success) do
+        let phys = mmuOut.peek.rd
         cache.lookup (slice @11 @6 phys) (slice @5 @2 phys) (item #Load)
         key <== slice @31 @12 phys
-      tagQ.enq ptwOut.peek
-      ptwOut.consume
+      tagQ.enq mmuOut.peek
+      mmuOut.consume
 
   let reqs =
         Sink
-          { canPut= ptwIn.canPut
+          { canPut= mmuIn.canPut
           , put= \ x -> do
-              ptwIn.put
-                PtwRequest
+              mmuIn.put
+                MmuRequest
                   { virtual= unpack x
                   , satp= vminfo.satp
                   , priv= vminfo.priv
@@ -137,7 +137,7 @@ makeICache vminfo cacheSlave ptwSlave cacheSource ptwSource = do
   let resps=
         Source
           { canPeek= tagQ.canDeq .&&. (inv tagQ.first.success .||. cache.loadResponse.canPeek)
-          , peek= tagQ.first{rd} :: PtwResponse
+          , peek= tagQ.first{rd} :: MmuResponse
           , consume= do
               when tagQ.first.success do
                 cache.loadResponse.consume
@@ -151,7 +151,7 @@ makeFetch ::
   Bit (SourceWidth TLConfig) ->
   Stream Redirection ->
   Module (TLMaster TLConfig, Stream FetchOutput, Training, Training, Action ())
-makeFetch vminfo fetchSource ptwSource redirection = do
+makeFetch vminfo fetchSource mmuSource redirection = do
   bpred :: BranchPredictor HistSize RasSize EpochWidth <-
     withName "bpred" $ makeBranchPredictor 10
 
@@ -163,16 +163,16 @@ makeFetch vminfo fetchSource ptwSource redirection = do
           , rootSource= \ x ->
               select
                 [ x === fetchSource --> 0
-                , x === ptwSource --> 1 ]
+                , x === mmuSource --> 1 ]
           , sizeChannelA= 2
           , sizeChannelB= 2
           , sizeChannelC= 2
           , sizeChannelD= 2
           , sizeChannelE= 2 }
 
-  ([master], [cacheSlave,ptwSlave]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
+  ([master], [cacheSlave,mmuSlave]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
 
-  (cache, flush) <- makeICache vminfo cacheSlave ptwSlave fetchSource ptwSource
+  (cache, flush) <- makeICache vminfo cacheSlave mmuSlave fetchSource mmuSource
 
   pc :: Ehr (Bit 32) <- makeEhr 2 0x80000000
   epoch :: Ehr Epoch <- makeEhr 2 0
@@ -184,7 +184,7 @@ makeFetch vminfo fetchSource ptwSource redirection = do
 
   outputQ :: Queue FetchOutput <- makeQueue
 
-  responseQ :: Queue PtwResponse <- makeSizedQueueCore 8
+  responseQ :: Queue MmuResponse <- makeSizedQueueCore 8
 
   always do
     when (cache.resps.canPeek .&&. responseQ.notFull) do
@@ -258,7 +258,7 @@ makeLoadStoreUnit ::
   Stream ExecInput ->
   Stream (Bit 1) ->
   Module (TLMaster TLConfig, Stream ExecOutput, Action ())
-makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
+makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
   let xbarconfig =
         XBarConfig
           { bce= True
@@ -268,14 +268,14 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
               select
                 [ x === cacheSource --> 0
                 , x === mmioSource --> 1
-                , x === ptwSource --> 2 ]
+                , x === mmuSource --> 2 ]
           , sizeChannelA= 2
           , sizeChannelB= 2
           , sizeChannelC= 2
           , sizeChannelD= 2
           , sizeChannelE= 2 }
 
-  ([master], [cacheSlave,mmioSlave,ptwSlave,_]) <- makeTLXBar @1 @4 @TLConfig xbarconfig
+  ([master], [cacheSlave,mmioSlave,mmuSlave,_]) <- makeTLXBar @1 @4 @TLConfig xbarconfig
 
   outputQ :: Queue ExecOutput <- makeQueue
 
@@ -283,9 +283,9 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
     withName "dcache" $
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
-  (Server{reqs= ptwIn, resps= ptwOut}, tlbFlush) <- withName "DTLB" $
-    makePtwFSM (\_ -> true) (\ _ -> true) isCached isCached ptwSource ptwSlave
-  let phys :: Bit 32 = ptwOut.peek.rd
+  (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "DTLB" $
+    makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
+  let phys :: Bit 32 = mmuOut.peek.rd
 
   always do
     when (cache.canMatch) do
@@ -355,19 +355,19 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
 
   let out =
         ExecOutput
-          { exception= inv ptwOut.peek.success
-          , cause= ptwOut.peek.cause
+          { exception= inv mmuOut.peek.success
+          , cause= mmuOut.peek.cause
           , pc= req.pc + 4
           , flush= false
           , rd= dontCare
           , tval= virt }
 
-  let ptw :: Action () = do
+  let mmu :: Action () = do
         let width =
               (opcode `is` [STOREC,LOADR] .||. instr.isAMO) ?
                 (0b10, instr.accessWidth)
-        ptwIn.put
-          PtwRequest
+        mmuIn.put
+          MmuRequest
             { atomic= instr.isAMO .||. opcode `is` [STOREC,LOADR]
             , store= opcode `is` [STORE]
             , virtual= unpack virt
@@ -379,19 +379,19 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
             , width }
 
   let translate :: Stmt () = do
-        wait ptwIn.canPut
-        action ptw
-        wait ptwOut.canPeek
+        wait mmuIn.canPut
+        action mmu
+        wait mmuOut.canPeek
 
   always do
     -- *** STORE ***
     when (input.canPeek .&&. opcode `is` [STORE]) do
 
-      when (state.val === 0 .&&. ptwIn.canPut .&&. commit.canPeek) do
+      when (state.val === 0 .&&. mmuIn.canPut .&&. commit.canPeek) do
         state <== 1
-        ptw
+        mmu
 
-      when ptwOut.canPeek do
+      when mmuOut.canPeek do
         when (state.val === 1 .&&. outputQ.notFull) do
           outputQ.enq out
           state <== 2
@@ -399,21 +399,21 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
         when (state.val === 2 .&&. commit.canPeek .&&. canStore) do
           commit.consume
 
-          if (commit.peek .&&. ptwOut.peek.success) then do
+          if (commit.peek .&&. mmuOut.peek.success) then do
             when (phys === 0x10000000) $ displayAscii (slice @7 @0 beat)
 
             --when (addr === 0x10000000 .&&. slice @7 @0 beat === 0) finish
-            when (isCached phys) ptwOut.consume
+            when (isCached phys) mmuOut.consume
             when (isCached phys) input.consume
             state <== isCached phys ? (0, 3)
             sendStore
           else do
-            ptwOut.consume
+            mmuOut.consume
             input.consume
             state <== 0
 
         when (state.val === 3 .&&. canReceiveStore) do
-          ptwOut.consume
+          mmuOut.consume
           input.consume
           consumeStore
           state <== 0
@@ -422,13 +422,13 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
     when (input.canPeek .&&. opcode `is` [LOAD,LOADR]) do
       let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
 
-      when (state.val === 0 .&&. ptwIn.canPut) do
+      when (state.val === 0 .&&. mmuIn.canPut) do
         state <== 1
-        ptw
+        mmu
 
-      when ptwOut.canPeek do
+      when mmuOut.canPeek do
         when (state.val === 1 .&&. canLoad .&&. commit.canPeek) do
-          if ptwOut.peek.success .&&. commit.peek then do
+          if mmuOut.peek.success .&&. commit.peek then do
             -- perform uncached operation when speculation is resolved
             sendLoad op
             state <== 2
@@ -456,7 +456,7 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
 
         when (state.val === 3 .&&. commit.canPeek) do
           commit.consume
-          ptwOut.consume
+          mmuOut.consume
           input.consume
           state <== 0
 
@@ -474,13 +474,13 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
     -- *** AMO / STORE CONDITIONAL ***
     let amoOrSc = instr.isAMO .||. opcode `is` [STOREC]
     when (input.canPeek .&&. amoOrSc) do
-      when (state.val === 0 .&&. ptwIn.canPut) do
+      when (state.val === 0 .&&. mmuIn.canPut) do
         state <== 1
-        ptw
+        mmu
 
-      when ptwOut.canPeek do
+      when mmuOut.canPeek do
         when (state.val === 1 .&&. outputQ.notFull) do
-          if ptwOut.peek.success then do
+          if mmuOut.peek.success then do
             state <== 2
           else do
             state <== 3
@@ -489,7 +489,7 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
         when (state.val === 3 .&&. commit.canPeek) do
           -- abort an unaligned atomic operation
           commit.consume
-          ptwOut.consume
+          mmuOut.consume
           input.consume
           state <== 0
 
@@ -497,7 +497,7 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
           -- abort atomic operation because of a misspeculation
           outputQ.enq out
           commit.consume
-          ptwOut.consume
+          mmuOut.consume
           input.consume
           state <== 0
 
@@ -514,14 +514,14 @@ makeLoadStoreUnit vminfo cacheSource mmioSource ptwSource input commit = do
         when (state.val === 4 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
           outputQ.enq (out{rd= zeroExtend $ inv cache.scResponse.peek} :: ExecOutput)
           cache.scResponse.consume
-          ptwOut.consume
+          mmuOut.consume
           input.consume
           state <== 0
 
         when (state.val === 4 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
           outputQ.enq (out{rd= cache.atomicResponse.peek} :: ExecOutput)
           cache.atomicResponse.consume
-          ptwOut.consume
+          mmuOut.consume
           input.consume
           state <== 0
 
@@ -590,9 +590,9 @@ makeCore
   CoreConfig{hartId,fetchSource,dataSource,mmioSource,itlbSource,dtlbSource}
   systemInputs = mdo
   doCommit :: Ehr (Bit 1) <- makeEhr 2 false
-  lsuCommitQ :: Queue (Bit 1) <- withName "lsu" makeQueue
+  lsuCommitQ :: Queue (Bit 1) <- withName "lsu_commit" makeQueue
   aluQ :: Queue ExecInput <- withName "alu" makeQueue
-  lsuQ :: Queue ExecInput <- withName "lsu" makeQueue
+  lsuQ :: Queue ExecInput <- withName "lsu_inputs" makeQueue
   systemQ :: Queue ExecInput <- withName "system" makeQueue
   systemBuf :: Reg ExecOutput <- withName "system" $ makeReg dontCare
 
@@ -880,8 +880,8 @@ makeTestCore rx = mdo
 
   ([master0,master1], [slave0,slave1,slave2,slave3]) <-
     withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
-  --uncoherentSlave <- withName "memory" $ makeTLRAM @28 @TLConfig' config
-  uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
+  uncoherentSlave <- withName "memory" $ makeTLRAM @28 @TLConfig' config
+  --uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
 
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0

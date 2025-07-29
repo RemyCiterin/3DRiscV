@@ -30,7 +30,7 @@ executable blarney-test
     DDR3,
     Plic,
     Oled,
-    Tlb,
+    MMU,
     AXI4,
     Alu,
     CSR,

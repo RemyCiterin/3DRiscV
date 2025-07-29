@@ -1,4 +1,4 @@
-module Tlb where
+module MMU where
 
 import Instr
 import Blarney
@@ -79,8 +79,8 @@ isLeafPTE :: PTE -> Bit 1
 isLeafPTE pte =
   pte.validPTE .&&. (pte.readPTE .||. pte.writePTE .||. pte.executePTE)
 
-data PtwRequest =
-  PtwRequest
+data MmuRequest =
+  MmuRequest
     { priv :: Priv
     , virtual :: VirtAddr
     , satp :: Satp
@@ -92,7 +92,7 @@ data PtwRequest =
     , width :: Bit 2 }
   deriving(Generic, Bits, FShow)
 
-isLegalAccess :: PtwRequest -> PTE -> Bit 1
+isLegalAccess :: MmuRequest -> PTE -> Bit 1
 isLegalAccess req pte =
   privLegal .&&. valid .&&. accessLegal
   where
@@ -110,7 +110,7 @@ isLegalAccess req pte =
 
 -- return an updated PTE after executing a request
 -- and a bit to say if a write-back is needed
-updatePTE :: PtwRequest -> PTE -> (PTE, Bit 1)
+updatePTE :: MmuRequest -> PTE -> (PTE, Bit 1)
 updatePTE req pte =
   ( pte{accessedPTE= true, dirtyPTE= pte.dirtyPTE .||. dirty}
   , inv pte.accessedPTE .||. (inv pte.dirtyPTE .&&. dirty))
@@ -121,8 +121,8 @@ updatePTE req pte =
 --  - return the execption
 -- Otherwise:
 --  - rd constains the translated address
-data PtwResponse =
-  PtwResponse
+data MmuResponse =
+  MmuResponse
     { success :: Bit 1
     , cause :: CauseException
     , tval :: Bit 32
@@ -146,7 +146,7 @@ tlbMatch virt entry = entry.index === 0 ? (match0 .&&. match1, match1)
 
 type TlbLogSize = 3
 
-makeDummyPtwFSM :: forall p.
+makeDummyMmuFSM :: forall p.
   ( KnownTLParams p
   , 32 ~ AddrWidth p
   , 4 ~ LaneWidth p )
@@ -156,9 +156,9 @@ makeDummyPtwFSM :: forall p.
     -> (Bit 32 -> Bit 1) -- is an instruction access at this address possible
     -> Bit (SourceWidth p)
     -> TLSlave p
-    -> Module (Server PtwRequest PtwResponse, Action ())
-makeDummyPtwFSM canRead canWrite canAtomic canExec source slave = do
-  queue :: Queue PtwRequest <- makePipelineQueue 1
+    -> Module (Server MmuRequest MmuResponse, Action ())
+makeDummyMmuFSM canRead canWrite canAtomic canExec source slave = do
+  queue :: Queue MmuRequest <- makePipelineQueue 1
   let virt :: VirtAddr = queue.first.virtual
   let addr :: Bit 32 = pack virt
 
@@ -191,14 +191,14 @@ makeDummyPtwFSM canRead canWrite canAtomic canExec source slave = do
   let tval = pack virt
 
   let af_output =
-        PtwResponse
+        MmuResponse
           { cause= af_cause
           , success= isValid
           , tval= addr
           , rd= addr }
 
   let align_output =
-        PtwResponse
+        MmuResponse
           { cause= align_cause
           , success= aligned
           , tval = addr
@@ -213,7 +213,7 @@ makeDummyPtwFSM canRead canWrite canAtomic canExec source slave = do
 
   return (Server{reqs,resps}, pure ())
 
-makePtwFSM :: forall p.
+makeMmuFSM :: forall p.
   ( KnownTLParams p
   , 32 ~ AddrWidth p
   , 4 ~ LaneWidth p )
@@ -223,11 +223,11 @@ makePtwFSM :: forall p.
     -> (Bit 32 -> Bit 1) -- is an instruction access at this address possible
     -> Bit (SourceWidth p)
     -> TLSlave p
-    -> Module (Server PtwRequest PtwResponse, Action ())
-makePtwFSM canRead canWrite canAtomic canExec source slave = do
-  outputs :: Queue PtwResponse <- makeBypassQueue
+    -> Module (Server MmuRequest MmuResponse, Action ())
+makeMmuFSM canRead canWrite canAtomic canExec source slave = do
+  outputs :: Queue MmuResponse <- makeBypassQueue
 
-  inputs :: Queue PtwRequest <- makePipelineQueue 1
+  inputs :: Queue MmuRequest <- makePipelineQueue 1
   let virt = inputs.first.virtual
   let satp = inputs.first.satp
   let priv = inputs.first.priv
@@ -278,21 +278,21 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
   let tval = pack virt
 
   let pf_output =
-        PtwResponse
+        MmuResponse
           { cause= pf_cause
           , success= true
           , rd= pack virt
           , tval }
 
   let af_output =
-        PtwResponse
+        MmuResponse
           { cause= af_cause
           , success= true
           , rd= pack virt
           , tval }
 
   let align_output =
-        PtwResponse
+        MmuResponse
           { cause= align_cause
           , success= true
           , rd= pack virt
@@ -330,7 +330,7 @@ makePtwFSM canRead canWrite canAtomic canExec source slave = do
   --     do not write in any register during a call to succede,
   --     otherwise we may double write because of a new request
   let succede :: Bit 32 -> Action () = \ rd -> do
-        outputs.enq (pf_output{rd} :: PtwResponse)
+        outputs.enq (pf_output{rd} :: MmuResponse)
         inputs.deq
 
   let get address =
