@@ -623,6 +623,22 @@ makeCore
 
   systemUnit <- withName "system" $ makeSystem hartId tlbFlush systemInputs
 
+  exceptionQ :: Queue (Bit 32, CauseException, Bit 32, Epoch) <- makeQueue
+  interruptQ :: Queue (Bit 32, CauseInterrupt, Epoch) <- makeQueue
+
+  always do
+    when (exceptionQ.canDeq .&&. redirectQ.notFull) do
+      let (pc, cause, tval, ep) = exceptionQ.first
+      trapPc <- systemUnit.exception pc cause tval
+      redirectQ.enq Redirection{pc=trapPc, epoch=ep}
+      exceptionQ.deq
+    when (interruptQ.canDeq) do
+      let (pc, cause, ep) = interruptQ.first
+      trapPc <- systemUnit.interrupt pc cause dontCare
+      redirectQ.enq Redirection{pc=trapPc, epoch=ep}
+      interruptQ.deq
+
+
   epoch :: Ehr Epoch <- makeEhr 2 0
 
   cycle :: Reg (Bit 32) <- makeReg 0
@@ -669,7 +685,9 @@ makeCore
         --    "\t[" hartId "@" cycle.val "] enter pc: 0x"
         --    (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
 
-    when (window.canDeq .&&. redirectQ.notFull .&&. lsuCommitQ.notFull) do
+    let canRedirect = redirectQ.notFull .&&. exceptionQ.notFull .&&. interruptQ.notFull
+
+    when (window.canDeq .&&. canRedirect .&&. lsuCommitQ.notFull) do
       let req :: DecodeOutput = window.first
       let instr :: Instr = req.instr
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
@@ -719,8 +737,7 @@ makeCore
           if exception then do
             let tval = req.exception ? (req.pc, resp.tval)
             let cause = req.exception ? (req.cause, resp.cause)
-            trapPc <- systemUnit.exception req.pc cause tval
-            redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
+            exceptionQ.enq (req.pc, cause, tval, epoch.read 0 + 1)
             epoch.write 0 (epoch.read 0 + 1)
 
             --display
@@ -728,9 +745,7 @@ makeCore
             --  " to pc= 0x" (formatHex 0 trapPc) " " cause " " (formatHex 0 tval)
           else if interrupt then do
             let cause = systemUnit.canInterrupt.val
-            trapPc <- systemUnit.interrupt req.pc cause dontCare
-
-            redirectQ.enq Redirection{pc=trapPc, epoch= epoch.read 0 + 1}
+            interruptQ.enq (req.pc, cause, epoch.read 0 + 1)
             epoch.write 0 (epoch.read 0 + 1)
 
             --display
