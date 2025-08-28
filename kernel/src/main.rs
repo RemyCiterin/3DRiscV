@@ -33,8 +33,6 @@ use core::{
     panic::PanicInfo,
 };
 
-use crate::trap::*;
-
 use riscv::register;
 
 global_asm!(include_str!("init.s"));
@@ -114,7 +112,6 @@ extern "C" fn  supervisor_main() {
 
             syscall::handle_syscall(&scheduler, task.clone());
             task.context.write().registers.pc += 4;
-            //handler::handler(state);
         } else {
             scheduler.canonicalize();
         }

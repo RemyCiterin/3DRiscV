@@ -29,6 +29,7 @@ fn panic(info: &PanicInfo) -> ! {
 /// Main program function
 #[no_mangle]
 unsafe extern "C" fn bootloader_main() -> () {
+    malloc::init();
     println!("Hello world!");
     sdcard::init();
     loop {}

@@ -390,7 +390,6 @@ makeMmuFSM canRead canWrite canAtomic canExec source slave = do
               let pte = unpack slave.channelD.peek.lane
               action do
                 slave.channelD.consume
-                --display "\tptw at: " (formatHex 0 lsb) "pte: " pte
                 if isLeafPTE pte then do
                   let out =
                         TlbEntry
@@ -404,9 +403,6 @@ makeMmuFSM canRead canWrite canAtomic canExec source slave = do
                   match <== out
                   stop <== true
                 else if inv pte.validPTE .||. index.val === 0 then do
-                  -- Address translation failure
-                  --display "\tInvalid address translation with:\n\t" pte "\n\tat " (formatHex 0 lsb) "\n\t" inputs.first
-                  --display "\t" slave.channelD.peek
                   abort <== true
                   stop <== true
                   pf_fail

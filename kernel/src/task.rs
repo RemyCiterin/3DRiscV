@@ -1,4 +1,4 @@
-use crate::pointer::{Page, PAddr, VAddr};
+use crate::pointer::VAddr;
 use crate::object::*;
 use crate::params::*;
 

@@ -56,6 +56,80 @@ pub fn send_cmd(cmd: u8, arg: u32, crc: u8) -> Option<u8> {
     return None;
 }
 
+pub fn send_cmd0() {
+    let x = send_cmd(0, 0, 0x95).unwrap();
+    println!("receive at command 0 {:x}", x);
+}
+
+pub fn send_cmd8() {
+    let x = send_cmd(8, 0x01AA, 0x87).unwrap();
+    print!("receive at command 8: {:x}", x);
+
+    loop {
+        let x = send(0xff);
+        if x != 0xff {
+            print!("{:x}", x);
+        } else {
+            println!("");
+            break;
+        }
+    }
+}
+
+pub fn send_cmd41() {
+    let mut x = 0xff;
+
+    while x != 0 {
+        println!("receive at command 55: {:x}", send_cmd(55, 0, 0).unwrap());
+        x = send_cmd(41, 0x40000000, 0).unwrap();
+        println!("receive at command 41: {:x}", x);
+    }
+
+}
+
+pub fn send_cmd58() {
+    let x = send_cmd(58, 0, 0).unwrap();
+    print!("receive at command 58: {:x}", x);
+
+    for _ in 0..8 {
+        let x = send(0xff);
+        print!("{:x}", x);
+    }
+
+    println!("");
+}
+
+pub fn send_cmd16() {
+    let x = send_cmd(16, 512, 0).unwrap();
+    println!("receive at command 16: {:x}", x);
+}
+
+pub fn read_block(block: u32) -> alloc::vec::Vec<u8> {
+    let mut ret = alloc::vec::Vec::new();
+
+    let mut x = send_cmd(17, block, 0).unwrap();
+    println!("receive at command 17: {:x}", x);
+
+    x = 0xff;
+
+    while x != 0xff {
+        x = send(0xff);
+    }
+
+    println!("block status: {:x}", x);
+
+    for _ in 0..512 {
+        ret.push(send(0xff));
+    }
+
+    let mut crc: u16 = (send(0xff) as u16) << 8;
+    crc |= send(0xff) as u16;
+
+    println!("crc: {:x}", crc);
+
+    return ret;
+}
+
 pub fn init() {
     println!("start to initialize SD card driver");
 
@@ -74,29 +148,17 @@ pub fn init() {
         send(0xff);
     }
 
-    println!("ready to send command 0");
+    send_cmd0();
+    send_cmd8();
+    send_cmd41();
 
-    let x = send_cmd(0, 0, 0x95).unwrap();
-    println!("receive: {:x}", x);
+    set_div(0);
 
-    let x = send_cmd(8, 0x01AA, 0x87).unwrap();
-    print!("receive: {:x}", x);
+    send_cmd58();
+    send_cmd16();
 
-    loop {
-        let x = send(0xff);
-        if x != 0xff {
-            print!("{:x}", x);
-        } else {
-            println!("");
-            break;
-        }
-    }
-
-    let mut x = 0xff;
-
-    while x != 0 {
-        println!("cmd 55: {:x}", send_cmd(55, 0, 0).unwrap());
-        x = send_cmd(41, 0x40000000, 0).unwrap();
-        println!("cmd 41: {:x}", x);
+    let out = read_block(0);
+    for x in out {
+        println!("{:x}", x);
     }
 }
