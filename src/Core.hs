@@ -632,11 +632,22 @@ makeCore
       trapPc <- systemUnit.exception pc cause tval
       redirectQ.enq Redirection{pc=trapPc, epoch=ep}
       exceptionQ.deq
+
+      --display
+      --  "\texception at pc= 0x" (formatHex 0 pc)
+      --  " to pc= 0x" (formatHex 0 trapPc)
+      --  " " cause
+
     when (interruptQ.canDeq) do
       let (pc, cause, ep) = interruptQ.first
       trapPc <- systemUnit.interrupt pc cause dontCare
       redirectQ.enq Redirection{pc=trapPc, epoch=ep}
       interruptQ.deq
+
+      --display
+      --  "\tinterrupt at pc= 0x" (formatHex 0 pc)
+      --  " to pc= 0x" (formatHex 0 trapPc)
+      --  " " cause
 
 
   epoch :: Ehr Epoch <- makeEhr 2 0
@@ -740,20 +751,13 @@ makeCore
             exceptionQ.enq (req.pc, cause, tval, epoch.read 0 + 1)
             epoch.write 0 (epoch.read 0 + 1)
 
-            --display
-            --  "\texception at pc= 0x" (formatHex 0 req.pc)
-            --  " to pc= 0x" (formatHex 0 trapPc) " " cause " " (formatHex 0 tval)
           else if interrupt then do
             let cause = systemUnit.canInterrupt.val
             interruptQ.enq (req.pc, cause, epoch.read 0 + 1)
             epoch.write 0 (epoch.read 0 + 1)
 
-            --display
-            --  "\tinterrupt at pc= 0x" (formatHex 0 req.pc)
-            --  " to pc= 0x" (formatHex 0 trapPc)
-            --  " " cause
           else do
-            --when (hartId == 0) do
+            --when (systemUnit.vmInfo.priv === user_priv) do
             --  display
             --    "\t[" hartId "@" cycle.val "] retire pc: "
             --    (formatHex 8 req.pc) " instr: " (fshow instr)
@@ -890,7 +894,7 @@ makeTestCore rx = mdo
   --withName "xbar" $ makeConnection dmaster1 slave3
   withName "xbar" $ makeConnection uncoherentMaster uncoherentSlave
 
-  (clintMmio, clint) <- withName "clint" $ makeClint @TLConfig 2 0x30000000
+  (clintMmio, clint) <- withName "clint" $ makeClint @TLConfig 2 0x2000000
   clintSlave <- makeTLMmio @TLConfig 1 (clintMmio ++ uartMmio ++ spiMmio)
   withName "clint" $ makeConnection master1 clintSlave
 

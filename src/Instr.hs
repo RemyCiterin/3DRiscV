@@ -281,7 +281,9 @@ instance FShow Instr where
     formatCond (instr.opcode `is` [AMOMINU   ]) (formatAMO AMOMINU) <>
     formatCond (instr.opcode `is` [AMOMAXU   ]) (formatAMO AMOMAXU) <>
     formatCond (instr.opcode `is` [STOREC    ]) (formatAMO STOREC) <>
-    formatCond (instr.opcode `is` [LOADR     ]) (formatLR LOADR)
+    formatCond (instr.opcode `is` [LOADR     ]) (formatLR LOADR) <>
+    formatCond (instr.opcode `is` [MRET      ]) (fshow "mret") <>
+    formatCond (instr.opcode `is` [SRET      ]) (fshow "sret")
     where
       imm = toSigned instr.imm.val
       immHex = fshow "0x" <> formatHex 0 instr.imm.val

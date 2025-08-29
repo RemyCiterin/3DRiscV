@@ -48,6 +48,7 @@ makePlic numHart entries base =
     enabled :: [[Reg (Bit 1)]] <-
       replicateM numHart $ replicateM (length entries) $ makeReg false
 
+    -- Return the interrupt of highest priority
     let highestPendingPriority :: Int -> Bit width = \ hart ->
           let go = \ (pending1, prio1) (pending2, prio2) ->
                 select
@@ -68,10 +69,24 @@ makePlic numHart entries base =
     let complete :: Int -> Bit width -> Action () = \hart id -> do
           (claimed!hart)!id <== false
 
-    return []
+    let claimCompleteMMIO :: [Mmio p] =
+          [ Mmio
+              { address= base +  0x200004 + 0x1000 * lit (toInteger hart)
+              , read= \ mask ->
+                  if mask === (0xF :: Bit 4) then do
+                    let id = highestPendingPriority hart
+                    claim hart id
+                    return (zeroExtendCast id)
+                  else do
+                    return 0
+              , write= \ lane mask -> do
+                  when (mask === 0xF) do
+                    complete hart (truncateCast lane)
+
+              }
+          | hart <- [0..numHart]]
 
 
-
-
-
-
+    return
+      ( claimCompleteMMIO
+      )

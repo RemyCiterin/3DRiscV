@@ -26,6 +26,10 @@ test:
 	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -S > zig/kernel.asm
 	riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
 
+test_xv6:
+	riscv32-none-elf-objcopy --strip-debug -O ihex xv6-rv32/kernel/kernel Mem.ihex
+	./ihex-to-img.py Mem.ihex hex 2147483648 4 5000000 1 > Mem.hex
+
 test_rust:
 	riscv32-none-elf-objcopy --strip-debug -O binary \
 		user/target/riscv32ima-unknown-none-elf/release/user \

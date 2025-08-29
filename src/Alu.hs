@@ -16,7 +16,7 @@ import CSR
 -- is not managedby the ALU (used for multiplier/divider)
 alu :: ExecInput -> ExecOutput
 alu query =
-  ExecOutput {rd, exception, cause, pc= newPc, tval= newPc, flush= false}
+  ExecOutput {rd, exception, cause, pc= newPc, tval, flush= false}
   where
     rs1 = query.rs1
     rs2 = query.rs2
@@ -27,6 +27,8 @@ alu query =
     pc = query.pc
 
     cause = opcode === 0 ? (illegal_instruction, instruction_address_misaligned)
+
+    tval = opcode === 0 ? (query.instr.raw, newPc)
 
     exception = opcode === 0 .||. slice @1 @0 newPc =!= 0
 
