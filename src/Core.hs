@@ -757,7 +757,7 @@ makeCore
             epoch.write 0 (epoch.read 0 + 1)
 
           else do
-            --when (systemUnit.vmInfo.priv === user_priv) do
+            --when (hartId == 0) do
             --  display
             --    "\t[" hartId "@" cycle.val "] retire pc: "
             --    (formatHex 8 req.pc) " instr: " (fshow instr)

@@ -125,8 +125,8 @@ makeSystem hartId tlbFlush inputs = do
           trap.stval <== tval
           trap.sepc <== epc
         else do
+          status.mpie <== priv.val === machine_priv ? (status.mie.val, status.sie.val)
           trap.mcause <== cause_msb .|. zeroExtend cause
-          status.mpie <== status.mie.val
           status.mpp <== pack priv.val
           status.mie <== false
           trap.mtval <== tval

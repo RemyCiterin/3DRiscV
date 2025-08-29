@@ -45,10 +45,6 @@ makeClint numHart base = do
   let mtimeMmio = readOnlyMmio (base + 0xbff8) (lower mtime.val)
   let mtimehMmio = readOnlyMmio (base + 0xbffc) (upper mtime.val)
 
-  always do
-    when ((mtimecmp!!0).val =!= (buffer (mtimecmp!!0).val)) do
-      display "update clint"
-
   let mmioList =
         [ msipMmio
         , mtimeMmio

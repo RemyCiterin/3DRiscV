@@ -155,7 +155,6 @@ makeCSRUnit csrs = do
         Nothing -> return ()
         Just write -> do
           when (wrId.active .&&. wrId.val === csr.csrId) do
-            --display "csr 0x" (formatHex 0 csr.csrId) " <= 0x" (formatHex 0 wrVal.val)
             flush <== csr.csrFlush
             write wrVal.val
 
