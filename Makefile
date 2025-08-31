@@ -83,14 +83,14 @@ ulx3s: yosys_ulx3s nextpnr_ulx3s ecppack prog_ulx3s
 
 verilator: compile
 	make -C simulation all
-	stdbuf -o0 ./sim
+	stdbuf -o0 -i0 ./sim
 
 simulate:
 	iverilog -s top_sim src/SimTop.v simulation/mt48lc16m16a2.v simulation/BlockRAMDual.v Verilog/*.v -o Verilog/SimTop.vvp
 	vvp Verilog/SimTop.vvp
 
 run:
-	stdbuf -o0 ./sim
+	stdbuf -o0 -i0 ./sim
 
 run_verbose:
 	./sim_verbose

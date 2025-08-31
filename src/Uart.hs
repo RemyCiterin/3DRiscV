@@ -103,7 +103,7 @@ data TestUartIfc = TestUartIfc {
   , led :: Bit 8
   } deriving(Generic,Interface)
 
-testUart :: Bit 1 -> Module TestUartIfc
+testUart :: Bit 1 -> Module (Bit 1, Bit 8)
 testUart rx = mdo
   rxuart <- makeRxUart 217 rx
   tx <- makeTxUart 217 rxuart
@@ -111,10 +111,11 @@ testUart rx = mdo
   led :: Reg (Bit 8) <- makeReg 0
 
   always do
-    when (rxuart.canPeek) do
+    when (rxuart.canPeek .&&. inv (buffer rxuart.canPeek)) do
       led <== rxuart.peek
+      display "receive " (formatHex 0 rxuart.peek)
 
-  return TestUartIfc {tx, led = led.val}
+  return (tx, led.val)
 
 testUart2 :: Module ()
 testUart2 = do

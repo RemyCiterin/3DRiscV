@@ -35,6 +35,7 @@ main = do
         writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
         writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"
+        --writeVerilogModule Uart.testUart "TestCore" "Verilog/"
         --writeVerilogModule testBCacheCore "TestCore" "Verilog/"
         --writeVerilogModule makeTestGetPut "TestCore" "Verilog/"
         writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"

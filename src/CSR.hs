@@ -352,9 +352,12 @@ makeInterruptPendingCSRs = do
   meip :: Reg (Bit 1) <- makeReg false
   mtip :: Reg (Bit 1) <- makeReg false
   msip :: Reg (Bit 1) <- makeReg false
-  seip :: Reg (Bit 1) <- makeReg false
-  stip :: Reg (Bit 1) <- makeReg false
-  ssip :: Reg (Bit 1) <- makeReg false
+  --seip :: Reg (Bit 1) <- makeReg false
+  --stip :: Reg (Bit 1) <- makeReg false
+  --ssip :: Reg (Bit 1) <- makeReg false
+  let seip = meip
+  let stip = mtip
+  let ssip = msip
 
   let mip :: Reg (Bit 32) =
         readOnlyReg @20 0

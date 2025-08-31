@@ -809,7 +809,7 @@ makeSpiMmio baseAddr = do
   return (io.fabric, [spiMmio, divMmio])
 
 
-makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, Bit 8, [Mmio TLConfig])
+makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, Bit 1, Bit 8, [Mmio TLConfig])
 makeUartMmio cycles rx = do
   inputs <- makeRxUart cycles rx
 
@@ -825,7 +825,8 @@ makeUartMmio cycles rx = do
         Mmio
           { address= 0x10000000
           , read= \ mask -> do
-              when (at @0 mask .&&. inputs.canPeek) inputs.consume
+              when (at @0 mask .&&. inputs.canPeek) do
+                inputs.consume
               return $ (0::Bit 8) # canPeek # canPut # inputs.peek
           , write= \ lane mask -> do
               when (at @0 mask .&&. outputQ.notFull) do
@@ -844,11 +845,11 @@ makeUartMmio cycles rx = do
                 sequence_ [ display_ x | x <- reverse $ toBitList (slice @7 @0 lane) ]
                 display "" }
 
-  return (tx, leds.val, [uartMmio, ledsMmio])
+  return (tx, inputs.canPeek, leds.val, [uartMmio, ledsMmio])
 
 makeTestCore :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric)
 makeTestCore rx = mdo
-  (tx, leds, uartMmio) <- makeUartMmio 217 rx
+  (tx, uartInterrupt, leds, uartMmio) <- makeUartMmio 217 rx
   (spi, spiMmio) <- makeSpiMmio 0x10001000
 
   let config =
@@ -902,13 +903,13 @@ makeTestCore rx = mdo
         SystemInputs
           { softwareInterrupt= clint.softwareInterrupt
           , timerInterrupt= clint.timerInterrupt!(0 :: Int)
-          , externalInterrupt= false }
+          , externalInterrupt= uartInterrupt }
 
   let systemInputs1 =
         SystemInputs
           { softwareInterrupt= clint.softwareInterrupt
           , timerInterrupt= clint.timerInterrupt!(1 :: Int)
-          , externalInterrupt= false }
+          , externalInterrupt= uartInterrupt }
 
   let coreconfig0 =
         CoreConfig
