@@ -15,18 +15,18 @@ module mkTopULX3S (
   wire RST;
   assign RST = !RST_N;
 
-  TestCore inst (
-    .out_0(ftdi_rxd),
-    .out_1(led),
-    .out_2_miso_0(sd_miso),
-    .out_2_miso_en(1),
-    .out_2_clk(sd_clk),
-    .out_2_mosi(sd_mosi),
-    .out_2_cs(sd_cs),
-    .in0(ftdi_txd),
-    .clock(CLK),
-    .reset(RST)
-  );
+  //TestCore inst (
+  //  .out_0(ftdi_rxd),
+  //  .out_1(led),
+  //  .out_2_miso_0(sd_miso),
+  //  .out_2_miso_en(1),
+  //  .out_2_clk(sd_clk),
+  //  .out_2_mosi(sd_mosi),
+  //  .out_2_cs(sd_cs),
+  //  .in0(ftdi_txd),
+  //  .clock(CLK),
+  //  .reset(RST)
+  //);
 
   //Uart inst (
   //  .out_tx(ftdi_rxd),
@@ -36,14 +36,14 @@ module mkTopULX3S (
   //  .reset(RST)
   //);
 
-  //TestSpi inst (
-  //  .out_0(ftdi_rxd),
-  //  .out_1_miso_0(sd_miso),
-  //  .out_1_miso_en(1),
-  //  .out_1_clk(sd_clk),
-  //  .out_1_mosi(sd_mosi),
-  //  .out_1_cs(sd_cs),
-  //  .clock(CLK),
-  //  .reset(RST)
-  //);
+  TestSpi inst (
+    .out_0(ftdi_rxd),
+    .out_1_miso_0(sd_miso),
+    .out_1_miso_en(1),
+    .out_1_clk(sd_clk),
+    .out_1_mosi(sd_mosi),
+    .out_1_cs(sd_cs),
+    .clock(CLK),
+    .reset(RST)
+  );
 endmodule

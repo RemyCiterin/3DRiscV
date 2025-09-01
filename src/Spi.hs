@@ -170,7 +170,8 @@ makeTestSpi = do
         enable
         sendCmd 8 0x01AA 0x87
         displayResult
-        action do counter <== 8
+        displayReturn
+        action do counter <== 4
         while (counter.val =!= 0) do
           action do counter <== counter.val - 1
           send 0xFF
@@ -192,7 +193,8 @@ makeTestSpi = do
         enable
         sendCmd 58 0 0
         displayResult
-        action do counter <== 8
+        displayReturn
+        action do counter <== 4
         while (counter.val =!= 0) do
           action do counter <== counter.val - 1
           send 0xFF

@@ -112,7 +112,7 @@ pub fn read_block(block: u32) -> alloc::vec::Vec<u8> {
 
     x = 0xff;
 
-    while x != 0xff {
+    while x == 0xff {
         x = send(0xff);
     }
 
