@@ -24,6 +24,8 @@ import qualified DDR3
 import qualified Oled
 import TileLink.CoherentBCache
 
+import Soc
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -34,10 +36,9 @@ main = do
      | otherwise -> do
         writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
-        writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"
-        --writeVerilogModule Uart.testUart "TestCore" "Verilog/"
-        --writeVerilogModule testBCacheCore "TestCore" "Verilog/"
-        --writeVerilogModule makeTestGetPut "TestCore" "Verilog/"
+        --writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"
+        writeVerilogModule Soc.makeUlx3s "SocUlx3s" "Verilog/"
+        writeVerilogModule Soc.makeUlx3s "TestCore" "Verilog/"
         writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"
         writeVerilogModule DDR3.makeWrapperDDR3 "TestDDR3" "Verilog/"
         writeVerilogModule Sdram.makeTestSdram "TestSdram" "Verilog/"

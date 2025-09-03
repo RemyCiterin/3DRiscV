@@ -64,6 +64,7 @@ qemu_rust:
 
 yosys_ulx3s:
 	sed -i '/$$finish/d' Verilog/TestCore.v
+	sed -i '/$$finish/d' Verilog/SocUlx3s.v
 	yosys \
 		-DULX3S -q -p "synth_ecp5 -abc9 -abc2 -top mkTopULX3S -json ./build/mkTop.json" \
 		$(LIB)

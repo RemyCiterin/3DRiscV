@@ -2,8 +2,6 @@ use core::fmt::{self, Write};
 use core::ptr::write_volatile;
 use core::ptr::read_volatile;
 
-use core::arch::asm;
-
 struct Writer;
 
 pub const UART_BASE: usize = 0x1000_0000;

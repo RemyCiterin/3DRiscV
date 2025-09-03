@@ -42,7 +42,8 @@ executable blarney-test
     Core,
     Prediction,
     System,
-    Spi
+    Spi,
+    Soc
   hs-source-dirs: src
   build-depends:
       base

@@ -342,7 +342,7 @@ makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
         else do
           mmioSlave.channelD.consume
 
-  let sendStore =
+  let sendStore = do
         if isCached phys then do
           lookup (tag #Store (mask,beat))
         else do
@@ -793,15 +793,15 @@ makeSpiMmio baseAddr = do
           { address= baseAddr
           , read= \ mask -> do
               when (at @0 mask .&&. inputs.canPeek) do
-                display "consume spi mmio"
+                --display "consume spi mmio"
                 inputs.consume
               return $ (0 :: Bit 8) # canPeek # canPut # inputs.peek
           , write= \ lane mask -> do
               when (at @0 mask .&&. outputs.notFull) do
-                display "send spi: " (formatHex 0 (slice @7 @0 lane))
+                --display "send spi: " (formatHex 0 (slice @7 @0 lane))
                 outputs.enq (slice @7 @0 lane)
               when (at @3 mask) do
-                display "set spi cs: " (at @24 lane)
+                --display "set spi cs: " (at @24 lane)
                 io.setCS (at @24 lane)}
   let divMmio = regToMmio (baseAddr + 4) div
 

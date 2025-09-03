@@ -145,7 +145,7 @@ makeMetaSource getSize hasData source laneSize = do
                 sizeReg <== size .<. fromInteger laneSize ? (0, size - fromInteger laneSize)
                 first <== last
             }
-      , offset= size - (1 .<<. getSize msg)
+      , offset= (1 .<<. getSize msg) - size
       , first= first.val
       , size
       , last }
