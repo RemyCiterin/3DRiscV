@@ -19,7 +19,7 @@ pub fn compute_crc16(buf: &[u8]) -> u16 {
     return crc;
 }
 
-const TIMEOUT: usize = 1000;
+const TIMEOUT: usize = 10000;
 const BOOT_TIME: usize = 1000000;
 
 const SIMULATION: bool = false;
@@ -133,9 +133,9 @@ pub fn send_cmd16() {
 }
 
 pub fn read_block(block: u32, slice: &mut [u8]) {
-
     let mut x = send_cmd(17, block, 0);
-    println!("receive at command 17: {:x}", x);
+    //println!("receive at command 17: {:x}", x);
+    assert!(x == 0);
 
     x = 0xff;
 
@@ -146,7 +146,8 @@ pub fn read_block(block: u32, slice: &mut [u8]) {
         iter += 1;
     }
 
-    println!("block status: {:x}", x);
+    //println!("block status: {:x}", x);
+    assert!(x == 0xfe);
 
     for i in 0..512 {
         slice[i] = send(0xff);
@@ -155,7 +156,7 @@ pub fn read_block(block: u32, slice: &mut [u8]) {
     let mut crc: u16 = (send(0xff) as u16) << 8;
     crc |= send(0xff) as u16;
 
-    println!("crc: {:x}", crc);
+    //println!("crc: {:x}", crc);
 
     if crc != compute_crc16(slice) {
         panic!("invalid crc");
@@ -193,7 +194,10 @@ pub fn init() {
 
 
     for block in 0..10000 {unsafe{
-        println!("read block {}", block);
+        if block % 100 == 0 {
+            print!("\rread block {}    ", block);
+        }
+
         let base: u32 = 0x8001_0000 + 512 * block;
 
         let slice: &mut [u8] = core::slice::from_raw_parts_mut(base as *mut u8, 512);
@@ -201,11 +205,13 @@ pub fn init() {
         read_block(block, slice);
     }}
 
-    //let addr: u32 = 0x8001_0000;
-    //unsafe{asm!(
-    //    "fence.i",
-    //    "fence",
-    //    "jalr a0"
-    //    , in("a0") addr
-    //)};
+    println!();
+
+    let addr: u32 = 0x8001_0000;
+    unsafe{asm!(
+        "fence.i",
+        "fence",
+        "jalr a0"
+        , in("a0") addr
+    )};
 }
