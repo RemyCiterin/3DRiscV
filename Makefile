@@ -13,12 +13,15 @@ LIB = \
 DDR3 = \
 			 UberDDR3/rtl/*.v
 
+.PHONY: compile
 compile:
 	cabal run blarney-test -- --enable-name-prop
 
+.PHONY: formal
 formal:
 	cabal run blarney-test -- --formal
 
+.PHONY: test
 test:
 	riscv32-none-elf-objcopy --strip-debug -O ihex zig/zig-out/bin/kernel.elf Mem.ihex
 	riscv32-none-elf-objcopy --strip-debug -O binary zig/zig-out/bin/user.elf zig/src/user.bin
@@ -26,10 +29,12 @@ test:
 	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -S > zig/kernel.asm
 	riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
 
+.PHONY: test_xv6
 test_xv6:
 	riscv32-none-elf-objcopy --strip-debug -O ihex xv6-rv32/kernel/kernel Mem.ihex
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 10000000 1 > Mem.hex
 
+.PHONY: test_rust
 test_rust:
 	riscv32-none-elf-objcopy --strip-debug -O binary \
 		user/target/riscv32ima-unknown-none-elf/release/user \
@@ -42,12 +47,14 @@ test_rust:
 		user/target/riscv32ima-unknown-none-elf/release/user \
 		-S > user/user.asm
 
+.PHONY: test_bootloader
 test_bootloader:
 	riscv32-none-elf-objcopy --strip-debug -O ihex \
 		bootloader/target/riscv32ima-unknown-none-elf/release/bootloader Mem.ihex
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 50000 1 > Mem.hex
 	riscv32-none-elf-objdump bootloader/target/riscv32ima-unknown-none-elf/release/bootloader -D > bootloader/bootloader.asm
 
+.PHONY: qemu
 qemu:
 	qemu-system-riscv32 \
   	-M virt -serial stdio -display \
@@ -55,6 +62,7 @@ qemu:
   	-kernel zig/zig-out/bin/kernel.elf \
   	-cpu rv32,pmp=false
 
+.PHONY: qemu_rust
 qemu_rust:
 	qemu-system-riscv32 \
   	-M virt -serial stdio -display \
@@ -62,6 +70,7 @@ qemu_rust:
   	-kernel kernel/target/riscv32ima-unknown-none-elf/release/kernel \
   	-cpu rv32,pmp=false
 
+.PHONY: yosys_ulx3s
 yosys_ulx3s:
 	sed -i '/$$finish/d' Verilog/TestCore.v
 	sed -i '/$$finish/d' Verilog/SocUlx3s.v
@@ -69,32 +78,36 @@ yosys_ulx3s:
 		-DULX3S -q -p "synth_ecp5 -abc9 -abc2 -top mkTopULX3S -json ./build/mkTop.json" \
 		$(LIB)
 
+.PHONY: nextpnr_ulx3s
 nextpnr_ulx3s:
 	nextpnr-ecp5 --force --timing-allow-fail --json ./build/mkTop.json --lpf ulx3s.lpf \
 		--textcfg ./build/mkTop_out.config --85k --freq 25 --package CABGA381
 
+.PHONY: ecppack
 ecppack:
 	ecppack --compress --svf-rowsize 100000 --svf ./build/mkTop.svf \
 		./build/mkTop_out.config ./build/mkTop.bit
 
+.PHONY: prog_ulx3s
 prog_ulx3s:
 	sudo fujprog build/mkTop.bit -t
 
+.PHONY: ulx3s
 ulx3s: yosys_ulx3s nextpnr_ulx3s ecppack prog_ulx3s
 
+.PHONY: verilator
 verilator: compile
 	make -C simulation all
 	stdbuf -o0 -i0 ./sim
 
+.PHONY: simulate
 simulate:
 	iverilog -s top_sim src/SimTop.v simulation/mt48lc16m16a2.v simulation/BlockRAMDual.v Verilog/*.v -o Verilog/SimTop.vvp
 	vvp Verilog/SimTop.vvp
 
+.PHONY: run
 run:
 	stdbuf -o0 -i0 ./sim
-
-run_verbose:
-	./sim_verbose
 
 .PHONY: clean
 clean:
@@ -113,6 +126,7 @@ pnrclean:
 program:
 	sudo openFPGALoader --board nexysVideo --bitstream build/mkTop.bit
 
+.PHONY: yosys
 yosys:
 	sed -i '/$$finish/d' Verilog/TestCore.v
 	# sed -i '/$$write/d' Verilog/TestCore.v
@@ -148,4 +162,5 @@ build/mkTop.bit: build/mkTop.frames
 		--part_name ${PART} --frm_file build/mkTop.frames \
 		--output_file build/mkTop.bit
 
+.PHONY: nextpnr
 nextpnr: build/mkTop.bit

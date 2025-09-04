@@ -155,13 +155,13 @@ makeCPU rx = mdo
         SystemInputs
           { softwareInterrupt= clint.softwareInterrupt
           , timerInterrupt= clint.timerInterrupt!(0 :: Int)
-          , externalInterrupt= false } --uartInterrupt }
+          , externalInterrupt= uartInterrupt }
 
   let systemInputs1 =
         SystemInputs
           { softwareInterrupt= clint.softwareInterrupt
           , timerInterrupt= clint.timerInterrupt!(1 :: Int)
-          , externalInterrupt= false } --uartInterrupt }
+          , externalInterrupt= uartInterrupt }
 
   let coreconfig0 =
         CoreConfig
