@@ -96,7 +96,7 @@ makeICache vminfo cacheSlave mmuSlave cacheSource mmuSource = do
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
   (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "ITLB" $
-    makeDummyMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
+    makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
 
   tagQ :: Queue MmuResponse <- makeQueue
 
@@ -283,7 +283,7 @@ makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
       makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
   (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "DTLB" $
-    makeDummyMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
+    makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
   let phys :: Bit 32 = mmuOut.peek.rd
 
   always do
@@ -884,8 +884,8 @@ makeTestCore rx = mdo
 
   ([master0,master1], [slave0,slave1,slave2,slave3]) <-
     withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
-  --uncoherentSlave <- withName "memory" $ makeTLRAM @28 @TLConfig' config
-  uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
+  uncoherentSlave <- withName "memory" $ makeTLRAM @28 @TLConfig' config
+  --uncoherentSlave <- withName "memory" $ makeTLRAM @15 @TLConfig' config
 
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0

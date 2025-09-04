@@ -251,7 +251,7 @@ makeSdram config inputs = do
         else do
           until rdwr_st (tRCD-2)
           banks!bank <== some row
-          controller.command activate_cmd bank 0
+          controller.command activate_cmd bank row
 
       when (state.val === write1_st) do
         controller.write (upper cmdData.val) (upper cmdMask.val)
@@ -636,12 +636,12 @@ makeTestSdram = do
           , tRC = 9
           , tCL = 3 }
 
-  (fabric, outputs) <- makeSdram2 config (toSource inputs)
+  (fabric, outputs) <- makeSdram config (toSource inputs)
 
   address :: Reg (Bit 23) <- makeReg 0
   addressQ :: Queue (Bit 23) <- makeSizedQueueCore 4
 
-  let numTests = 100000
+  let numTests = 10000
 
   runStmt do
     while (address.val .<. numTests) do
@@ -655,8 +655,8 @@ makeTestSdram = do
     while true do
       wait (inputs.notFull .&&. addressQ.notFull)
       action do
-        inputs.enq (address.val, 42, 0b0000)
-        address <== address.val + 1
+        inputs.enq (address.val, 0, 0b0000)
+        address <== address.val + 1 === numTests ? (0, address.val + 1)
         addressQ.enq address.val
 
   always do
@@ -671,8 +671,8 @@ makeTestSdram = do
         (hash addressQ.first === outputs.peek)
         "unexpected value"
 
-      when (addressQ.first + 1 === numTests) do
-        finish
+      --when (addressQ.first + 1 === numTests) do
+      --  finish
 
   return fabric
 
