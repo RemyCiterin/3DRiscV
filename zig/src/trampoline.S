@@ -196,6 +196,10 @@ machine_handler:
   sw a3, 2 * 4(a0)
   sw a4, 3 * 4(a0)
 
+  //li a1, 0X10000000
+  //li a2, 42
+  //sw a2, (a1)
+
   lw a1, 4 * 4(a0) // interval
   lw a2, 5 * 4(a0) // *mtimecmp
 

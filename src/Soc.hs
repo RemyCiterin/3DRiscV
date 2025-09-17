@@ -44,7 +44,7 @@ makeTLSdram sink lowerBound = do
           , tCL = 3 }
 
   inputs :: Queue (Bit 23, Bit 32, Bit 4) <- makeQueue
-  (fabric, outputs) <- withName "sdram" $ makeSdram config (toSource inputs)
+  (fabric, outputs) <- withName "sdram" $ makeSdram2 config (toSource inputs)
 
   -- Queue between the stages 1 and 2
   queue :: Queue (ChannelD p) <- makeSizedQueueCore 4

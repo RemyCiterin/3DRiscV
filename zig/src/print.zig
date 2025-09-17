@@ -10,6 +10,8 @@ const UART_LSR: *volatile u8 = @ptrFromInt(UART + 0x05);
 // LSR Bit 6: Transmitter empty; both the THR and LSR are empty
 const UART_LSR_EMPTY_MASK: usize = 0x40;
 
+const UART_CAN_PUT: *volatile u8 = @ptrFromInt(UART + 1);
+
 export var tohost: u64 = 0;
 export var htif: u64 = 0;
 export var fromhost: u64 = 0;
@@ -18,16 +20,8 @@ const config = @import("config.zig").config;
 
 pub inline fn putChar(ch: u8) void {
     //while ((UART_LSR.* & UART_LSR_EMPTY_MASK) == 0) {}
-    //UART_THR.* = ch;
-
-    asm volatile (
-        \\sb %[char], 0(%[addr])
-        \\sw %[code], 4(%[addr])
-        :
-        : [char] "r" (ch),
-          [code] "r" (0x01010000),
-          [addr] "r" (0x10000000),
-    );
+    while (UART_CAN_PUT.* == 0) {}
+    UART_THR.* = ch;
 }
 
 pub fn getChar() u8 {

@@ -8,37 +8,59 @@
 #define BAUD 115200
 #define FREQ 25000000
 
-void show_tx(bool tx) {
-
-}
 
 char input = 0;
-int bit_counter = 0;
+int rx_bit_counter = 0;
 bool generate_rx(std::atomic_char &current_input) {
   if (input != 0) {
-    if (bit_counter == 0) {
+    if (rx_bit_counter == 0) {
       // Start every UART message by a zero
-      bit_counter++;
+      rx_bit_counter++;
       //printf("%d", 0);
       return false;
-    } else if (bit_counter <= 8) {
-      char c = input & (1 << (bit_counter - 1));
+    } else if (rx_bit_counter <= 8) {
+      char c = input & (1 << (rx_bit_counter - 1));
       //printf("%d", c != 0);
-      bit_counter++;
+      rx_bit_counter++;
       return c != 0;
-    } else if (bit_counter == 64) {
+    } else if (rx_bit_counter == 64) {
       input = 0;
       current_input = 0;
       return true;
     }
 
-    bit_counter++;
+    rx_bit_counter++;
     return true;
   }
 
   input = current_input;
-  bit_counter = 0;
+  rx_bit_counter = 0;
   return true;
+}
+
+char output = 0;
+int tx_counter = 0;
+int tx_bit_counter = 0;
+void receive_tx(bool pos) {
+  if (tx_bit_counter != 0 && tx_counter == 0) {
+    int value = pos ? 1 : 0;
+    output = output | (value << (8 - tx_bit_counter));
+
+    if (tx_bit_counter == 1)
+      printf("%c", output);
+
+    tx_bit_counter -= 1;
+    tx_counter = (FREQ / BAUD) + 5;
+    return;
+  }
+
+  if (tx_counter != 0) tx_counter -= 1;
+
+  if (tx_counter == 0 && tx_bit_counter == 0 && !pos) {
+    tx_counter = (FREQ / BAUD) + 5;
+    tx_bit_counter = 8;
+    output = 0;
+  }
 }
 
 void run_core(int argc, char **argv, std::atomic_char &current_input) {
@@ -50,7 +72,7 @@ void run_core(int argc, char **argv, std::atomic_char &current_input) {
 
   while (!Verilated::gotFinish()) {
     if (top->clock) {
-      show_tx(top->out_0);
+      receive_tx(top->out_0);
 
       counter++;
 

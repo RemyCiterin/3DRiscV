@@ -225,9 +225,6 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
 
     Clint.setNextTimerInterrupt(tp);
 
-    riscv.mstatus.modify(.{ .MPP = 1, .MPIE = 1, .MIE = 0, .SPIE = 0 });
-    riscv.mie.modify(.{ .MTIE = 1 });
-
     riscv.mepc.write(@intFromPtr(&supervisor_main));
     riscv.satp.write(.{ .ASID = 0, .MODE = .Bare, .PPN = 0 });
 
@@ -235,6 +232,10 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
 
     riscv.mscratch.write(@intFromPtr(&state));
     riscv.mtvec.write(@intFromPtr(&MachineState.machine_handler));
+    riscv.mstatus.modify(.{ .MPP = 1, .MPIE = 0, .MIE = 0, .SIE = 0 });
+    riscv.mie.modify(.{ .MTIE = 1 });
+
+    UART.writer.print("start supervisor!\n", .{}) catch unreachable;
 
     asm volatile ("mret");
     unreachable;
@@ -249,20 +250,18 @@ pub export fn supervisor_main() align(16) callconv(.C) void {
 }
 
 pub noinline fn kernel_main() anyerror!noreturn {
-    const logger = std.log.scoped(.kernel);
-
-    logger.info("=== Start DOoOM ===", .{});
-
-    logger.info(
-        \\Dooom Out Of Order Machine:
-        \\  DOoOM is an out of order RiscV with the goal of
-        \\  runing DOOM on it!
-        \\
-        \\  It support the rv32i isa with machine mode,
-        \\  is fine-tuned to run on the ULX3S board at
-        \\  25kHz, use a 8kB 2-ways cache and has an
-        \\  interface for UART, SDRAM, MMC and HDMI
-    , .{});
+    //const logger = std.log.scoped(.kernel);
+    UART.writer.print(
+        \\___________                      ________    _________      _    _
+        \\\_   _____/______  ____   ____   \_____  \  /   _____/     (o)--(o)
+        \\ |    __) \_  __ \/  _ \ / ___\   /   |   \ \_____  \     / _____ \
+        \\ |     \   |  | \(  <_> ) /_/  > /    |    \/        \    \_______/
+        \\ \___  /   |__|   \____/\___  /  \_______  /_______  /   ./       \.
+        \\     \/                /_____/           \/        \/   (           )
+        \\                                                         \ \_\\/_/ /
+        \\                                                          ^^ ~~~ ^^
+    , .{}) catch unreachable;
+    UART.writer.print("\n", .{}) catch unreachable;
 
     Alloc.init();
     const malloc = Alloc.malloc;

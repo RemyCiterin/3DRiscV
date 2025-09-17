@@ -28,15 +28,16 @@ import TileLink.Broadcast
 
 displayAscii :: Bit 8 -> Action ()
 displayAscii term =
-  display_ $ go term $ 10 : 13 : [32..126]
-  where
-    ascii :: [String] = [[toEnum i] | i <- [0..255]]
+  pure ()
+  --display_ $ go term $ 10 : 13 : [32..126]
+  --where
+  --  ascii :: [String] = [[toEnum i] | i <- [0..255]]
 
-    go :: Bit 8 -> [Integer] -> Format
-    go x [] = formatCond false (fshow "")
-    go x (i : is)  =
-      formatCond (fromInteger i === x) (fshow (ascii!i)) <>
-      go x is
+  --  go :: Bit 8 -> [Integer] -> Format
+  --  go x [] = formatCond false (fshow "")
+  --  go x (i : is)  =
+  --    formatCond (fromInteger i === x) (fshow (ascii!i)) <>
+  --    go x is
 
 isCached :: Bit 32 -> Bit 1
 isCached addr = addr .>=. 0x80000000
