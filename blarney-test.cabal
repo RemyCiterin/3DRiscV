@@ -26,7 +26,7 @@ executable blarney-test
     TileLink.GetPut,
     TileLink.RAM,
     TileLink,
-    MulDiv,
+    Gpu,
     DDR3,
     Plic,
     Oled,

@@ -17,6 +17,7 @@ import qualified Spi
 import qualified Instr
 import qualified Sdram
 
+import qualified Gpu
 import qualified Uart
 import qualified Cache
 import qualified Core
@@ -38,6 +39,7 @@ main = do
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
         writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"
         writeVerilogModule Soc.makeUlx3s "SocUlx3s" "Verilog/"
+        writeVerilogModule Gpu.makeGpu "TestCore" "Verilog/"
         --writeVerilogModule Soc.makeUlx3s "TestCore" "Verilog/"
         writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"
         writeVerilogModule DDR3.makeWrapperDDR3 "TestDDR3" "Verilog/"
