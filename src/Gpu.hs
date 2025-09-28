@@ -43,9 +43,9 @@ displayAscii term =
       formatCond (fromInteger i === x) (fshow (ascii!i)) <>
       go x is
 
--- Select -> Fetch -> Decode -> Register Read -> Exec
---    ^                                           /
---    \__________________________________________/
+-- Select -> Fetch -> Decode -> Register Read -> Exec -> Write Back
+--    ^                                                     /
+--    \____________________________________________________/
 --
 --
 -- 16 warps of 4 threads
@@ -405,8 +405,11 @@ makeExec inputs = do
   dmemIn <- makeQueue
   dmemOut <- makeDMemServer (toSource dmemIn)
 
-  -- True iff the exec stage is stall because of a memory access
-  stall :: Reg (Bit 1) <- makeReg false
+  -- Set of requests waiting for a memory request
+  pendingQ :: Queue (WarpId, WarpMask, Instr, Bit 32) <- makeSizedQueueCore 2
+
+  -- arbiters for the write-back stage queue between the memory/alu responses
+  [arbiter1, arbiter2] <- makeFairArbiter 2
 
   -- return the program counters to toe scheduler
   outputs :: Queue Exec2WB <- makeQueue
@@ -414,19 +417,37 @@ makeExec inputs = do
   nextPC :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
   nextRD :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
 
-  let op1 = toList inputs.peek.op1
-  let op2 = toList inputs.peek.op2
-  let instr = inputs.peek.instr
-  let mask = inputs.peek.mask
-  let warp = inputs.peek.warp
-  let pc = inputs.peek.pc
-
   always do
-    when (inputs.canPeek .&&. outputs.notFull .&&. dmemIn.notFull) do
-      -- The exec stage is stall because of a memory access
-      stall <== instr.isMemAccess .&&. inv dmemOut.canPeek
+    when (outputs.notFull .&&. dmemOut.canPeek .&&. pendingQ.canDeq) do
+      let (warp, mask, instr, pc) = pendingQ.first
 
-      when (inv stall.val .&&. instr.isMemAccess) do
+      let nextPc = fromList (replicate (valueOf @WarpSize) (pc + 4))
+      let rd = dmemOut.peek
+
+      arbiter1.request
+      when (arbiter1.grant) do
+        pendingQ.deq
+        dmemOut.consume
+        outputs.enq
+          Exec2WB
+            { pc
+            , warp
+            , mask
+            , instr
+            , nextPc
+            , rd }
+
+    when (inputs.canPeek .&&. outputs.notFull .&&. dmemIn.notFull .&&. pendingQ.notFull) do
+      let op1 = toList inputs.peek.op1
+      let op2 = toList inputs.peek.op2
+      let instr = inputs.peek.instr
+      let mask = inputs.peek.mask
+      let warp = inputs.peek.warp
+      let pc = inputs.peek.pc
+
+      if instr.isMemAccess then do
+        pendingQ.enq (warp, mask, instr, pc)
+        inputs.consume
         let addr =
               fromList (map (+instr.imm.val) op1)
         dmemIn.enq
@@ -438,15 +459,7 @@ makeExec inputs = do
             , mask= mask
             , addr }
 
-      when dmemOut.canPeek do
-        dynamicAssert (instr.isMemAccess) "can't receive dmem response from a non memop"
-        nextPC <== fromList (replicate (valueOf @WarpSize) (pc + 4))
-        nextRD <== dmemOut.peek
-
-        dmemOut.consume
-
-      when (inv instr.isMemAccess) do
-        dynamicAssert (inv stall.val) "can't stall without memory access"
+      else do
         let results =
               [ alu
                   ExecInput
@@ -465,16 +478,17 @@ makeExec inputs = do
           nextRD <== fromList [r.rd | r <- results]
           nextPC <== fromList [r.pc | r <- results]
 
-      when nextPC.active do
-        inputs.consume
-        outputs.enq
-          Exec2WB
-            { pc
-            , warp
-            , mask
-            , instr
-            , nextPc= nextPC.val
-            , rd= nextRD.val }
+        arbiter2.request
+        when (arbiter2.grant) do
+          inputs.consume
+          outputs.enq
+            Exec2WB
+              { pc
+              , warp
+              , mask
+              , instr
+              , nextPc= nextPC.val
+              , rd= nextRD.val }
 
   return (toSource outputs)
 
