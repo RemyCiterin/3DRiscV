@@ -22,3 +22,6 @@ user/log.txt
 kernel/kernel.asm
 user/user.asm
 bootloader/bootloader.asm
+gpu_firmware/build
+gpu_firmware/log.txt
+gpu_firmware/firmware.asm
