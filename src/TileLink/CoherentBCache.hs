@@ -151,6 +151,15 @@ makeBCacheCoreWith source slave execAtomic = do
   getArbiter <- makeNullArbiter
 
   reserved :: Reg (Bit 1) <- makeReg false
+  reserveCounter :: Reg (Bit 16) <- makeReg 0
+  reservation :: Wire (Bit 1) <- makeWire false
+
+  always do
+    if reservation.val then do
+      reserveCounter <== 32
+      reserved <== true
+    else do
+      reserveCounter <== reserved.val ? (reserveCounter.val - 1, 0)
 
   dataQueue :: Queue (Option (atomic, Bit (w+(iw+ow)))) <- makePipelineQueue 1
 
@@ -193,7 +202,11 @@ makeBCacheCoreWith source slave execAtomic = do
         inv (dataQueue.canDeq .&&. dataQueue.first.valid)
 
   let execOp :: Bit w -> Action () = \ way -> do
-        reserved <== request.val `isTagged` #LoadR
+        if request.val `isTagged` #LoadR then do
+          reservation <== true
+        else do
+          reserved <== false
+
         when (request.val `isTagged` #Load .||. request.val `isTagged` #LoadR) do
           dataRamA.loadBE (way # index.val # offset.val)
           dataQueue.enq none
@@ -235,6 +248,7 @@ makeBCacheCoreWith source slave execAtomic = do
           probeM.start.canPeek
           .&&. inv exec_w.val
           .&&. inv dataQueue.canDeq
+          .&&. reserveCounter.val === 0
           .&&. (state.read 1 === st_idle .||. state.read 1 === st_acquire)
     when canProbe do
       let (addr, perm) = probeM.start.peek

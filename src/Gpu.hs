@@ -59,14 +59,14 @@ type WarpIdx = Bit (Log2Ceil WarpSize)
 
 data Select2Fetch =
   Select2Fetch
-    { id :: WarpId
+    { warp :: WarpId
     , mask :: WarpMask
     , pc :: Bit 32 }
   deriving(Generic, Bits)
 
 data Fetch2Decode =
   Fetch2Decode
-    { id :: WarpId
+    { warp :: WarpId
     , mask :: WarpMask
     , pc :: Bit 32
     , instr :: Bit 32 }
@@ -74,7 +74,7 @@ data Fetch2Decode =
 
 data Decode2RR =
   Decode2RR
-    { id :: WarpId
+    { warp :: WarpId
     , mask :: WarpMask
     , pc :: Bit 32
     , instr :: Instr }
@@ -82,7 +82,7 @@ data Decode2RR =
 
 data RR2Exec =
   RR2Exec
-    { id :: WarpId
+    { warp :: WarpId
     , mask :: WarpMask
     , pc :: Bit 32
     , instr :: Instr
@@ -90,9 +90,19 @@ data RR2Exec =
     , op2 :: Vec WarpSize (Bit 32) }
   deriving(Generic, Bits)
 
-data Exec2Select =
-  Exec2Select
-    { id :: WarpId
+data Exec2WB =
+  Exec2WB
+    { warp :: WarpId
+    , mask :: WarpMask
+    , instr :: Instr
+    , rd :: Vec WarpSize (Bit 32)
+    , nextPc :: Vec WarpSize (Bit 32)
+    , pc :: Bit 32 }
+  deriving(Generic, Bits)
+
+data WB2Select =
+  WB2Select
+    { warp :: WarpId
     , mask :: WarpMask
     , pc :: Vec WarpSize (Bit 32) }
   deriving(Generic, Bits)
@@ -117,7 +127,7 @@ makeFetch inputs = do
       , consume= queue.deq
       , peek=
           Fetch2Decode
-            { id= queue.first.id
+            { warp= queue.first.warp
             , mask= queue.first.mask
             , pc= queue.first.pc
             , instr= imem.out }}
@@ -131,7 +141,7 @@ makeDecode inputs = do
       inputs.consume
       queue.enq
         Decode2RR
-          { id= inputs.peek.id
+          { warp= inputs.peek.warp
           , mask= inputs.peek.mask
           , pc= inputs.peek.pc
           , instr= decodeInstr inputs.peek.instr }
@@ -150,7 +160,7 @@ makeHalfRegisterFile inputs = do
 
   always do
     when (stage1.notFull .&&. inputs.canPeek .&&. queue.notFull) do
-      let msb :: Bit (LogNumWarp-1) = truncateLSB inputs.peek.id
+      let msb :: Bit (LogNumWarp-1) = truncateLSB inputs.peek.warp
       forM_ [0..valueOf @WarpSize - 1] \ i -> do
         (rf!i).load (inputs.peek.instr.rs1.val # msb)
 
@@ -159,7 +169,7 @@ makeHalfRegisterFile inputs = do
       queue.enq ()
 
     when (stage2.notFull .&&. stage1.canDeq .&&. queue.canDeq) do
-      let msb :: Bit (LogNumWarp-1) = truncateLSB stage1.first.id
+      let msb :: Bit (LogNumWarp-1) = truncateLSB stage1.first.warp
       forM_ [0..valueOf @WarpSize - 1] \ i -> do
         (rf!i).load (stage1.first.instr.rs2.val # msb)
 
@@ -174,7 +184,7 @@ makeHalfRegisterFile inputs = do
             stage2.deq
         , peek=
             RR2Exec
-              { id= stage1.first.id
+              { warp= stage1.first.warp
               , mask= stage1.first.mask
               , pc= stage1.first.pc
               , instr= stage1.first.instr
@@ -196,14 +206,14 @@ makeRegisterRead inputs = do
           Source
             { peek= inputs.peek
             , consume= inputs.consume
-            , canPeek= inputs.canPeek .&&. at @0 inputs.peek.id === 0 }
+            , canPeek= inputs.canPeek .&&. at @0 inputs.peek.warp === 0 }
 
   (sourceO, wbO) <-
         makeHalfRegisterFile
           Source
             { peek= inputs.peek
             , consume= inputs.consume
-            , canPeek= inputs.canPeek .&&. at @0 inputs.peek.id === 1 }
+            , canPeek= inputs.canPeek .&&. at @0 inputs.peek.warp === 1 }
 
   queue :: Queue RR2Exec <- makePipelineQueue 1
 
@@ -232,7 +242,7 @@ data SimtState =
     , pc :: Bit 32 }
   deriving(Generic, Bits)
 
-makeSelect :: Source Exec2Select -> Module (Source Select2Fetch)
+makeSelect :: Source WB2Select -> Module (Source Select2Fetch)
 makeSelect inputs = do
   (statesA, statesB) :: ([RAM WarpId SimtState], [RAM WarpId SimtState]) <-
     unzip <$> replicateM (valueOf @WarpSize) makeQuadRAM
@@ -254,7 +264,7 @@ makeSelect inputs = do
     when inputs.canPeek do
       forM_ [0..valueOf @WarpSize - 1] \ i -> do
         when (inputs.peek.mask!i) do
-          (statesB!i).store inputs.peek.id SimtState{busy= false, pc= inputs.peek.pc!i}
+          (statesB!i).store inputs.peek.warp SimtState{busy= false, pc= inputs.peek.pc!i}
       inputs.consume
 
     sequence_ [s.load (warp.read 1) | s <- statesA]
@@ -285,12 +295,12 @@ makeSelect inputs = do
                 round <== round.val + 1
           , peek=
               Select2Fetch
-                { id= warp.read 0
+                { warp= warp.read 0
                 , mask= fromBitList [inv s.out.busy .&&. s.out.pc === pc.val | s <- statesA]
                 , pc= pc.val }
           , canPeek=
               orList [inv s.out.busy | s <- statesA] .&&.
-              inv (inputs.canPeek .&&. warp.read 0 === inputs.peek.id) .&&.
+              inv (inputs.canPeek .&&. warp.read 0 === inputs.peek.warp) .&&.
               initDone.val
           }
 
@@ -348,35 +358,39 @@ makeDMemServer inputs = do
     while true do
       wait inputs.canPeek
       let req = inputs.peek
-      forM_ [0..valueOf @WarpSize - 1] \ i -> do
-        let (msb, lsb) = split (slice @31 @2 (req.addr!i - 0x80000000))
-        let mask = genMask req.width (req.addr!i)
+      par
+        [ forM_ [0..valueOf @WarpSize - 1] \ i -> do
+            let (msb, lsb) = split (slice @31 @2 (req.addr!i - 0x80000000))
+            let mask = genMask req.width (req.addr!i)
 
-        action do
-          -- Show ascii output of the gpu
-          when (req.mask!i .&&. req.addr!i === 0x10000000 .&&. req.isStore .&&. at @0 mask) do
-            when debug (display_ "print char: ")
-            displayAscii (slice @7 @0 (req.lane!i))
-            when debug (display "")
+            action do
+              -- Show ascii output of the gpu
+              when (req.mask!i .&&. req.addr!i === 0x10000000 .&&. req.isStore .&&. at @0 mask) do
+                when debug (display_ "print char: ")
+                displayAscii (slice @7 @0 (req.lane!i))
+                when debug (display "")
 
-          if req.mask!i .&&. req.isStore .&&. msb === 0 .&&. genAligned req.width (req.addr!i)
-          then do
-            when debug do
-              display
-                "        [0x"
-                (formatHex 0 (req.addr!i .&. 0xfffffffc))
-                "] <= "
-                (formatHex 0 (genLane (req.addr!i) (req.lane!i)))
-                " if 0x"
-                (formatHex 1 mask)
+              if req.mask!i .&&. req.isStore .&&. msb === 0 .&&. genAligned req.width (req.addr!i)
+              then do
+                when debug do
+                  display
+                    "        [0x"
+                    (formatHex 0 (req.addr!i .&. 0xfffffffc))
+                    "] <= "
+                    (formatHex 0 (genLane (req.addr!i) (req.lane!i)))
+                    " if 0x"
+                    (formatHex 1 mask)
 
-            dmem.storeBE lsb mask (genLane (req.addr!i) (req.lane!i))
-          else do
-            when debug do
-              display "        read at addr: " (formatHex 0 (req.addr!i .&. 0xfffffffc))
-            dmem.loadBE lsb
-        action do
-          buffer!i <== genRd req.isUnsigned req.width (req.addr!i) dmem.outBE
+                dmem.storeBE lsb mask (genLane (req.addr!i) (req.lane!i))
+              else do
+                when debug do
+                  display "        read at addr: " (formatHex 0 (req.addr!i .&. 0xfffffffc))
+                dmem.loadBE lsb
+        , do
+          tick
+          forM_ [0..valueOf @WarpSize - 1] \ i -> do
+            action do
+              buffer!i <== genRd req.isUnsigned req.width (req.addr!i) dmem.outBE ]
 
       wait outputs.notFull
       action do
@@ -385,23 +399,17 @@ makeDMemServer inputs = do
 
   return (toSource outputs)
 
-makeExec :: Source RR2Exec -> WriteBack -> Module (Source Exec2Select)
-makeExec inputs writeBack = do
+makeExec :: Source RR2Exec -> Module (Source Exec2WB)
+makeExec inputs = do
   -- Data memory
   dmemIn <- makeQueue
   dmemOut <- makeDMemServer (toSource dmemIn)
-
-
-  cycle :: Reg (Bit 32) <- makeReg 0
-  always $ cycle <== cycle.val + 1
-
-  instret :: Reg (Bit 32) <- makeReg 0
 
   -- True iff the exec stage is stall because of a memory access
   stall :: Reg (Bit 1) <- makeReg false
 
   -- return the program counters to toe scheduler
-  outputs :: Queue Exec2Select <- makeQueue
+  outputs :: Queue Exec2WB <- makeQueue
 
   nextPC :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
   nextRD :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
@@ -410,7 +418,7 @@ makeExec inputs writeBack = do
   let op2 = toList inputs.peek.op2
   let instr = inputs.peek.instr
   let mask = inputs.peek.mask
-  let warp = inputs.peek.id
+  let warp = inputs.peek.warp
   let pc = inputs.peek.pc
 
   always do
@@ -458,37 +466,62 @@ makeExec inputs writeBack = do
           nextPC <== fromList [r.pc | r <- results]
 
       when nextPC.active do
-        outputs.enq
-          Exec2Select
-            { id= warp
-            , mask= mask
-            , pc= nextPC.val }
-        instret <== instret.val + 1
         inputs.consume
-
-        when debug do
-          display
-            "[" warp "@" cycle.val ":" instret.val "] pc= 0x"
-            (formatHex 0 pc) "  " (fshow instr)
-
-      when nextRD.active do
-        when (instr.rd.valid) do
-          writeBack warp mask instr.rd.val nextRD.val
-
-          when debug do
-            display_ "        " (fshowRegId instr.rd.val) " :="
-            forM_ [0..valueOf @WarpSize-1] \ i -> do
-              if mask!i
-              then display_ " 0x" (formatHex 8 (nextRD.val!i))
-              else display_ " 0xXXXXXXXX"
-            display ""
+        outputs.enq
+          Exec2WB
+            { pc
+            , warp
+            , mask
+            , instr
+            , nextPc= nextPC.val
+            , rd= nextRD.val }
 
   return (toSource outputs)
 
+makeWriteBack :: Source Exec2WB -> WriteBack -> Module (Source WB2Select)
+makeWriteBack inputs writeBack = do
+  let instr = inputs.peek.instr
+  let warp = inputs.peek.warp
+  let mask = inputs.peek.mask
+
+  cycle :: Reg (Bit 32) <- makeReg 0
+  always $ cycle <== cycle.val + 1
+
+  instret :: Reg (Bit 32) <- makeReg 0
+
+  return
+    Source
+      { peek=
+        WB2Select
+          { warp= inputs.peek.warp
+          , mask= inputs.peek.mask
+          , pc= inputs.peek.nextPc }
+      , consume= do
+          inputs.consume
+          instret <== instret.val + 1
+
+          when (instr.rd.valid) do
+            writeBack warp mask instr.rd.val inputs.peek.rd
+
+          when debug do
+            display
+              "[" warp "@" cycle.val ":" instret.val "] pc= 0x"
+              (formatHex 0 inputs.peek.pc) " "  (fshow instr)
+
+            when (instr.rd.valid) do
+              display_ "        " (fshowRegId instr.rd.val) " :="
+              forM_ [0..valueOf @WarpSize-1] \ i -> do
+                if mask!i
+                then display_ " 0x" (formatHex 8 (inputs.peek.rd!i))
+                else display_ " 0xXXXXXXXX"
+              display ""
+      , canPeek = inputs.canPeek }
+
 makeGpu :: Bit 1 -> Module (Bit 1, Bit 8)
 makeGpu rx = mdo
-  select2fetch <- makeSelect exec2select
-  exec2select <- makeExec rr2exec writeBack
+  select2fetch <- makeSelect wb2select
+  exec2wb <- makeExec rr2exec
+  wb2select <- makeWriteBack exec2wb writeBack
   (rr2exec, writeBack) <- makeRegisterRead decode2rr
   decode2rr <- makeDecode fetch2decode
   fetch2decode <- makeFetch select2fetch
@@ -496,8 +529,5 @@ makeGpu rx = mdo
   cycle :: Reg (Bit 32) <- makeReg 0
   always do
     cycle <== cycle.val + 1
-
-    --when (cycle.val === 200) do
-    --  finish
 
   pure (1, 0)
