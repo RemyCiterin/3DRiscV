@@ -53,7 +53,8 @@ displayAscii term =
 type LogNumWarp = 4
 type WarpId = Bit LogNumWarp
 
-type WarpSize = 2
+type WarpLogSize = 1
+type WarpSize = 2 ^ WarpLogSize
 type WarpMask = Bit WarpSize
 type WarpIdx = Bit (Log2Ceil WarpSize)
 
@@ -317,6 +318,131 @@ data DMemReq =
     , lane :: Vec WarpSize (Bit 32) }
   deriving(Generic, Bits)
 
+data CoalescedMemop =
+  CoalescedMemop
+    { width :: Bit 2
+    -- ^ width of the memory access
+    , isUnsigned :: Bit 1
+    -- ^ in case of a load with a size less than a word, do we use signed or zero extension
+    , isStore :: Bit 1
+    -- ^ is the current request a load or a store
+    , mask :: WarpMask
+    -- ^ execution mask of the warp
+    , warp :: WarpId
+    -- ^ ID of the warp
+    , instr :: Instr
+    -- ^ decoded instruction
+    , pc :: Bit 32
+    -- ^ program counter of the memory instruction
+    , offset :: Vec WarpSize (Bit (2 + WarpLogSize))
+    -- ^ for each thread, offset of it's data into the memory block (in bytes)
+    , block :: Bit (32 - 2 - WarpLogSize)
+    -- ^ base address of the memory block
+    , lane :: Bit (32 * WarpSize)
+    -- ^ data operands of the warp
+    , strb :: Bit (4 * WarpSize)
+    -- ^ byte enabled of the warp
+    } deriving(Bits, Generic)
+
+-- Transform parallel memory requests using arbitrary addresses into a stream of
+-- structured memory requests using a common block of size (4 * WarpSize) bytes.
+-- This is a key performance optimisation in GPUs because it allow multiple
+-- memory requests to be transformed in one bigger requests if their addresses
+-- are close enough.
+makeCoalescingUnit :: Source RR2Exec -> Module (Source CoalescedMemop)
+makeCoalescingUnit inputs = do
+  req0 :: Reg RR2Exec <- makeReg dontCare
+  valid0 :: Ehr (Bit 1) <- makeEhr 2 false
+
+  width1 :: Reg (Bit 2) <- makeReg dontCare
+  isUnsigned1 :: Reg (Bit 1) <- makeReg dontCare
+  isStore1 :: Reg (Bit 1) <- makeReg dontCare
+  mask1 :: Reg WarpMask <- makeReg dontCare
+  warp1 :: Reg WarpId <- makeReg dontCare
+  instr1 :: Reg Instr <- makeReg dontCare
+  pc1 :: Reg (Bit 32) <- makeReg dontCare
+  offset1 :: Reg (Vec WarpSize (Bit (2 + WarpLogSize))) <- makeReg dontCare
+  block1 :: Reg (Bit (32 - 2 - WarpLogSize)) <- makeReg dontCare
+  lane1 :: Reg (Vec WarpSize (Bit 32)) <- makeReg dontCare
+  valid1 :: Ehr (Bit 1) <- makeEhr 2 false
+
+  always do
+    when (inv (valid0.read 1) .&&. inputs.canPeek) do
+      req0 <== inputs.peek
+      valid0.write 1 true
+      inputs.consume
+
+    when (valid0.read 0 .&&. inv (valid1.read 1)) do
+      let mask = req0.val.mask
+      let instr = req0.val.instr
+      let addresses = [instr.imm.val + op1 | op1 <- toList req0.val.op1]
+      let leader = firstHot mask
+      let base =
+            select
+              [ cond --> slice @31 @(WarpLogSize+2) addr
+                | (cond, addr) <- zip (toBitList leader) addresses]
+      let actives :: WarpMask =
+            fromBitList
+              [slice @31 @(WarpLogSize+2) a === base .&&. unsafeAt i mask
+                | (a,i) <- zip addresses [0..]]
+
+      -- Set stage 1 to busy
+      valid1.write 1 true
+
+      -- if the coalescing succede, free stage 0, otherwise free the activated lanes
+      if actives === mask then do
+        valid0.write 0 false
+      else
+        req0 <== (req0.val{mask= mask .&. inv actives}::RR2Exec)
+
+      -- Write stage 1 state
+      width1 <== instr.accessWidth
+      isUnsigned1 <== instr.isUnsigned
+      isStore1 <== instr.opcode `is` [STORE]
+      mask1 <== actives
+      warp1 <== req0.val.warp
+      instr1 <== instr
+      pc1 <== req0.val.pc
+      offset1 <== fromList [slice @(WarpLogSize+1) @0 a | a <- addresses]
+      block1 <== base
+      lane1 <== req0.val.op2
+
+  let genStrb :: Bit 1 -> Bit 2 -> Bit (4 * WarpSize) = \ active width ->
+        select
+          [ width === 0b00 .&&. active --> 0b0001
+          , width === 0b01 .&&. active --> 0b0011
+          , width === 0b10 .&&. active --> 0b1111 ]
+
+  let strb =
+        orList
+          [ (genStrb active width1.val) .<<. off
+            | (off, active) <- zip (toList offset1.val) (toBitList mask1.val)]
+
+  -- Sequential merging of the store requests of all the threads
+  let lane =
+        foldr
+          (\ (word, off, active) acc ->
+            let new = (zeroExtend word) .<<. (off # (0::Bit 3)) in
+            mergeBE new acc (genStrb active width1.val .<<. off)
+          ) 0 (zip3 (toList lane1.val) (toList offset1.val) (toBitList mask1.val))
+
+  return
+    Source
+      { canPeek= valid1.read 0
+      , consume= valid1.write 0 false
+      , peek=
+          CoalescedMemop
+            { width= width1.val
+            , isUnsigned= isUnsigned1.val
+            , isStore= isStore1.val
+            , mask= mask1.val
+            , warp= warp1.val
+            , instr= instr1.val
+            , pc= pc1.val
+            , offset= offset1.val
+            , block= block1.val
+            , lane
+            , strb }}
 
 makeDMemServer :: Source DMemReq -> Module (Source (Vec WarpSize (Bit 32)))
 makeDMemServer inputs = do
@@ -405,6 +531,9 @@ makeExec inputs = do
   dmemIn <- makeQueue
   dmemOut <- makeDMemServer (toSource dmemIn)
 
+  coalIn <- makeQueue
+  coalOut <- makeCoalescingUnit (toSource coalIn)
+
   -- Set of requests waiting for a memory request
   pendingQ :: Queue (WarpId, WarpMask, Instr, Bit 32) <- makeSizedQueueCore 2
 
@@ -437,7 +566,14 @@ makeExec inputs = do
             , nextPc
             , rd }
 
-    when (inputs.canPeek .&&. outputs.notFull .&&. dmemIn.notFull .&&. pendingQ.notFull) do
+    when coalOut.canPeek do
+      coalOut.consume
+      display "Mem Output (warp: " coalOut.peek.warp " mask: " coalOut.peek.mask ")"
+      display "\taddr: " (formatHex 0 (coalOut.peek.block # (0 :: Bit (2 + WarpLogSize))))
+      display "\tlane: " (formatHex (8 * valueOf @WarpSize) coalOut.peek.lane)
+      display "\tstrb: " (formatHex (valueOf @WarpSize) coalOut.peek.strb)
+
+    when (inputs.canPeek .&&. outputs.notFull .&&. dmemIn.notFull .&&. pendingQ.notFull .&&. coalIn.notFull) do
       let op1 = toList inputs.peek.op1
       let op2 = toList inputs.peek.op2
       let instr = inputs.peek.instr
@@ -446,6 +582,23 @@ makeExec inputs = do
       let pc = inputs.peek.pc
 
       if instr.isMemAccess then do
+        coalIn.enq inputs.peek
+        display "Mem Input (warp: " warp " mask: " mask ") " (fshow instr)
+        display_ "\taddr: "
+        forM [0..valueOf @WarpSize - 1] \ i -> do
+          if unsafeAt i mask then do
+            display_ " 0x" (formatHex 8 ((op1!i) + instr.imm.val))
+          else do
+            display_ " 0xXXXXXXXX"
+        display ""
+        display_ "\tdata: "
+        forM [0..valueOf @WarpSize - 1] \ i -> do
+          if unsafeAt i mask then do
+            display_ " 0x" (formatHex 8 (op2!i))
+          else do
+            display_ " 0xXXXXXXXX"
+        display ""
+
         pendingQ.enq (warp, mask, instr, pc)
         inputs.consume
         let addr =
