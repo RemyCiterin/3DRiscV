@@ -112,7 +112,7 @@ type WriteBack = WarpId -> WarpMask -> RegId -> Vec WarpSize (Bit 32) -> Action 
 
 makeFetch :: Source Select2Fetch -> Module (Source Fetch2Decode)
 makeFetch inputs = do
-  imem :: RAM (Bit 22) (Bit 32) <- makeRAMInit "Mem.hex"
+  imem :: RAM (Bit 22) (Bit 32) <- makeRAMInit "IMem.hex"
 
   queue :: Queue Select2Fetch <- makePipelineQueue 1
 
@@ -344,6 +344,11 @@ data CoalescedMemop =
     -- ^ byte enabled of the warp
     } deriving(Bits, Generic)
 
+-- I the address is greater than 0x80000000, then the access is cached ane multiple accesses can be
+-- coalesced into one, otherwise accesses must be done sequentially
+isCached :: Bit 32 -> Bit 1
+isCached addr = addr .>=. 0x80000000
+
 -- Transform parallel memory requests using arbitrary addresses into a stream of
 -- structured memory requests using a common block of size (4 * WarpSize) bytes.
 -- This is a key performance optimisation in GPUs because it allow multiple
@@ -382,9 +387,13 @@ makeCoalescingUnit inputs = do
               [ cond --> slice @31 @(WarpLogSize+2) addr
                 | (cond, addr) <- zip (toBitList leader) addresses]
       let actives :: WarpMask =
-            fromBitList
-              [slice @31 @(WarpLogSize+2) a === base .&&. unsafeAt i mask
-                | (a,i) <- zip addresses [0..]]
+            if isCached (base # 0)
+            then
+              fromBitList
+                [slice @31 @(WarpLogSize+2) a === base .&&. unsafeAt i mask
+                  | (a,i) <- zip addresses [0..]]
+            else
+              leader
 
       -- Set stage 1 to busy
       valid1.write 1 true
@@ -444,99 +453,74 @@ makeCoalescingUnit inputs = do
             , lane
             , strb }}
 
-makeDMemServer :: Source DMemReq -> Module (Source (Vec WarpSize (Bit 32)))
-makeDMemServer inputs = do
-  dmem :: RAMBE 22 4 <- makeDualRAMForwardInitBE "Mem.hex"
-  outputs :: Queue (Vec WarpSize (Bit 32)) <- makePipelineQueue 1
+makeMemoryUnit :: Source RR2Exec -> Module (Source Exec2WB)
+makeMemoryUnit inputs0 = do
+  inputs <- makeCoalescingUnit inputs0
+  queue :: Queue CoalescedMemop <- makePipelineQueue 1
+  dmem :: RAMBE 22 (4 * WarpSize) <- makeDualRAMForwardInitBE "DMem.hex"
 
-  buffer :: [Reg (Bit 32)] <- replicateM (valueOf @WarpSize) (makeReg dontCare)
+  always do
+    when (inputs.canPeek .&&. queue.notFull) do
+      let (msb, lsb) = split inputs.peek.block
+
+      let addr :: Bit 32 = inputs.peek.block # 0
+      when (addr === 0x10000000 .&&. inputs.peek.isStore .&&. at @0 inputs.peek.strb) do
+        when debug (display_ "print char: ")
+        displayAscii (slice @7 @0 (inputs.peek.lane))
+        when debug (display "")
+
+      if msb === (truncateLSB (0x80000000::Bit 32)) .&&. inputs.peek.isStore
+      then do
+        when debug do
+          display
+            "        [0x"
+            (formatHex 0 addr)
+            "] <= "
+            (formatHex 0 inputs.peek.lane)
+            " if 0x"
+            (formatHex 1 inputs.peek.strb)
+        dmem.storeBE lsb inputs.peek.strb inputs.peek.lane
+      else do
+        when debug do
+          display "        read at addr: " (formatHex 0 addr)
+        dmem.loadBE lsb
+
+      queue.enq inputs.peek
+      inputs.consume
 
   let isByte :: Bit 2 -> Bit 1 = \ width -> width === 0b00
   let isHalf :: Bit 2 -> Bit 1 = \ width -> width === 0b01
   let isWord :: Bit 2 -> Bit 1 = \ width -> width === 0b10
 
-  let genMask :: Bit 2 -> Bit 32 -> Bit 4 = \ width addr ->
-        select [
-          isByte width --> 0b0001,
-          isHalf width --> 0b0011,
-          isWord width --> 0b1111
-        ] .<<. (slice @1 @0 addr)
-
-  let genAligned :: Bit 2 -> Bit 32 -> Bit 1 = \ width addr ->
-        select
-          [ isByte width --> true
-          , isHalf width --> at @0 addr === 0
-          , isWord width --> slice @1 @0 addr === 0 ]
-
-  let genLane :: Bit 32 -> Bit 32 -> Bit 32 = \ addr lane ->
-        lane .<<. (slice @1 @0 addr # (0 :: Bit 3))
-
-  let genRd :: Bit 1 -> Bit 2 -> Bit 32 -> Bit 32 -> Bit 32 = \ unsigned width addr lane ->
-        let bytes = lane .>>. (slice @1 @0 addr # (0 :: Bit 3)) in
+  let genRd i =
+        let width = queue.first.width in
+        let unsigned = queue.first.isUnsigned in
+        let bytes = dmem.outBE .>>. ((queue.first.offset!i) # (0 :: Bit 3)) in
         select
           [ isHalf width .&&. inv unsigned --> signExtend (slice @15 @0 bytes)
           , isByte width .&&. inv unsigned --> signExtend (slice @7 @0 bytes)
           , isHalf width .&&. unsigned --> zeroExtend (slice @15 @0 bytes)
           , isByte width .&&. unsigned --> zeroExtend (slice @7 @0 bytes)
-          , isWord width --> bytes ]
+          , isWord width --> slice @31 @0 bytes ]
 
+  let lanes :: [Bit 32] = [ genRd i | i <- [0..valueOf @WarpSize - 1]]
 
-  runStmt do
-    while true do
-      wait inputs.canPeek
-      let req = inputs.peek
-      par
-        [ forM_ [0..valueOf @WarpSize - 1] \ i -> do
-            let (msb, lsb) = split (slice @31 @2 (req.addr!i - 0x80000000))
-            let mask = genMask req.width (req.addr!i)
+  return
+    Source
+      { canPeek= queue.canDeq
+      , consume= queue.deq
+      , peek=
+        Exec2WB
+          { warp= queue.first.warp
+          , mask= queue.first.mask
+          , instr= queue.first.instr
+          , pc= queue.first.pc
+          , nextPc= fromList (replicate (valueOf @WarpSize) (queue.first.pc + 4))
+          , rd= fromList lanes}}
 
-            action do
-              -- Show ascii output of the gpu
-              when (req.mask!i .&&. req.addr!i === 0x10000000 .&&. req.isStore .&&. at @0 mask) do
-                when debug (display_ "print char: ")
-                displayAscii (slice @7 @0 (req.lane!i))
-                when debug (display "")
-
-              if req.mask!i .&&. req.isStore .&&. msb === 0 .&&. genAligned req.width (req.addr!i)
-              then do
-                when debug do
-                  display
-                    "        [0x"
-                    (formatHex 0 (req.addr!i .&. 0xfffffffc))
-                    "] <= "
-                    (formatHex 0 (genLane (req.addr!i) (req.lane!i)))
-                    " if 0x"
-                    (formatHex 1 mask)
-
-                dmem.storeBE lsb mask (genLane (req.addr!i) (req.lane!i))
-              else do
-                when debug do
-                  display "        read at addr: " (formatHex 0 (req.addr!i .&. 0xfffffffc))
-                dmem.loadBE lsb
-        , do
-          tick
-          forM_ [0..valueOf @WarpSize - 1] \ i -> do
-            action do
-              buffer!i <== genRd req.isUnsigned req.width (req.addr!i) dmem.outBE ]
-
-      wait outputs.notFull
-      action do
-        inputs.consume
-        outputs.enq (fromList [b.val | b <- buffer])
-
-  return (toSource outputs)
-
-makeExec :: Source RR2Exec -> Module (Source Exec2WB)
-makeExec inputs = do
-  -- Data memory
-  dmemIn <- makeQueue
-  dmemOut <- makeDMemServer (toSource dmemIn)
-
-  coalIn <- makeQueue
-  coalOut <- makeCoalescingUnit (toSource coalIn)
-
-  -- Set of requests waiting for a memory request
-  pendingQ :: Queue (WarpId, WarpMask, Instr, Bit 32) <- makeSizedQueueCore 2
+makeExec :: Bit 32 -> Source RR2Exec -> Module (Source Exec2WB)
+makeExec instret inputs = do
+  dmemOut <- makeMemoryUnit (inputs{canPeek= inputs.canPeek .&&. inputs.peek.instr.isMemAccess})
 
   -- arbiters for the write-back stage queue between the memory/alu responses
   [arbiter1, arbiter2] <- makeFairArbiter 2
@@ -547,34 +531,17 @@ makeExec inputs = do
   nextPC :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
   nextRD :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
 
+  cycle :: Reg (Bit 32) <- makeReg 0
+  always $ cycle <== cycle.val + 1
+
   always do
-    when (outputs.notFull .&&. dmemOut.canPeek .&&. pendingQ.canDeq) do
-      let (warp, mask, instr, pc) = pendingQ.first
-
-      let nextPc = fromList (replicate (valueOf @WarpSize) (pc + 4))
-      let rd = dmemOut.peek
-
+    when (outputs.notFull .&&. dmemOut.canPeek) do
       arbiter1.request
-      when (arbiter1.grant) do
-        pendingQ.deq
-        dmemOut.consume
-        outputs.enq
-          Exec2WB
-            { pc
-            , warp
-            , mask
-            , instr
-            , nextPc
-            , rd }
+    when (arbiter1.grant) do
+      outputs.enq dmemOut.peek
+      dmemOut.consume
 
-    when coalOut.canPeek do
-      coalOut.consume
-      --display "Mem Output (warp: " coalOut.peek.warp " mask: " coalOut.peek.mask ")"
-      --display "\taddr: " (formatHex 0 (coalOut.peek.block # (0 :: Bit (2 + WarpLogSize))))
-      --display "\tlane: " (formatHex (8 * valueOf @WarpSize) coalOut.peek.lane)
-      --display "\tstrb: " (formatHex (valueOf @WarpSize) coalOut.peek.strb)
-
-    when (inputs.canPeek .&&. outputs.notFull .&&. dmemIn.notFull .&&. pendingQ.notFull .&&. coalIn.notFull) do
+    when (inputs.canPeek .&&. outputs.notFull .&&. inv inputs.peek.instr.isMemAccess) do
       let op1 = toList inputs.peek.op1
       let op2 = toList inputs.peek.op2
       let instr = inputs.peek.instr
@@ -582,71 +549,44 @@ makeExec inputs = do
       let warp = inputs.peek.warp
       let pc = inputs.peek.pc
 
-      if instr.isMemAccess then do
-        coalIn.enq inputs.peek
-        --display "Mem Input (warp: " warp " mask: " mask ") " (fshow instr)
-        --display_ "\taddr: "
-        --forM [0..valueOf @WarpSize - 1] \ i -> do
-        --  if unsafeAt i mask then do
-        --    display_ " 0x" (formatHex 8 ((op1!i) + instr.imm.val))
-        --  else do
-        --    display_ " 0xXXXXXXXX"
-        --display ""
-        --display_ "\tdata: "
-        --forM [0..valueOf @WarpSize - 1] \ i -> do
-        --  if unsafeAt i mask then do
-        --    display_ " 0x" (formatHex 8 (op2!i))
-        --  else do
-        --    display_ " 0xXXXXXXXX"
-        --display ""
+      let results =
+            [ alu
+                ExecInput
+                  { pc= pc
+                  , instr= instr
+                  , rs1
+                  , rs2 }
+            | (rs1,rs2) <- zip op1 op2 ]
 
-        pendingQ.enq (warp, mask, instr, pc)
-        inputs.consume
-        let addr =
-              fromList (map (+instr.imm.val) op1)
-        dmemIn.enq
-          DMemReq
-            { isStore= instr.opcode `is` [STORE]
-            , isUnsigned= instr.isUnsigned
-            , width= instr.accessWidth
-            , lane= fromList op2
-            , mask= mask
-            , addr }
-
+      -- read thread id
+      if instr.opcode `is` [CSRRW,CSRRS,CSRRC] .&&. instr.csr === 0xf14 then do
+        nextRD <== fromList
+              [ 0 # warp # (lit (toInteger i) :: WarpIdx) | i <- [0..valueOf @WarpSize - 1]]
+      else if instr.opcode `is` [CSRRW,CSRRS,CSRRC] .&&. instr.csr === 0xb00 then do
+        nextRD <== fromList
+              [ cycle.val | i <- [0..valueOf @WarpSize - 1]]
+      else if instr.opcode `is` [CSRRW,CSRRS,CSRRC] .&&. instr.csr === 0xb02 then do
+        nextRD <== fromList
+              [ instret | i <- [0..valueOf @WarpSize - 1]]
       else do
-        let results =
-              [ alu
-                  ExecInput
-                    { pc= pc
-                    , instr= instr
-                    , rs1
-                    , rs2 }
-              | (rs1,rs2) <- zip op1 op2 ]
+        nextRD <== fromList [r.rd | r <- results]
+      nextPC <== fromList [r.pc | r <- results]
 
-        -- read thread id
-        if instr.opcode `is` [CSRRW,CSRRS,CSRRC] .&&. instr.csr === 0xf14 then do
-          nextPC <== fromList [r.pc | r <- results]
-          nextRD <== fromList
-                [ 0 # warp # (lit (toInteger i) :: WarpIdx) | i <- [0..valueOf @WarpSize - 1]]
-        else do
-          nextRD <== fromList [r.rd | r <- results]
-          nextPC <== fromList [r.pc | r <- results]
-
-        arbiter2.request
-        when (arbiter2.grant) do
-          inputs.consume
-          outputs.enq
-            Exec2WB
-              { pc
-              , warp
-              , mask
-              , instr
-              , nextPc= nextPC.val
-              , rd= nextRD.val }
+      arbiter2.request
+      when (arbiter2.grant) do
+        inputs.consume
+        outputs.enq
+          Exec2WB
+            { pc
+            , warp
+            , mask
+            , instr
+            , nextPc= nextPC.val
+            , rd= nextRD.val }
 
   return (toSource outputs)
 
-makeWriteBack :: Source Exec2WB -> WriteBack -> Module (Source WB2Select)
+makeWriteBack :: Source Exec2WB -> WriteBack -> Module (Source WB2Select, Bit 32)
 makeWriteBack inputs writeBack = do
   let instr = inputs.peek.instr
   let warp = inputs.peek.warp
@@ -658,7 +598,7 @@ makeWriteBack inputs writeBack = do
   instret :: Reg (Bit 32) <- makeReg 0
 
   return
-    Source
+    ( Source
       { peek=
         WB2Select
           { warp= inputs.peek.warp
@@ -666,7 +606,7 @@ makeWriteBack inputs writeBack = do
           , pc= inputs.peek.nextPc }
       , consume= do
           inputs.consume
-          instret <== instret.val + 1
+          instret <== instret.val + sumList [zeroExtend a | a <- toBitList inputs.peek.mask]
 
           when (instr.rd.valid) do
             writeBack warp mask instr.rd.val inputs.peek.rd
@@ -684,12 +624,13 @@ makeWriteBack inputs writeBack = do
                 else display_ " 0xXXXXXXXX"
               display ""
       , canPeek = inputs.canPeek }
+    , instret.val )
 
 makeGpu :: Bit 1 -> Module (Bit 1, Bit 8)
 makeGpu rx = mdo
   select2fetch <- makeSelect wb2select
-  exec2wb <- makeExec rr2exec
-  wb2select <- makeWriteBack exec2wb writeBack
+  exec2wb <- makeExec instret rr2exec
+  (wb2select, instret) <- makeWriteBack exec2wb writeBack
   (rr2exec, writeBack) <- makeRegisterRead decode2rr
   decode2rr <- makeDecode fetch2decode
   fetch2decode <- makeFetch select2fetch

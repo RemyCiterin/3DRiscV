@@ -30,7 +30,7 @@ _start:
   li t1, 1
   sw t1, (t0)
 
-  csrr t0, mhartid
+  csrr a0, mhartid
   jal main
 .infinite_loop:
   j .infinite_loop
