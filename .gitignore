@@ -8,6 +8,8 @@ log.txt
 sim
 Mem.hex
 Mem.ihex
+DMem.hex
+IMem.hex
 zig/kernel.asm
 zig/user.asm
 zig/log.txt

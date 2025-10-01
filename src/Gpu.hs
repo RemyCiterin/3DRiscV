@@ -53,7 +53,7 @@ displayAscii term =
 type LogNumWarp = 4
 type WarpId = Bit LogNumWarp
 
-type WarpLogSize = 1
+type WarpLogSize = 2
 type WarpSize = 2 ^ WarpLogSize
 type WarpMask = Bit WarpSize
 type WarpIdx = Bit (Log2Ceil WarpSize)
@@ -118,7 +118,7 @@ makeFetch inputs = do
 
   always do
     when (inputs.canPeek .&&. queue.notFull) do
-      imem.load (slice @23 @2 inputs.peek.pc)
+      imem.load (truncate (inputs.peek.pc .>>. (2 :: Bit 3)))
       queue.enq inputs.peek
       inputs.consume
 
@@ -628,15 +628,15 @@ makeWriteBack inputs writeBack = do
 
 makeGpu :: Bit 1 -> Module (Bit 1, Bit 8)
 makeGpu rx = mdo
-  select2fetch <- makeSelect wb2select
-  exec2wb <- makeExec instret rr2exec
-  (wb2select, instret) <- makeWriteBack exec2wb writeBack
-  (rr2exec, writeBack) <- makeRegisterRead decode2rr
-  decode2rr <- makeDecode fetch2decode
+  select2fetch <- withName "fetch" $ makeSelect wb2select
+  exec2wb <- withName "exec" $ makeExec instret rr2exec
+  (wb2select, instret) <- withName "wite_back" $ makeWriteBack exec2wb writeBack
+  (rr2exec, writeBack) <- withName "register_read" $ makeRegisterRead decode2rr
+  decode2rr <- withName "decode" $ makeDecode fetch2decode
   fetch2decode <- makeFetch select2fetch
 
   cycle :: Reg (Bit 32) <- makeReg 0
   always do
     cycle <== cycle.val + 1
 
-  pure (1, 0)
+  pure (1, zeroExtend fetch2decode.canPeek)

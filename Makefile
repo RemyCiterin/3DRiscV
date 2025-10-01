@@ -59,7 +59,7 @@ test_gpu:
 	riscv32-none-elf-objcopy --strip-debug -O ihex \
 		gpu_firmware/build/gpu_firmware.elf Mem.ihex
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 1000000 1 > IMem.hex
-	./ihex-to-img.py Mem.ihex hex 2147483648 8 1000000 1 > DMem.hex
+	./ihex-to-img.py Mem.ihex hex 2147483648 16 1000000 1 > DMem.hex
 	riscv32-none-elf-objdump gpu_firmware/build/gpu_firmware.elf -D \
 		> gpu_firmware/firmware.asm
 
