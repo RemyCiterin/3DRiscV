@@ -1,7 +1,8 @@
-
-
+CFLAGS =	-march=rv32i_zicsr -mabi=ilp32 -fno-builtin \
+					-ffreestanding -nostdlib -O2
+CC = riscv32-none-elf-gcc
+LD = riscv32-none-elf-ld
 
 compile:
-	riscv32-none-elf-gcc -I./src/ -march=rv32i_zicsr -mabi=ilp32 \
-		-nostdlib -ffreestanding -Tsrc/linker.ld \
-		-o build/gpu_firmware.elf src/*.c src/*.s
+	$(CC) $(CFLAGS) -Tsrc/linker.ld -Isrc \
+		-o build/gpu_firmware.elf src/*.c src/*.s -lgcc

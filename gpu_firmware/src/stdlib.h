@@ -1,0 +1,5 @@
+void printf(const char*, ...);
+//unsigned strlen(const char*);
+//void* memset(void*, int, unsigned);
+//char* strcpy(char*, const char*);
+

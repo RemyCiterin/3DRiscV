@@ -29,7 +29,7 @@ import TileLink.CoherentBCache
 import TileLink.Broadcast
 
 debug :: Bool
-debug = True
+debug = False
 
 displayAscii :: Bit 8 -> Action ()
 displayAscii term =
@@ -112,13 +112,13 @@ type WriteBack = WarpId -> WarpMask -> RegId -> Vec WarpSize (Bit 32) -> Action 
 
 makeFetch :: Source Select2Fetch -> Module (Source Fetch2Decode)
 makeFetch inputs = do
-  imem :: RAM (Bit 16) (Bit 32) <- makeRAMInit "Mem.hex"
+  imem :: RAM (Bit 22) (Bit 32) <- makeRAMInit "Mem.hex"
 
   queue :: Queue Select2Fetch <- makePipelineQueue 1
 
   always do
     when (inputs.canPeek .&&. queue.notFull) do
-      imem.load (slice @17 @2 inputs.peek.pc)
+      imem.load (slice @23 @2 inputs.peek.pc)
       queue.enq inputs.peek
       inputs.consume
 
@@ -446,7 +446,7 @@ makeCoalescingUnit inputs = do
 
 makeDMemServer :: Source DMemReq -> Module (Source (Vec WarpSize (Bit 32)))
 makeDMemServer inputs = do
-  dmem :: RAMBE 16 4 <- makeDualRAMForwardInitBE "Mem.hex"
+  dmem :: RAMBE 22 4 <- makeDualRAMForwardInitBE "Mem.hex"
   outputs :: Queue (Vec WarpSize (Bit 32)) <- makePipelineQueue 1
 
   buffer :: [Reg (Bit 32)] <- replicateM (valueOf @WarpSize) (makeReg dontCare)
@@ -472,13 +472,14 @@ makeDMemServer inputs = do
         lane .<<. (slice @1 @0 addr # (0 :: Bit 3))
 
   let genRd :: Bit 1 -> Bit 2 -> Bit 32 -> Bit 32 -> Bit 32 = \ unsigned width addr lane ->
+        let bytes = lane .>>. (slice @1 @0 addr # (0 :: Bit 3)) in
         select
-          [ isHalf width .&&. inv unsigned --> signExtend (slice @15 @0 lane)
-          , isByte width .&&. inv unsigned --> signExtend (slice @7 @0 lane)
-          , isHalf width .&&. unsigned --> zeroExtend (slice @15 @0 lane)
-          , isByte width .&&. unsigned --> zeroExtend (slice @7 @0 lane)
-          , isWord width --> lane ]
-        .>>. (slice @1 @0 addr # (0 :: Bit 3))
+          [ isHalf width .&&. inv unsigned --> signExtend (slice @15 @0 bytes)
+          , isByte width .&&. inv unsigned --> signExtend (slice @7 @0 bytes)
+          , isHalf width .&&. unsigned --> zeroExtend (slice @15 @0 bytes)
+          , isByte width .&&. unsigned --> zeroExtend (slice @7 @0 bytes)
+          , isWord width --> bytes ]
+
 
   runStmt do
     while true do
@@ -568,10 +569,10 @@ makeExec inputs = do
 
     when coalOut.canPeek do
       coalOut.consume
-      display "Mem Output (warp: " coalOut.peek.warp " mask: " coalOut.peek.mask ")"
-      display "\taddr: " (formatHex 0 (coalOut.peek.block # (0 :: Bit (2 + WarpLogSize))))
-      display "\tlane: " (formatHex (8 * valueOf @WarpSize) coalOut.peek.lane)
-      display "\tstrb: " (formatHex (valueOf @WarpSize) coalOut.peek.strb)
+      --display "Mem Output (warp: " coalOut.peek.warp " mask: " coalOut.peek.mask ")"
+      --display "\taddr: " (formatHex 0 (coalOut.peek.block # (0 :: Bit (2 + WarpLogSize))))
+      --display "\tlane: " (formatHex (8 * valueOf @WarpSize) coalOut.peek.lane)
+      --display "\tstrb: " (formatHex (valueOf @WarpSize) coalOut.peek.strb)
 
     when (inputs.canPeek .&&. outputs.notFull .&&. dmemIn.notFull .&&. pendingQ.notFull .&&. coalIn.notFull) do
       let op1 = toList inputs.peek.op1
@@ -583,21 +584,21 @@ makeExec inputs = do
 
       if instr.isMemAccess then do
         coalIn.enq inputs.peek
-        display "Mem Input (warp: " warp " mask: " mask ") " (fshow instr)
-        display_ "\taddr: "
-        forM [0..valueOf @WarpSize - 1] \ i -> do
-          if unsafeAt i mask then do
-            display_ " 0x" (formatHex 8 ((op1!i) + instr.imm.val))
-          else do
-            display_ " 0xXXXXXXXX"
-        display ""
-        display_ "\tdata: "
-        forM [0..valueOf @WarpSize - 1] \ i -> do
-          if unsafeAt i mask then do
-            display_ " 0x" (formatHex 8 (op2!i))
-          else do
-            display_ " 0xXXXXXXXX"
-        display ""
+        --display "Mem Input (warp: " warp " mask: " mask ") " (fshow instr)
+        --display_ "\taddr: "
+        --forM [0..valueOf @WarpSize - 1] \ i -> do
+        --  if unsafeAt i mask then do
+        --    display_ " 0x" (formatHex 8 ((op1!i) + instr.imm.val))
+        --  else do
+        --    display_ " 0xXXXXXXXX"
+        --display ""
+        --display_ "\tdata: "
+        --forM [0..valueOf @WarpSize - 1] \ i -> do
+        --  if unsafeAt i mask then do
+        --    display_ " 0x" (formatHex 8 (op2!i))
+        --  else do
+        --    display_ " 0xXXXXXXXX"
+        --display ""
 
         pendingQ.enq (warp, mask, instr, pc)
         inputs.consume

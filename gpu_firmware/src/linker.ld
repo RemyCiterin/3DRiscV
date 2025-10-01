@@ -2,8 +2,8 @@ ENTRY(_start)
 
 MEMORY
 {
-    imem (rx): ORIGIN = 0x80000000, LENGTH = 20K
-    dmem (rw): ORIGIN = 0x80001000, LENGTH = 20K
+    imem (rx): ORIGIN = 0x80000000, LENGTH = 10K
+    dmem (rw): ORIGIN = 0x80001000, LENGTH = 70K
 }
 
 SECTIONS
@@ -30,4 +30,6 @@ SECTIONS
   .data : ALIGN(16) {
       *(.data .data.*)
   } > dmem
+
+  stack0 = .;
 }

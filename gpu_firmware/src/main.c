@@ -1,9 +1,10 @@
 #include <stdint.h>
+#include "stdlib.h"
 
-static uint8_t* UART_BASE= (uint8_t*)0x10000000;
+#define NCPU (2 * 16)
 
+__attribute__((aligned(16))) char stack0[128 * NCPU];
 
-extern void main() {
-  *UART_BASE = 42;
-  //*UART_BASE = 0;
+extern void main(int threadid) {
+  printf("Hello world!\n");
 }
