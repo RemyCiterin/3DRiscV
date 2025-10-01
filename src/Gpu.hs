@@ -13,9 +13,12 @@ import Blarney.Connectable
 import Blarney.Utils
 import Blarney.Arbiter
 import Blarney.Vector (Vec, fromList, toList)
+import qualified Blarney.Vector as Vec
 import Blarney.QuadPortRAM
 import Blarney.Stmt
 import Blarney.ADT
+
+import MulDiv
 
 import System
 import Instr
@@ -95,6 +98,7 @@ data Exec2WB =
   Exec2WB
     { warp :: WarpId
     , mask :: WarpMask
+    , lock :: WarpMask
     , instr :: Instr
     , rd :: Vec WarpSize (Bit 32)
     , nextPc :: Vec WarpSize (Bit 32)
@@ -105,6 +109,7 @@ data WB2Select =
   WB2Select
     { warp :: WarpId
     , mask :: WarpMask
+    , lock :: WarpMask
     , pc :: Vec WarpSize (Bit 32) }
   deriving(Generic, Bits)
 
@@ -145,8 +150,7 @@ makeDecode inputs = do
           { warp= inputs.peek.warp
           , mask= inputs.peek.mask
           , pc= inputs.peek.pc
-          , instr= decodeInstr inputs.peek.instr }
-
+          , instr= decodeInstrGpu inputs.peek.instr }
   return (toSource queue)
 
 makeHalfRegisterFile :: Source Decode2RR -> Module (Source RR2Exec, WriteBack)
@@ -240,7 +244,8 @@ makeRegisterRead inputs = do
 data SimtState =
   SimtState
     { busy :: Bit 1
-    , pc :: Bit 32 }
+    , pc :: Bit 32
+    , locked :: Bit 1 }
   deriving(Generic, Bits)
 
 makeSelect :: Source WB2Select -> Module (Source Select2Fetch)
@@ -265,21 +270,26 @@ makeSelect inputs = do
     when inputs.canPeek do
       forM_ [0..valueOf @WarpSize - 1] \ i -> do
         when (inputs.peek.mask!i) do
-          (statesB!i).store inputs.peek.warp SimtState{busy= false, pc= inputs.peek.pc!i}
+          (statesB!i).store inputs.peek.warp
+            SimtState
+              { busy= false
+              , pc= inputs.peek.pc!i
+              , locked= unsafeAt i inputs.peek.lock }
       inputs.consume
 
     sequence_ [s.load (warp.read 1) | s <- statesA]
 
     -- Scheduler: choose the first thread availables from `round.val`
-    let actives :: WarpMask = fromBitList [inv s.out.busy | s <- statesA]
-    let choosen = rotr (firstHot (rotl actives round.val)) round.val
+    let choosen :: WarpMask =
+          let actives = fromBitList [inv s.out.busy .&&. inv s.out.locked | s <- statesA] in
+          rotr (firstHot (rotl actives round.val)) round.val
 
     forM_ [0..valueOf @WarpSize-1] \ i -> do
       when (choosen!i) do pc <== (statesA!i).out.pc
 
     when (inv initDone.val) do
       sequence_
-        [ s.store initIndex.val SimtState{busy= false, pc= 0x80000000}
+        [ s.store initIndex.val SimtState{busy= false, pc= 0x80000000, locked= false}
         | s <-statesA ]
       initDone <== initIndex.val + 1 === 0
       initIndex <== initIndex.val + 1
@@ -289,7 +299,7 @@ makeSelect inputs = do
           { consume= do
               sequence_
                 [ when (inv s.out.busy .&&. s.out.pc === pc.val) do
-                  s.store (warp.read 0) SimtState{busy= true, pc= s.out.pc}
+                  s.store (warp.read 0) SimtState{busy= true, pc= s.out.pc, locked= false}
                 | s <- statesA]
               warp.write 0 (1 + warp.read 0)
               when (warp.read 0 === 0) do
@@ -302,8 +312,7 @@ makeSelect inputs = do
           , canPeek=
               orList [inv s.out.busy | s <- statesA] .&&.
               inv (inputs.canPeek .&&. warp.read 0 === inputs.peek.warp) .&&.
-              initDone.val
-          }
+              initDone.val }
 
   makeConnection source (toSink queue)
   return (toSource queue)
@@ -516,20 +525,120 @@ makeMemoryUnit inputs0 = do
           , instr= queue.first.instr
           , pc= queue.first.pc
           , nextPc= fromList (replicate (valueOf @WarpSize) (queue.first.pc + 4))
-          , rd= fromList lanes}}
+          , rd= fromList lanes
+          , lock= 0}}
+
+
+makeAluMultiplier :: Source RR2Exec -> Module (Source Exec2WB)
+makeAluMultiplier inputs = do
+  queue :: Queue Exec2WB <- makePipelineQueue 1
+
+  always do
+    when (inputs.canPeek .&&. queue.notFull) do
+      inputs.consume
+      queue.enq
+        Exec2WB
+          { pc= inputs.peek.pc
+          , warp= inputs.peek.warp
+          , mask= inputs.peek.mask
+          , instr= inputs.peek.instr
+          , nextPc= fromList (replicate (valueOf @WarpSize) (inputs.peek.pc + 4))
+          , rd= mulUpper ? (fmap upper mulOut, fmap lower mulOut)
+          , lock= 0 }
+
+  return (toSource queue)
+  where
+    op1 = inputs.peek.op1
+    op2 = inputs.peek.op2
+    instr = inputs.peek.instr
+    opcode = instr.opcode
+
+    mulLhs, mulRhs, mulOut :: Vec WarpSize (Bit 64)
+    mulLhs = opcode `is` [MUL,MULH,MULHSU] ? (fmap signExtend op1, fmap zeroExtend op1)
+    mulRhs = opcode `is` [MUL,MULH] ? (fmap signExtend op2, fmap zeroExtend op2)
+    mulOut = fromList (fmap (\ (x,y) -> x*y) (zip (toList mulLhs) (toList mulRhs)))
+    mulUpper = opcode `is` [MULH, MULHSU, MULHU]
+
+makeAluDivider :: Source RR2Exec -> Module (Source Exec2WB)
+makeAluDivider inputs = do
+  dividers :: [Server (Bit 34, Bit 34) (Bit 34, Bit 34)] <-
+    replicateM (valueOf @WarpSize) makeDivider
+
+  idle :: Reg (Bit 1) <- makeReg true
+
+  always do
+    when (idle.val .&&. inputs.canPeek .&&. andList [d.reqs.canPut | d <- dividers]) do
+      let mask = inputs.peek.mask
+      sequence
+        [ when (unsafeAt i mask) do
+            d.reqs.put (divNum!i, divDen!i)
+        | (d,i) <- zip dividers [0..] ]
+      idle <== false
+
+  let mask = inputs.peek.mask
+  let rd :: Vec WarpSize (Bit 32) =
+        fmap (\ (x, y, out) ->
+          select
+            [ y === 0 --> isRem ? (0, -1)
+            , divOverflow x y --> isRem ? (0,x)
+            , inv (divOverflow x y) .&&. y =!= 0 -->
+                isRem ? (lower out.snd, lower out.fst) ]
+        ) (Vec.zip3 op1 op2 (fromList [d.resps.peek | d <- dividers]))
+  return
+    Source
+      { canPeek=
+          inv idle.val .&&.
+          inputs.canPeek .&&.
+          mask === fromBitList [d.resps.canPeek | d <- dividers]
+      , consume= do
+          inputs.consume
+          idle <== true
+          sequence_
+            [ when cond d.resps.consume
+            | (cond,d) <- zip (toBitList mask) dividers ]
+      , peek=
+        Exec2WB
+          { pc= inputs.peek.pc
+          , warp= inputs.peek.warp
+          , mask= inputs.peek.mask
+          , instr= inputs.peek.instr
+          , nextPc= fromList (replicate (valueOf @WarpSize) (inputs.peek.pc + 4))
+          , lock= 0
+          , rd } }
+  where
+    op1 = inputs.peek.op1
+    op2 = inputs.peek.op2
+    instr = inputs.peek.instr
+    opcode = instr.opcode
+
+    divNum, divDen :: Vec WarpSize (Bit 34)
+    divNum = opcode `is` [DIV,REM] ? (fmap signExtend op1, fmap zeroExtend op1)
+    divDen = opcode `is` [DIV,REM] ? (fmap signExtend op2, fmap zeroExtend op2)
+    isRem = opcode `is` [REM,REMU]
+
+    divOverflow :: Bit 32 -> Bit 32 -> Bit 1
+    divOverflow x y =
+          opcode `is` [DIV,REM] .&&. signedDivOverflow (x,y)
 
 makeExec :: Bit 32 -> Source RR2Exec -> Module (Source Exec2WB)
 makeExec instret inputs = do
   dmemOut <- makeMemoryUnit (inputs{canPeek= inputs.canPeek .&&. inputs.peek.instr.isMemAccess})
 
+  let isDivRem = inputs.peek.instr.opcode `is` [DIV,DIVU,REM,REMU]
+  let isMul = inputs.peek.instr.opcode `is` [MUL,MULH,MULHSU,MULHU]
+
+  divider <- makeAluDivider inputs{canPeek= inputs.canPeek .&&. isDivRem}
+  multiplier <- makeAluMultiplier inputs{canPeek= inputs.canPeek .&&. isMul}
+
   -- arbiters for the write-back stage queue between the memory/alu responses
-  [arbiter1, arbiter2] <- makeFairArbiter 2
+  [arbiter1, arbiter2, arbiter3, arbiter4] <- makeFairArbiter 4
 
   -- return the program counters to toe scheduler
   outputs :: Queue Exec2WB <- makeQueue
 
   nextPC :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
   nextRD :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
+  locked :: Wire WarpMask <- makeWire 0
 
   cycle :: Reg (Bit 32) <- makeReg 0
   always $ cycle <== cycle.val + 1
@@ -541,7 +650,21 @@ makeExec instret inputs = do
       outputs.enq dmemOut.peek
       dmemOut.consume
 
-    when (inputs.canPeek .&&. outputs.notFull .&&. inv inputs.peek.instr.isMemAccess) do
+    when (outputs.notFull .&&. multiplier.canPeek) do
+      arbiter3.request
+    when (arbiter3.grant) do
+      outputs.enq multiplier.peek
+      multiplier.consume
+
+    when (outputs.notFull .&&. divider.canPeek) do
+      arbiter4.request
+    when (arbiter4.grant) do
+      outputs.enq divider.peek
+      divider.consume
+
+    let isAlu = inv inputs.peek.instr.isMemAccess .&&. inv isMul .&&. inv isDivRem
+
+    when (inputs.canPeek .&&. outputs.notFull .&&. isAlu) do
       let op1 = toList inputs.peek.op1
       let op2 = toList inputs.peek.op2
       let instr = inputs.peek.instr
@@ -568,6 +691,13 @@ makeExec instret inputs = do
       else if instr.opcode `is` [CSRRW,CSRRS,CSRRC] .&&. instr.csr === 0xb02 then do
         nextRD <== fromList
               [ instret | i <- [0..valueOf @WarpSize - 1]]
+      else if instr.opcode `is` [GETMASK] then do
+        nextRD <== fromList
+              [ zeroExtend mask | i <- [0..valueOf @WarpSize - 1]]
+      else if instr.opcode `is` [SETMASK] then do
+        let goal = orList [c ? (x,0) | (x,c) <- zip op1 (toBitList mask)]
+        when (zeroExtend mask =!= orList op1) do
+          locked <== mask
       else do
         nextRD <== fromList [r.rd | r <- results]
       nextPC <== fromList [r.pc | r <- results]
@@ -581,6 +711,7 @@ makeExec instret inputs = do
             , warp
             , mask
             , instr
+            , lock= locked.val
             , nextPc= nextPC.val
             , rd= nextRD.val }
 
@@ -603,7 +734,11 @@ makeWriteBack inputs writeBack = do
         WB2Select
           { warp= inputs.peek.warp
           , mask= inputs.peek.mask
-          , pc= inputs.peek.nextPc }
+          , lock= inputs.peek.lock
+          , pc=
+            fmap (\ (pc,lock) ->
+              lock ? (inputs.peek.pc, pc)
+            ) (Vec.zip inputs.peek.nextPc (unpack inputs.peek.lock)) }
       , consume= do
           inputs.consume
           instret <== instret.val + sumList [zeroExtend a | a <- toBitList inputs.peek.mask]

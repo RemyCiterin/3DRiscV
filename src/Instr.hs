@@ -99,6 +99,8 @@ data Mnemonic =
   | DIVU
   | REM
   | REMU
+  | SETMASK
+  | GETMASK
   deriving (Bounded, Enum, Show, Ord, Eq)
 
 -- | Upper bound on number of instruction mnemonics used by the decoder
@@ -180,6 +182,8 @@ decodeTable =
   , "10100 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOMAX
   , "11000 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOMINU
   , "11100 aq<1> rl<1> rs2<5> rs1<5> 010 rd<5> 0101111" --> AMOMAXU
+  , "imm[11:0] rs1<5> 000 rd<5> 0001011" --> SETMASK
+  , "imm[11:0] rs1<5> 001 rd<5> 0001011" --> GETMASK
   ]
 
 data Instr =
@@ -207,6 +211,12 @@ data Instr =
 
 decodeInstr :: Bit 32 -> Instr
 decodeInstr instr =
+  decoded{opcode= decoded.opcode `is` [SETMASK,GETMASK] ? (0, decoded.opcode)}
+  where
+    decoded= decodeInstrGpu instr
+
+decodeInstrGpu :: Bit 32 -> Instr
+decodeInstrGpu instr =
   Instr
   { raw = instr
   , rd = Option (hasBitField fieldMap "rd" .&&. regDest =!= 0) regDest

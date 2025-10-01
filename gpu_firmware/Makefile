@@ -1,4 +1,4 @@
-CFLAGS =	-march=rv32i_zicsr -mabi=ilp32 -fno-builtin \
+CFLAGS =	-march=rv32im_zicsr -mabi=ilp32 -fno-builtin \
 					-ffreestanding -nostdlib -O2
 CC = riscv32-none-elf-gcc
 LD = riscv32-none-elf-ld
