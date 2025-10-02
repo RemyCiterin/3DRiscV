@@ -20,6 +20,7 @@ executable blarney-test
     TileLink.AcquireRelease,
     TileLink.Interconnect,
     TileLink.Broadcast,
+    TileLink.BusWidth,
     TileLink.Mmio,
     TileLink.Types,
     TileLink.Utils,
