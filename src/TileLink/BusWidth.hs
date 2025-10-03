@@ -1,4 +1,7 @@
-module TileLink.BusWidth where
+module TileLink.BusWidth
+  ( makeIncreaseWidth
+  , makeDecreaseWidth
+  ) where
 
 import Blarney
 import Blarney.Vector (Vec, fromList, toList)
@@ -38,7 +41,7 @@ makeIncreaseWidthChannelA sink source' = do
   index :: Reg (Token n) <- makeReg 0
 
   let low = log2 (valueOf @(LaneWidth p1))
-  let high = high + log2 (valueOf @n) - 1
+  let high = low + log2 (valueOf @n) - 1
 
   always do
     when (source.canPeek .&&. sink.canPut) do
@@ -65,6 +68,7 @@ makeIncreaseWidthChannelA sink source' = do
       laneReg <== (meta.last .||. index.val === ones) ? (Vec.replicate 0, lane)
       maskReg <== (meta.last .||. index.val === ones) ? (Vec.replicate 0, mask)
       index <== (meta.last .||. index.val === ones) ? (0, index.val + 1)
+      source.consume
 
 makeIncreaseWidthChannelC :: forall n p1 p2.
   ( KnownTLParams p1
@@ -87,7 +91,7 @@ makeIncreaseWidthChannelC sink source' = do
   index :: Reg (Token n) <- makeReg 0
 
   let low = log2 (valueOf @(LaneWidth p1))
-  let high = high + log2 (valueOf @n) - 1
+  let high = low + log2 (valueOf @n) - 1
 
   always do
     when (source.canPeek .&&. sink.canPut) do
@@ -108,6 +112,7 @@ makeIncreaseWidthChannelC sink source' = do
 
       laneReg <== (meta.last .||. index.val === ones) ? (Vec.replicate 0, lane)
       index <== (meta.last .||. index.val === ones) ? (0, index.val + 1)
+      source.consume
 
 makeIncreaseWidthChannelD :: forall n p1 p2.
   ( KnownTLParams p1
@@ -131,7 +136,7 @@ makeIncreaseWidthChannelD sinkA sink source' = do
   index :: Reg (Token n) <- makeReg 0
 
   let low = log2 (valueOf @(LaneWidth p1))
-  let high = high + log2 (valueOf @n) - 1
+  let high = low + log2 (valueOf @n) - 1
 
   always do
     when (source.canPeek .&&. sink.canPut) do
@@ -152,6 +157,7 @@ makeIncreaseWidthChannelD sinkA sink source' = do
 
       laneReg <== (meta.last .||. index.val === ones) ? (Vec.replicate 0, lane)
       index <== (meta.last .||. index.val === ones) ? (0, index.val + 1)
+      source.consume
 
   return
     Sink
@@ -180,7 +186,7 @@ makeDecreaseWidthChannelA sink source = do
   let lane :: Vec n (Bit (8 * LaneWidth p1)) = unpack msg.lane
 
   let low = log2 (valueOf @(LaneWidth p1))
-  let high = high + log2 (valueOf @n) - 1
+  let high = low + log2 (valueOf @n) - 1
 
   indexReg :: Reg (Token n) <- makeReg 0
 
@@ -228,7 +234,7 @@ makeDecreaseWidthChannelC sink source = do
   let lane :: Vec n (Bit (8 * LaneWidth p1)) = unpack msg.lane
 
   let low = log2 (valueOf @(LaneWidth p1))
-  let high = high + log2 (valueOf @n) - 1
+  let high = low + log2 (valueOf @n) - 1
 
   indexReg :: Reg (Token n) <- makeReg 0
 
@@ -275,7 +281,7 @@ makeDecreaseWidthChannelD sourceA sink source = do
   let msg = source.peek
 
   let low = log2 (valueOf @(LaneWidth p1))
-  let high = high + log2 (valueOf @n) - 1
+  let high = low + log2 (valueOf @n) - 1
 
   positions :: RegFile (Bit (SourceWidth p1)) (Token n) <- makeRegFile
   always do

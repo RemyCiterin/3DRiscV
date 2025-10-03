@@ -5,6 +5,8 @@
 
 #define NCPU (4 * 16)
 
+__attribute__((aligned(16))) char stack0[128 * NCPU];
+
 inline int setmask(int x) {
   asm volatile(".insn i CUSTOM_0, 0x0, %0, %0, 0\n" : "+r" (x));
   return x;
@@ -15,8 +17,6 @@ inline int getmask() {
   asm volatile(".insn i CUSTOM_0, 0x1, %0, %0, 0\n" : "=r" (x));
   return x;
 }
-
-__attribute__((aligned(16))) char stack0[128 * NCPU];
 
 static int volatile counter = 0;
 
@@ -29,17 +29,16 @@ static int m2[NCPU][NCPU];
 static int m3[NCPU][NCPU];
 
 extern void main(int threadid) {
-
   // Initialize thread locks
   if (threadid == 0) {
     for (int i=0; i < NCPU; i ++) {
       for (int j=0; j < NCPU; j++) {
-        m1[i][j] = i + j;
+        m1[i][j] = i;
       }
     }
     for (int i=0; i < NCPU; i ++) {
       for (int j=0; j < NCPU; j++) {
-        m2[i][j] = i + j;
+        m2[i][j] = i;
       }
     }
 
@@ -64,6 +63,11 @@ extern void main(int threadid) {
 
   // Print statistics
   print_stats(threadid, &timestamp);
+
+  //for (int i=0; i < NCPU; i++) {
+  //  printf("%d ", m3[i][threadid]);
+  //}
+  //printf("\n");
 
   // Allow the next thread to start
   bitmask[threadid] = 1;

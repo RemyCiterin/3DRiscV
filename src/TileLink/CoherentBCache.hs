@@ -1,6 +1,7 @@
 module TileLink.CoherentBCache
   ( BCacheRequest
   , BCacheCore(..)
+  , BCacheStats(..)
   , makeBCacheCoreWith
   , makeBCacheCore
   , testBCacheCore
@@ -85,7 +86,16 @@ data BCacheCore kw iw ow atomic p =
     , abort :: Action ()
     , loadResponse :: Source (Bit (8*LaneWidth p))
     , scResponse :: Source (Bit 1)
-    , atomicResponse :: Source (Bit (8*LaneWidth p)) }
+    , atomicResponse :: Source (Bit (8*LaneWidth p))
+    , stats :: BCacheStats }
+
+data BCacheStats =
+  BCacheStats
+    { numAcquire :: Bit 32
+    , numRelease :: Bit 32
+    , numProbe :: Bit 32
+    , numHit :: Bit 32
+    , numReq :: Bit 32 }
 
 type BCacheState = Bit 3
 st_idle, st_lookup, st_acquire, st_release, st_probe_lookup, st_probe_burst :: BCacheState
@@ -147,6 +157,13 @@ makeBCacheCoreWith :: forall w kw iw ow atomic p.
     -> (atomic -> Bit (8 * LaneWidth p) -> Bit (8 * LaneWidth p))
     -> Module (BCacheCore kw iw ow atomic p)
 makeBCacheCoreWith source slave execAtomic = do
+  -- statistics generation
+  numAcquire :: Reg (Bit 32) <- makeReg 0
+  numRelease :: Reg (Bit 32) <- makeReg 0
+  numProbe :: Reg (Bit 32) <- makeReg 0
+  numReq :: Reg (Bit 32) <- makeReg 0
+  numHit :: Reg (Bit 32) <- makeReg 0
+
   putArbiter <- makeNullArbiter
   getArbiter <- makeNullArbiter
 
@@ -230,12 +247,13 @@ makeBCacheCoreWith source slave execAtomic = do
   always do
     when (state.read 0 === st_release .&&. releaseM.ack.canPeek .&&. acquireM.canAcquire) do
       acquireM.acquireBlock (tag #NtoT ()) (way.val # index.val # 0) (baseAddr key.val)
-      --display "acquire block: 0x" (formatHex 0 (baseAddr key.val))
+      numRelease <== numRelease.val + 1
       state.write 0 st_acquire
       releaseM.ack.consume
 
     when (state.read 0 === st_acquire .&&. acquireM.canAcquireAck .&&. canExecOp) do
       storeListRAM keyRam way.val index.val key.val
+      numAcquire <== numAcquire.val + 1
 
       execOp way.val
       exec_w <== true
@@ -266,6 +284,8 @@ makeBCacheCoreWith source slave execAtomic = do
           | (p,t) <- zip permRam keyRam]
       probeM.start.consume
       cap <== perm
+
+      numProbe <== numProbe.val + 1
 
     when (state.read 0 === st_probe_lookup .&&. probeM.evict.canPut) do
       let (key, index, _) = decode @p @kw @iw @ow address.val
@@ -330,6 +350,7 @@ makeBCacheCoreWith source slave execAtomic = do
           .&&. acquireM.canAcquire
           .&&. releaseM.start.canPut
       , match= \ msb -> do
+          numReq <== numReq.val + 1
           exec_w <== true
           dynamicAssert (state.read 0 === st_lookup) "matching with an unexpected state"
           key <== msb
@@ -351,6 +372,7 @@ makeBCacheCoreWith source slave execAtomic = do
             state.write 0 st_idle
             when dirty_w.val do
               storeListRAM permRam hitWay index.val dirty
+            numHit <== numHit.val + 1
           else do
             way <== hitWay
             reserved <== false
@@ -397,7 +419,14 @@ makeBCacheCoreWith source slave execAtomic = do
                 let (op,pos) = dataQueue.first.val
                 dataRamA.storeBE pos ones (execAtomic op dataRamA.outBE)
                 dataQueue.deq
-            , peek= dataRamA.outBE}}
+            , peek= dataRamA.outBE}
+      , stats=
+        BCacheStats
+          { numAcquire= numAcquire.val
+          , numRelease= numRelease.val
+          , numProbe= numProbe.val
+          , numHit= numHit.val
+          , numReq= numReq.val }}
 
 makeBCacheCore :: forall w kw iw ow atomic p.
   ( Bits atomic

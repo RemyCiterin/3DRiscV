@@ -30,6 +30,7 @@ import CSR
 import TileLink
 import TileLink.CoherentBCache
 import TileLink.Broadcast
+import TileLink.BusWidth
 
 debug :: Bool
 debug = False
@@ -462,6 +463,95 @@ makeCoalescingUnit inputs = do
             , lane
             , strb }}
 
+makeDCacheUnit :: forall p.
+  ( KnownTLParams p
+  , AddrWidth p ~ 32
+  , LaneWidth p ~ 4 * WarpSize
+  , 8 * LaneWidth p ~ 32 * WarpSize )
+    => Bit (SourceWidth p) -> Source RR2Exec -> Module (Source Exec2WB, TLMaster p, BCacheStats)
+makeDCacheUnit cacheSource inputs0 = do
+  inputs <- makeCoalescingUnit inputs0
+
+  (cache, master) <- withName "dcache" $
+    makeBCacheCore @2 @20 @6 @(4-WarpLogSize) @() @p cacheSource (\ _ lane -> lane)
+  key :: Reg (Bit 20) <- makeReg dontCare
+
+  queue1 :: Queue CoalescedMemop <- makePipelineQueue 1
+  queue2 :: Queue CoalescedMemop <- makePipelineQueue 1
+
+  always do
+    when (inputs.canPeek .&&. queue1.notFull .&&. cache.canLookup) do
+      let addr :: Bit 32 = inputs.peek.block # 0
+      let (msb_index,offset) = split inputs.peek.block
+      let (msb, index) = split msb_index
+      key <== msb
+
+      when (addr === 0x10000000 .&&. inputs.peek.isStore .&&. at @0 inputs.peek.strb) do
+        when debug (display_ "print char: ")
+        displayAscii (slice @7 @0 (inputs.peek.lane))
+        when debug (display "")
+
+      if inputs.peek.isStore
+      then do
+        when debug do
+          display
+            "        [0x"
+            (formatHex 0 addr)
+            "] <= "
+            (formatHex 0 inputs.peek.lane)
+            " if 0x"
+            (formatHex 1 inputs.peek.strb)
+        cache.lookup index offset (tag #Store (inputs.peek.strb, inputs.peek.lane))
+      else do
+        when debug do
+          display "        read at addr: " (formatHex 0 addr)
+        cache.lookup index offset (item #Load)
+
+      queue1.enq inputs.peek
+      inputs.consume
+
+    when (queue2.notFull .&&. queue1.canDeq .&&. cache.canMatch) do
+      queue2.enq queue1.first
+      cache.match key.val
+      queue1.deq
+
+  let isByte :: Bit 2 -> Bit 1 = \ width -> width === 0b00
+  let isHalf :: Bit 2 -> Bit 1 = \ width -> width === 0b01
+  let isWord :: Bit 2 -> Bit 1 = \ width -> width === 0b10
+
+  let genRd i =
+        let width = queue2.first.width in
+        let unsigned = queue2.first.isUnsigned in
+        let bytes = cache.loadResponse.peek .>>. ((queue2.first.offset!i) # (0 :: Bit 3)) in
+        select
+          [ isHalf width .&&. inv unsigned --> signExtend (slice @15 @0 bytes)
+          , isByte width .&&. inv unsigned --> signExtend (slice @7 @0 bytes)
+          , isHalf width .&&. unsigned --> zeroExtend (slice @15 @0 bytes)
+          , isByte width .&&. unsigned --> zeroExtend (slice @7 @0 bytes)
+          , isWord width --> slice @31 @0 bytes ]
+
+  let lanes :: [Bit 32] = [ genRd i | i <- [0..valueOf @WarpSize - 1]]
+
+  return
+    ( Source
+      { canPeek= queue2.canDeq .&&. (queue2.first.isStore .||. cache.loadResponse.canPeek)
+      , consume= do
+        when (inv queue2.first.isStore) do
+          cache.loadResponse.consume
+        queue2.deq
+      , peek=
+        Exec2WB
+          { warp= queue2.first.warp
+          , mask= queue2.first.mask
+          , instr= queue2.first.instr
+          , pc= queue2.first.pc
+          , nextPc= fromList (replicate (valueOf @WarpSize) (queue2.first.pc + 4))
+          , rd= fromList lanes
+          , lock= 0}}
+    , master
+    , cache.stats )
+
+
 makeMemoryUnit :: Source RR2Exec -> Module (Source Exec2WB)
 makeMemoryUnit inputs0 = do
   inputs <- makeCoalescingUnit inputs0
@@ -622,7 +712,11 @@ makeAluDivider inputs = do
 
 makeExec :: Bit 32 -> Source RR2Exec -> Module (Source Exec2WB)
 makeExec instret inputs = do
-  dmemOut <- makeMemoryUnit (inputs{canPeek= inputs.canPeek .&&. inputs.peek.instr.isMemAccess})
+  (dmemOut, master, stats) <-
+    makeDCacheUnit @TLConfigSimt
+      cacheSource
+      (inputs{canPeek= inputs.canPeek .&&. inputs.peek.instr.isMemAccess})
+  makeDCacheSlave master
 
   let isDivRem = inputs.peek.instr.opcode `is` [DIV,DIVU,REM,REMU]
   let isMul = inputs.peek.instr.opcode `is` [MUL,MULH,MULHSU,MULHU]
@@ -775,3 +869,31 @@ makeGpu rx = mdo
     cycle <== cycle.val + 1
 
   pure (1, zeroExtend fetch2decode.canPeek)
+
+
+cacheSource = 0
+type TLConfigCached = TLParams 32 4 4 8 8
+type TLConfigUncached = TLParams 32 4 4 8 0
+type TLConfigSimt = TLParams 32 (4*WarpSize) 4 8 8
+
+makeDCacheSlave :: TLMaster TLConfigSimt -> Module ()
+makeDCacheSlave simtMaster = do
+  let bconfig =
+        BroadcastConfig
+          { sources=
+              [ cacheSource ]
+          , logSize= 6
+          , baseSink= 0 }
+  (coherentSlave, uncoherentMaster) <-
+    withName "broadcast" $ makeBroadcast @TLConfigCached bconfig
+
+  let config =
+        TLRAMConfig
+          { fileName= Just "IMem.hex"
+          , lowerBound= 0x80000000
+          , bypassChannelA= False
+          , bypassChannelD= False
+          , sink= 0 }
+  uncoherentSlave <- makeTLRAM @28 @TLConfigUncached config
+  makeConnection uncoherentMaster uncoherentSlave
+  makeDecreaseWidth True simtMaster coherentSlave
