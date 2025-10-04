@@ -134,8 +134,11 @@ makeFetch cacheSource inputs = do
     makeBCacheCore @2 @20 @6 @4 @() @p cacheSource (\ _ lane -> lane)
   key :: Reg (Bit 20) <- makeReg dontCare
 
+  --responses :: Queue (Bit 32) <- makeSizedQueueCore 4
+  --queue :: Queue Schedule2Fetch <- makePipelineQueue 3
+
+  queue :: Queue Schedule2Fetch <- makeSizedQueue 3
   responses :: Queue (Bit 32) <- makeSizedQueueCore 4
-  queue :: Queue Schedule2Fetch <- makePipelineQueue 3
 
   always do
     when (cache.canLookup .&&. inputs.canPeek .&&. queue.notFull) do
@@ -497,13 +500,13 @@ makeCoalescingUnit inputs = do
             , lane
             , strb }}
 
-makeDCacheUnit :: forall p.
+makeMemoryUnit :: forall p.
   ( KnownTLParams p
   , AddrWidth p ~ 32
   , LaneWidth p ~ 4 * WarpSize
   , 8 * LaneWidth p ~ 32 * WarpSize )
     => Bit (SourceWidth p) -> Source RR2Exec -> Module (Source Exec2WB, TLMaster p, BCacheStats)
-makeDCacheUnit cacheSource inputs0 = do
+makeMemoryUnit cacheSource inputs0 = do
   inputs <- makeCoalescingUnit inputs0
 
   (cache, master) <- withName "dcache" $
@@ -581,6 +584,53 @@ makeDCacheUnit cacheSource inputs0 = do
           , rd= fromList lanes}}
     , master
     , cache.stats )
+
+makeMemoryUnitWrapper ::
+  ( KnownTLParams p
+  , AddrWidth p ~ 32
+  , LaneWidth p ~ 4 * WarpSize
+  , 8 * LaneWidth p ~ 32 * WarpSize )
+    => Bit (SourceWidth p) -> Source RR2Exec -> Module (Source Exec2WB, TLMaster p, BCacheStats)
+makeMemoryUnitWrapper cacheSource inputs = do
+  masks :: Queue WarpMask <- makeSizedQueue 4
+
+  (outputs, master, stats) <-
+    makeMemoryUnit cacheSource
+      Source
+        { canPeek= masks.notFull .&&. inputs.canPeek
+        , consume= do
+          masks.enq inputs.peek.mask
+          inputs.consume
+        , peek= inputs.peek }
+
+  queue :: Queue Exec2WB <- makePipelineQueue 1
+  lane :: [Reg (Bit 32)] <- replicateM (valueOf @WarpSize) (makeReg dontCare)
+  mask :: Ehr WarpMask <- makeEhr 2 0
+
+  always do
+    when (queue.notFull .&&. masks.canDeq .&&. outputs.canPeek) do
+      sequence_
+        [ when (unsafeAt i outputs.peek.mask) do
+            lane!i <== outputs.peek.rd!i
+          | i <- [0..valueOf @WarpSize - 1]]
+
+      mask.write 0 (mask.read 0 .|. outputs.peek.mask)
+
+      when (mask.read 1 === masks.first) do
+        queue.enq (outputs.peek{mask= masks.first} :: Exec2WB)
+        mask.write 1 0
+        masks.deq
+
+      outputs.consume
+
+  let source =
+        Source
+          { consume= queue.deq
+          , canPeek= queue.canDeq
+          , peek= queue.first{rd= fromList [l.val | l <- lane]} :: Exec2WB }
+
+  return (source, master, stats)
+
 
 makeAluMultiplier :: Source RR2Exec -> Module (Source Exec2WB)
 makeAluMultiplier inputs = do
@@ -684,7 +734,7 @@ makeExec :: forall p.
     -> Module (Source Exec2WB, TLMaster p)
 makeExec instret cacheSource inputs = do
   (dmemOut, master, stats) <-
-    makeDCacheUnit @p cacheSource
+    makeMemoryUnitWrapper @p cacheSource
       (inputs{canPeek= inputs.canPeek .&&. inputs.peek.instr.isMemAccess})
 
   let isDivRem = inputs.peek.instr.opcode `is` [DIV,DIVU,REM,REMU]
@@ -888,7 +938,7 @@ makeDCacheSlave instrMaster simtMaster = do
           , bypassChannelA= False
           , bypassChannelD= False
           , sink= 0 }
-  uncoherentSlave <- makeTLRAM @08 @TLConfigUncached config
+  uncoherentSlave <- makeTLRAM @28 @TLConfigUncached config
   makeConnection uncoherentMaster uncoherentSlave
   makeConnection coherentMaster coherentSlave
   makeDecreaseWidth True simtMaster dataSlave

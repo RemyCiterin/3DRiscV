@@ -54,15 +54,11 @@ extern void main(int threadid) {
   init_timestamp(&timestamp);
   simt_sync();
 
-  simt_push();
   for (int i=0; i < NCPU; i++) {
-    simt_push();
     for (int j=0; j < NCPU; j++) {
       m3[i][threadid] += m1[i][j] * m2[j][threadid];
     }
-    simt_pop();
   }
-  simt_pop();
 
   // Wait for the execution of all the previous threads to finish
   while (threadid && !bitmask[threadid-1]) {}
