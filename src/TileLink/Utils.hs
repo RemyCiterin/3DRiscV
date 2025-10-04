@@ -54,8 +54,8 @@ instance KnownNat_ChannelA aw dw sw ow => FShow (ChannelA_Flit aw dw sw ow) wher
       sep :: Format
       sep = fshow ","
 
-      formatData = source <> sep <> size <> address <> sep <> formatLane lane
-      formatNoData = source <> sep <> size <> address
+      formatData = source <> sep <> size <> sep <> address <> sep <> formatLane lane
+      formatNoData = source <> sep <> size <> sep <> address
 
 instance (KnownNat aw, KnownNat sw, KnownNat ow) => FShow (ChannelB_Flit aw sw ow) where
   fshow msg =

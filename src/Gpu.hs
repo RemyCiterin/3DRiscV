@@ -54,7 +54,7 @@ displayAscii term =
 --
 -- 16 warps of 4 threads
 
-type LogNumWarp = 4
+type LogNumWarp = 1
 type WarpId = Bit LogNumWarp
 
 type WarpLogSize = 2
@@ -116,28 +116,49 @@ data WB2Select =
 
 type WriteBack = WarpId -> WarpMask -> RegId -> Vec WarpSize (Bit 32) -> Action ()
 
-makeFetch :: Source Select2Fetch -> Module (Source Fetch2Decode)
-makeFetch inputs = do
-  imem :: RAM (Bit 22) (Bit 32) <- makeRAMInit "IMem.hex"
+makeFetch :: forall p.
+  ( KnownTLParams p
+  , AddrWidth p ~ 32
+  , LaneWidth p ~ 4
+  , 8 * LaneWidth p ~ 32 )
+    => Bit (SourceWidth p) -> Source Select2Fetch -> Module (Source Fetch2Decode, TLMaster p)
+makeFetch cacheSource inputs = do
+  (cache, master) <- withName "icache" $
+    makeBCacheCore @2 @20 @6 @4 @() @p cacheSource (\ _ lane -> lane)
+  key :: Reg (Bit 20) <- makeReg dontCare
 
-  queue :: Queue Select2Fetch <- makePipelineQueue 1
+  responses :: Queue (Bit 32) <- makeSizedQueueCore 4
+  queue :: Queue Select2Fetch <- makePipelineQueue 3
 
   always do
-    when (inputs.canPeek .&&. queue.notFull) do
-      imem.load (truncate (inputs.peek.pc .>>. (2 :: Bit 3)))
+    when (cache.canLookup .&&. inputs.canPeek .&&. queue.notFull) do
+      let (msb_index,offset) = split (slice @31 @2 inputs.peek.pc)
+      let (msb, index) = split msb_index
+      cache.lookup index offset (item #Load)
       queue.enq inputs.peek
       inputs.consume
+      key <== msb
+
+    when (cache.canMatch) do
+      cache.match key.val
+
+    when (cache.loadResponse.canPeek .&&. responses.notFull) do
+      responses.enq cache.loadResponse.peek
+      cache.loadResponse.consume
 
   return
-    Source
-      { canPeek= queue.canDeq
-      , consume= queue.deq
-      , peek=
-          Fetch2Decode
-            { warp= queue.first.warp
-            , mask= queue.first.mask
-            , pc= queue.first.pc
-            , instr= imem.out }}
+    ( Source
+        { canPeek= queue.canDeq .&&. responses.canDeq
+        , consume= do
+            responses.deq
+            queue.deq
+        , peek=
+            Fetch2Decode
+              { warp= queue.first.warp
+              , mask= queue.first.mask
+              , pc= queue.first.pc
+              , instr= responses.first }}
+    , master)
 
 makeDecode :: Source Fetch2Decode -> Module (Source Decode2RR)
 makeDecode inputs = do
@@ -305,6 +326,19 @@ makeSelect inputs = do
               warp.write 0 (1 + warp.read 0)
               when (warp.read 0 === 0) do
                 round <== round.val + 1
+
+              let mask :: WarpMask =
+                    fromBitList [inv s.out.busy .&&. s.out.pc === pc.val | s <- statesA]
+              when (pc.val === 0x800000d8) do
+                display "0x800000d8 warp: " (warp.read 0) " mask: " (formatHex 1 mask)
+              when (pc.val === 0x800000dc) do
+                display "0x800000dc warp: " (warp.read 0) " mask: " (formatHex 1 mask)
+              when (pc.val === 0x800000e0) do
+                display "0x800000e0 warp: " (warp.read 0) " mask: " (formatHex 1 mask)
+              when (pc.val === 0x800000e4) do
+                display "0x800000e4 warp: " (warp.read 0) " mask: " (formatHex 1 mask)
+              when (pc.val === 0x800000e8) do
+                display "0x800000e8 warp: " (warp.read 0) " mask: " (formatHex 1 mask)
           , peek=
               Select2Fetch
                 { warp= warp.read 0
@@ -476,13 +510,12 @@ makeDCacheUnit cacheSource inputs0 = do
     makeBCacheCore @2 @20 @6 @(4-WarpLogSize) @() @p cacheSource (\ _ lane -> lane)
   key :: Reg (Bit 20) <- makeReg dontCare
 
-  queue1 :: Queue CoalescedMemop <- makePipelineQueue 1
-  queue2 :: Queue CoalescedMemop <- makePipelineQueue 1
+  queue :: Queue CoalescedMemop <- makePipelineQueue 2
 
   always do
-    when (inputs.canPeek .&&. queue1.notFull .&&. cache.canLookup) do
+    when (inputs.canPeek .&&. queue.notFull .&&. cache.canLookup) do
       let addr :: Bit 32 = inputs.peek.block # 0
-      let (msb_index,offset) = split inputs.peek.block
+      let (msb_index, offset) = split inputs.peek.block
       let (msb, index) = split msb_index
       key <== msb
 
@@ -507,22 +540,20 @@ makeDCacheUnit cacheSource inputs0 = do
           display "        read at addr: " (formatHex 0 addr)
         cache.lookup index offset (item #Load)
 
-      queue1.enq inputs.peek
+      queue.enq inputs.peek
       inputs.consume
 
-    when (queue2.notFull .&&. queue1.canDeq .&&. cache.canMatch) do
-      queue2.enq queue1.first
+    when (cache.canMatch) do
       cache.match key.val
-      queue1.deq
 
   let isByte :: Bit 2 -> Bit 1 = \ width -> width === 0b00
   let isHalf :: Bit 2 -> Bit 1 = \ width -> width === 0b01
   let isWord :: Bit 2 -> Bit 1 = \ width -> width === 0b10
 
   let genRd i =
-        let width = queue2.first.width in
-        let unsigned = queue2.first.isUnsigned in
-        let bytes = cache.loadResponse.peek .>>. ((queue2.first.offset!i) # (0 :: Bit 3)) in
+        let width = queue.first.width in
+        let unsigned = queue.first.isUnsigned in
+        let bytes = cache.loadResponse.peek .>>. ((queue.first.offset!i) # (0 :: Bit 3)) in
         select
           [ isHalf width .&&. inv unsigned --> signExtend (slice @15 @0 bytes)
           , isByte width .&&. inv unsigned --> signExtend (slice @7 @0 bytes)
@@ -534,80 +565,11 @@ makeDCacheUnit cacheSource inputs0 = do
 
   return
     ( Source
-      { canPeek= queue2.canDeq .&&. (queue2.first.isStore .||. cache.loadResponse.canPeek)
+      { canPeek= queue.canDeq .&&. (queue.first.isStore .||. cache.loadResponse.canPeek)
       , consume= do
-        when (inv queue2.first.isStore) do
+        when (inv queue.first.isStore) do
           cache.loadResponse.consume
-        queue2.deq
-      , peek=
-        Exec2WB
-          { warp= queue2.first.warp
-          , mask= queue2.first.mask
-          , instr= queue2.first.instr
-          , pc= queue2.first.pc
-          , nextPc= fromList (replicate (valueOf @WarpSize) (queue2.first.pc + 4))
-          , rd= fromList lanes
-          , lock= 0}}
-    , master
-    , cache.stats )
-
-
-makeMemoryUnit :: Source RR2Exec -> Module (Source Exec2WB)
-makeMemoryUnit inputs0 = do
-  inputs <- makeCoalescingUnit inputs0
-  queue :: Queue CoalescedMemop <- makePipelineQueue 1
-  dmem :: RAMBE 22 (4 * WarpSize) <- makeDualRAMForwardInitBE "DMem.hex"
-
-  always do
-    when (inputs.canPeek .&&. queue.notFull) do
-      let (msb, lsb) = split inputs.peek.block
-
-      let addr :: Bit 32 = inputs.peek.block # 0
-      when (addr === 0x10000000 .&&. inputs.peek.isStore .&&. at @0 inputs.peek.strb) do
-        when debug (display_ "print char: ")
-        displayAscii (slice @7 @0 (inputs.peek.lane))
-        when debug (display "")
-
-      if msb === (truncateLSB (0x80000000::Bit 32)) .&&. inputs.peek.isStore
-      then do
-        when debug do
-          display
-            "        [0x"
-            (formatHex 0 addr)
-            "] <= "
-            (formatHex 0 inputs.peek.lane)
-            " if 0x"
-            (formatHex 1 inputs.peek.strb)
-        dmem.storeBE lsb inputs.peek.strb inputs.peek.lane
-      else do
-        when debug do
-          display "        read at addr: " (formatHex 0 addr)
-        dmem.loadBE lsb
-
-      queue.enq inputs.peek
-      inputs.consume
-
-  let isByte :: Bit 2 -> Bit 1 = \ width -> width === 0b00
-  let isHalf :: Bit 2 -> Bit 1 = \ width -> width === 0b01
-  let isWord :: Bit 2 -> Bit 1 = \ width -> width === 0b10
-
-  let genRd i =
-        let width = queue.first.width in
-        let unsigned = queue.first.isUnsigned in
-        let bytes = dmem.outBE .>>. ((queue.first.offset!i) # (0 :: Bit 3)) in
-        select
-          [ isHalf width .&&. inv unsigned --> signExtend (slice @15 @0 bytes)
-          , isByte width .&&. inv unsigned --> signExtend (slice @7 @0 bytes)
-          , isHalf width .&&. unsigned --> zeroExtend (slice @15 @0 bytes)
-          , isByte width .&&. unsigned --> zeroExtend (slice @7 @0 bytes)
-          , isWord width --> slice @31 @0 bytes ]
-
-  let lanes :: [Bit 32] = [ genRd i | i <- [0..valueOf @WarpSize - 1]]
-
-  return
-    Source
-      { canPeek= queue.canDeq
-      , consume= queue.deq
+        queue.deq
       , peek=
         Exec2WB
           { warp= queue.first.warp
@@ -617,7 +579,8 @@ makeMemoryUnit inputs0 = do
           , nextPc= fromList (replicate (valueOf @WarpSize) (queue.first.pc + 4))
           , rd= fromList lanes
           , lock= 0}}
-
+    , master
+    , cache.stats )
 
 makeAluMultiplier :: Source RR2Exec -> Module (Source Exec2WB)
 makeAluMultiplier inputs = do
@@ -710,13 +673,19 @@ makeAluDivider inputs = do
     divOverflow x y =
           opcode `is` [DIV,REM] .&&. signedDivOverflow (x,y)
 
-makeExec :: Bit 32 -> Source RR2Exec -> Module (Source Exec2WB)
-makeExec instret inputs = do
+makeExec :: forall p.
+  ( KnownTLParams p
+  , AddrWidth p ~ 32
+  , LaneWidth p ~ 4 * WarpSize
+  , 8 * LaneWidth p ~ 32 * WarpSize )
+    => Bit 32
+    -> Bit (SourceWidth p)
+    -> Source RR2Exec
+    -> Module (Source Exec2WB, TLMaster p)
+makeExec instret cacheSource inputs = do
   (dmemOut, master, stats) <-
-    makeDCacheUnit @TLConfigSimt
-      cacheSource
+    makeDCacheUnit @p cacheSource
       (inputs{canPeek= inputs.canPeek .&&. inputs.peek.instr.isMemAccess})
-  makeDCacheSlave master
 
   let isDivRem = inputs.peek.instr.opcode `is` [DIV,DIVU,REM,REMU]
   let isMul = inputs.peek.instr.opcode `is` [MUL,MULH,MULHSU,MULHU]
@@ -736,6 +705,15 @@ makeExec instret inputs = do
 
   cycle :: Reg (Bit 32) <- makeReg 0
   always $ cycle <== cycle.val + 1
+
+  always do
+    when (slice @20 @0 cycle.val === 0) do
+      display "stats: "
+      display "\thit: " stats.numHit
+      display "\treq: " stats.numReq
+      display "\tacquire: " stats.numAcquire
+      display "\trelease: " stats.numRelease
+      display "\tprobe: " stats.numProbe
 
   always do
     when (outputs.notFull .&&. dmemOut.canPeek) do
@@ -809,7 +787,7 @@ makeExec instret inputs = do
             , nextPc= nextPC.val
             , rd= nextRD.val }
 
-  return (toSource outputs)
+  return (toSource outputs, master)
 
 makeWriteBack :: Source Exec2WB -> WriteBack -> Module (Source WB2Select, Bit 32)
 makeWriteBack inputs writeBack = do
@@ -857,31 +835,53 @@ makeWriteBack inputs writeBack = do
 
 makeGpu :: Bit 1 -> Module (Bit 1, Bit 8)
 makeGpu rx = mdo
-  select2fetch <- withName "fetch" $ makeSelect wb2select
-  exec2wb <- withName "exec" $ makeExec instret rr2exec
+  select2fetch <- withName "select" $ makeSelect wb2select
+  (exec2wb, dmaster) <- withName "exec" $ makeExec @TLConfigSimt instret dcacheSource rr2exec
   (wb2select, instret) <- withName "wite_back" $ makeWriteBack exec2wb writeBack
   (rr2exec, writeBack) <- withName "register_read" $ makeRegisterRead decode2rr
   decode2rr <- withName "decode" $ makeDecode fetch2decode
-  fetch2decode <- makeFetch select2fetch
+  (fetch2decode, imaster) <- withName "fetch" $ makeFetch @TLConfigCached icacheSource select2fetch
 
   cycle :: Reg (Bit 32) <- makeReg 0
   always do
     cycle <== cycle.val + 1
 
+  makeDCacheSlave imaster dmaster
+
   pure (1, zeroExtend fetch2decode.canPeek)
 
-
-cacheSource = 0
+dcacheSource = 0
+icacheSource = 1
 type TLConfigCached = TLParams 32 4 4 8 8
 type TLConfigUncached = TLParams 32 4 4 8 0
 type TLConfigSimt = TLParams 32 (4*WarpSize) 4 8 8
 
-makeDCacheSlave :: TLMaster TLConfigSimt -> Module ()
-makeDCacheSlave simtMaster = do
+makeDCacheSlave :: TLMaster TLConfigCached -> TLMaster TLConfigSimt -> Module ()
+makeDCacheSlave instrMaster simtMaster = do
+  let xbarconfig =
+        XBarConfig
+          { bce= True
+          , rootAddr= \ _ -> 0
+          , rootSink= \ _ -> 0
+          , rootSource= \ x ->
+              select
+                [ x === dcacheSource --> 0
+                , x === icacheSource --> 1 ]
+          , sizeChannelA= 2
+          , sizeChannelB= 2
+          , sizeChannelC= 2
+          , sizeChannelD= 2
+          , sizeChannelE= 2 }
+
+  ([coherentMaster], [dataSlave, instrSlave]) <-
+    withName "xbar" $ makeTLXBar @1 @2 @TLConfigCached xbarconfig
+  makeConnection instrMaster instrSlave
+
   let bconfig =
         BroadcastConfig
           { sources=
-              [ cacheSource ]
+              [ dcacheSource
+              , icacheSource ]
           , logSize= 6
           , baseSink= 0 }
   (coherentSlave, uncoherentMaster) <-
@@ -896,4 +896,5 @@ makeDCacheSlave simtMaster = do
           , sink= 0 }
   uncoherentSlave <- makeTLRAM @28 @TLConfigUncached config
   makeConnection uncoherentMaster uncoherentSlave
-  makeDecreaseWidth True simtMaster coherentSlave
+  makeConnection coherentMaster coherentSlave
+  makeDecreaseWidth True simtMaster dataSlave
