@@ -54,7 +54,7 @@ displayAscii term =
 --
 -- 16 warps of 4 threads
 
-type LogNumWarp = 1
+type LogNumWarp = 4
 type WarpId = Bit LogNumWarp
 
 type WarpLogSize = 2
@@ -62,10 +62,14 @@ type WarpSize = 2 ^ WarpLogSize
 type WarpMask = Bit WarpSize
 type WarpIdx = Bit (Log2Ceil WarpSize)
 
+type LogNumLevel = 5
+type Level = Bit LogNumLevel
+
 data Select2Fetch =
   Select2Fetch
     { warp :: WarpId
     , mask :: WarpMask
+    , level :: Level
     , pc :: Bit 32 }
   deriving(Generic, Bits)
 
@@ -73,6 +77,7 @@ data Fetch2Decode =
   Fetch2Decode
     { warp :: WarpId
     , mask :: WarpMask
+    , level :: Level
     , pc :: Bit 32
     , instr :: Bit 32 }
   deriving(Generic, Bits)
@@ -81,6 +86,7 @@ data Decode2RR =
   Decode2RR
     { warp :: WarpId
     , mask :: WarpMask
+    , level :: Level
     , pc :: Bit 32
     , instr :: Instr }
   deriving(Generic, Bits)
@@ -89,6 +95,7 @@ data RR2Exec =
   RR2Exec
     { warp :: WarpId
     , mask :: WarpMask
+    , level :: Level
     , pc :: Bit 32
     , instr :: Instr
     , op1 :: Vec WarpSize (Bit 32)
@@ -99,7 +106,7 @@ data Exec2WB =
   Exec2WB
     { warp :: WarpId
     , mask :: WarpMask
-    , lock :: WarpMask
+    , level :: Level
     , instr :: Instr
     , rd :: Vec WarpSize (Bit 32)
     , nextPc :: Vec WarpSize (Bit 32)
@@ -110,7 +117,7 @@ data WB2Select =
   WB2Select
     { warp :: WarpId
     , mask :: WarpMask
-    , lock :: WarpMask
+    , level :: Level
     , pc :: Vec WarpSize (Bit 32) }
   deriving(Generic, Bits)
 
@@ -156,6 +163,7 @@ makeFetch cacheSource inputs = do
             Fetch2Decode
               { warp= queue.first.warp
               , mask= queue.first.mask
+              , level= queue.first.level
               , pc= queue.first.pc
               , instr= responses.first }}
     , master)
@@ -171,6 +179,7 @@ makeDecode inputs = do
         Decode2RR
           { warp= inputs.peek.warp
           , mask= inputs.peek.mask
+          , level= inputs.peek.level
           , pc= inputs.peek.pc
           , instr= decodeInstrGpu inputs.peek.instr }
   return (toSource queue)
@@ -213,6 +222,7 @@ makeHalfRegisterFile inputs = do
             RR2Exec
               { warp= stage1.first.warp
               , mask= stage1.first.mask
+              , level= stage1.first.level
               , pc= stage1.first.pc
               , instr= stage1.first.instr
               , op1= stage2.first
@@ -267,7 +277,7 @@ data SimtState =
   SimtState
     { busy :: Bit 1
     , pc :: Bit 32
-    , locked :: Bit 1 }
+    , level :: Level }
   deriving(Generic, Bits)
 
 makeSelect :: Source WB2Select -> Module (Source Select2Fetch)
@@ -287,6 +297,8 @@ makeSelect inputs = do
   initIndex :: Reg WarpId <- makeReg 0
   initDone :: Reg (Bit 1) <- makeReg false
 
+  let level :: Level = tree1 (\ x y -> x .>. y ? (x,y)) [s.out.level | s <- statesA]
+
   always do
     -- Write back results from exec stage
     when inputs.canPeek do
@@ -296,14 +308,14 @@ makeSelect inputs = do
             SimtState
               { busy= false
               , pc= inputs.peek.pc!i
-              , locked= unsafeAt i inputs.peek.lock }
+              , level= inputs.peek.level }
       inputs.consume
 
     sequence_ [s.load (warp.read 1) | s <- statesA]
 
     -- Scheduler: choose the first thread availables from `round.val`
     let choosen :: WarpMask =
-          let actives = fromBitList [inv s.out.busy .&&. inv s.out.locked | s <- statesA] in
+          let actives = fromBitList [inv s.out.busy .&&. s.out.level === level | s <- statesA] in
           rotr (firstHot (rotl actives round.val)) round.val
 
     forM_ [0..valueOf @WarpSize-1] \ i -> do
@@ -311,38 +323,31 @@ makeSelect inputs = do
 
     when (inv initDone.val) do
       sequence_
-        [ s.store initIndex.val SimtState{busy= false, pc= 0x80000000, locked= false}
+        [ s.store initIndex.val SimtState{busy= false, pc= 0x80000000, level= 1}
         | s <-statesA ]
       initDone <== initIndex.val + 1 === 0
       initIndex <== initIndex.val + 1
+
+  let mask =
+        fromBitList
+          [inv s.out.busy .&&. s.out.pc === pc.val .&&. s.out.level === level
+            | s <- statesA]
 
   let source :: Source Select2Fetch =
         Source
           { consume= do
               sequence_
-                [ when (inv s.out.busy .&&. s.out.pc === pc.val) do
-                  s.store (warp.read 0) SimtState{busy= true, pc= s.out.pc, locked= false}
-                | s <- statesA]
+                [ when (unsafeAt i mask) do
+                  s.store (warp.read 0) SimtState{busy= true, pc= s.out.pc, level= level}
+                | (s,i) <- zip statesA [0..]]
               warp.write 0 (1 + warp.read 0)
               when (warp.read 0 === 0) do
                 round <== round.val + 1
-
-              let mask :: WarpMask =
-                    fromBitList [inv s.out.busy .&&. s.out.pc === pc.val | s <- statesA]
-              when (pc.val === 0x800000d8) do
-                display "0x800000d8 warp: " (warp.read 0) " mask: " (formatHex 1 mask)
-              when (pc.val === 0x800000dc) do
-                display "0x800000dc warp: " (warp.read 0) " mask: " (formatHex 1 mask)
-              when (pc.val === 0x800000e0) do
-                display "0x800000e0 warp: " (warp.read 0) " mask: " (formatHex 1 mask)
-              when (pc.val === 0x800000e4) do
-                display "0x800000e4 warp: " (warp.read 0) " mask: " (formatHex 1 mask)
-              when (pc.val === 0x800000e8) do
-                display "0x800000e8 warp: " (warp.read 0) " mask: " (formatHex 1 mask)
           , peek=
               Select2Fetch
-                { warp= warp.read 0
-                , mask= fromBitList [inv s.out.busy .&&. s.out.pc === pc.val | s <- statesA]
+                { mask
+                , level
+                , warp= warp.read 0
                 , pc= pc.val }
           , canPeek=
               orList [inv s.out.busy | s <- statesA] .&&.
@@ -352,16 +357,6 @@ makeSelect inputs = do
   makeConnection source (toSink queue)
   return (toSource queue)
 
-data DMemReq =
-  DMemReq
-    { isStore :: Bit 1
-    , width :: Bit 2
-    , isUnsigned :: Bit 1
-    , mask :: WarpMask
-    , addr :: Vec WarpSize (Bit 32)
-    , lane :: Vec WarpSize (Bit 32) }
-  deriving(Generic, Bits)
-
 data CoalescedMemop =
   CoalescedMemop
     { width :: Bit 2
@@ -370,6 +365,8 @@ data CoalescedMemop =
     -- ^ in case of a load with a size less than a word, do we use signed or zero extension
     , isStore :: Bit 1
     -- ^ is the current request a load or a store
+    , level :: Level
+    -- ^ level in the virtual threads stack
     , mask :: WarpMask
     -- ^ execution mask of the warp
     , warp :: WarpId
@@ -404,6 +401,7 @@ makeCoalescingUnit inputs = do
   valid0 :: Ehr (Bit 1) <- makeEhr 2 false
 
   width1 :: Reg (Bit 2) <- makeReg dontCare
+  level1 :: Reg Level <- makeReg dontCare
   isUnsigned1 :: Reg (Bit 1) <- makeReg dontCare
   isStore1 :: Reg (Bit 1) <- makeReg dontCare
   mask1 :: Reg WarpMask <- makeReg dontCare
@@ -453,6 +451,7 @@ makeCoalescingUnit inputs = do
       isUnsigned1 <== instr.isUnsigned
       isStore1 <== instr.opcode `is` [STORE]
       mask1 <== actives
+      level1 <== req0.val.level
       warp1 <== req0.val.warp
       instr1 <== instr
       pc1 <== req0.val.pc
@@ -490,6 +489,7 @@ makeCoalescingUnit inputs = do
             , isStore= isStore1.val
             , mask= mask1.val
             , warp= warp1.val
+            , level= level1.val
             , instr= instr1.val
             , pc= pc1.val
             , offset= offset1.val
@@ -574,11 +574,11 @@ makeDCacheUnit cacheSource inputs0 = do
         Exec2WB
           { warp= queue.first.warp
           , mask= queue.first.mask
+          , level= queue.first.level
           , instr= queue.first.instr
           , pc= queue.first.pc
           , nextPc= fromList (replicate (valueOf @WarpSize) (queue.first.pc + 4))
-          , rd= fromList lanes
-          , lock= 0}}
+          , rd= fromList lanes}}
     , master
     , cache.stats )
 
@@ -593,11 +593,11 @@ makeAluMultiplier inputs = do
         Exec2WB
           { pc= inputs.peek.pc
           , warp= inputs.peek.warp
+          , level= inputs.peek.level
           , mask= inputs.peek.mask
           , instr= inputs.peek.instr
           , nextPc= fromList (replicate (valueOf @WarpSize) (inputs.peek.pc + 4))
-          , rd= mulUpper ? (fmap upper mulOut, fmap lower mulOut)
-          , lock= 0 }
+          , rd= mulUpper ? (fmap upper mulOut, fmap lower mulOut)}
 
   return (toSource queue)
   where
@@ -653,10 +653,10 @@ makeAluDivider inputs = do
         Exec2WB
           { pc= inputs.peek.pc
           , warp= inputs.peek.warp
+          , level= inputs.peek.level
           , mask= inputs.peek.mask
           , instr= inputs.peek.instr
           , nextPc= fromList (replicate (valueOf @WarpSize) (inputs.peek.pc + 4))
-          , lock= 0
           , rd } }
   where
     op1 = inputs.peek.op1
@@ -701,19 +701,19 @@ makeExec instret cacheSource inputs = do
 
   nextPC :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
   nextRD :: Wire (Vec WarpSize (Bit 32)) <- makeWire dontCare
-  locked :: Wire WarpMask <- makeWire 0
+  level :: Wire Level <- makeWire inputs.peek.level
 
   cycle :: Reg (Bit 32) <- makeReg 0
   always $ cycle <== cycle.val + 1
 
-  always do
-    when (slice @20 @0 cycle.val === 0) do
-      display "stats: "
-      display "\thit: " stats.numHit
-      display "\treq: " stats.numReq
-      display "\tacquire: " stats.numAcquire
-      display "\trelease: " stats.numRelease
-      display "\tprobe: " stats.numProbe
+  --always do
+  --  when (slice @20 @0 cycle.val === 0) do
+  --    display "stats: "
+  --    display "\thit: " stats.numHit
+  --    display "\treq: " stats.numReq
+  --    display "\tacquire: " stats.numAcquire
+  --    display "\trelease: " stats.numRelease
+  --    display "\tprobe: " stats.numProbe
 
   always do
     when (outputs.notFull .&&. dmemOut.canPeek) do
@@ -763,13 +763,10 @@ makeExec instret cacheSource inputs = do
       else if instr.opcode `is` [CSRRW,CSRRS,CSRRC] .&&. instr.csr === 0xb02 then do
         nextRD <== fromList
               [ instret | i <- [0..valueOf @WarpSize - 1]]
-      else if instr.opcode `is` [GETMASK] then do
-        nextRD <== fromList
-              [ zeroExtend mask | i <- [0..valueOf @WarpSize - 1]]
-      else if instr.opcode `is` [SETMASK] then do
-        let goal = orList [c ? (x,0) | (x,c) <- zip op1 (toBitList mask)]
-        when (zeroExtend mask =!= orList op1) do
-          locked <== mask
+      else if instr.opcode `is` [POPLEVEL] then do
+        level <== inputs.peek.level - 1
+      else if instr.opcode `is` [PUSHLEVEL] then do
+        level <== inputs.peek.level + 1
       else do
         nextRD <== fromList [r.rd | r <- results]
       nextPC <== fromList [r.pc | r <- results]
@@ -783,7 +780,7 @@ makeExec instret cacheSource inputs = do
             , warp
             , mask
             , instr
-            , lock= locked.val
+            , level= level.val
             , nextPc= nextPC.val
             , rd= nextRD.val }
 
@@ -806,11 +803,8 @@ makeWriteBack inputs writeBack = do
         WB2Select
           { warp= inputs.peek.warp
           , mask= inputs.peek.mask
-          , lock= inputs.peek.lock
-          , pc=
-            fmap (\ (pc,lock) ->
-              lock ? (inputs.peek.pc, pc)
-            ) (Vec.zip inputs.peek.nextPc (unpack inputs.peek.lock)) }
+          , level= inputs.peek.level
+          , pc= inputs.peek.nextPc }
       , consume= do
           inputs.consume
           instret <== instret.val + sumList [zeroExtend a | a <- toBitList inputs.peek.mask]

@@ -7,15 +7,17 @@
 
 __attribute__((aligned(16))) char stack0[128 * NCPU];
 
-inline int setmask(int x) {
-  asm volatile(".insn i CUSTOM_0, 0x0, %0, %0, 0\n" : "+r" (x));
-  return x;
+inline void simt_push() {
+  asm volatile(".insn i CUSTOM_0, 0x0, zero, zero, 0\n");
 }
 
-inline int getmask() {
-  int x;
-  asm volatile(".insn i CUSTOM_0, 0x1, %0, %0, 0\n" : "=r" (x));
-  return x;
+inline void simt_pop() {
+  asm volatile(".insn i CUSTOM_0, 0x1, zero, zero, 0\n");
+}
+
+inline void simt_sync() {
+  simt_pop();
+  simt_push();
 }
 
 static int volatile counter = 0;
@@ -47,16 +49,20 @@ extern void main(int threadid) {
   }
   while (!wait) {}
 
-  setmask(15);
+  simt_sync();
   timestamp_t timestamp;
   init_timestamp(&timestamp);
-  setmask(15);
+  simt_sync();
 
+  simt_push();
   for (int i=0; i < NCPU; i++) {
+    simt_push();
     for (int j=0; j < NCPU; j++) {
       m3[i][threadid] += m1[i][j] * m2[j][threadid];
     }
+    simt_pop();
   }
+  simt_pop();
 
   // Wait for the execution of all the previous threads to finish
   while (threadid && !bitmask[threadid-1]) {}
