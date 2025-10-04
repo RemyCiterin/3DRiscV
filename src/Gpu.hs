@@ -47,7 +47,7 @@ displayAscii term =
       formatCond (fromInteger i === x) (fshow (ascii!i)) <>
       go x is
 
--- Select -> Fetch -> Decode -> Register Read -> Exec -> Write Back
+-- Schedule -> Fetch -> Decode -> Register Read -> Exec -> Write Back
 --    ^                                                     /
 --    \____________________________________________________/
 --
@@ -65,8 +65,8 @@ type WarpIdx = Bit (Log2Ceil WarpSize)
 type LogNumLevel = 5
 type Level = Bit LogNumLevel
 
-data Select2Fetch =
-  Select2Fetch
+data Schedule2Fetch =
+  Schedule2Fetch
     { warp :: WarpId
     , mask :: WarpMask
     , level :: Level
@@ -113,8 +113,8 @@ data Exec2WB =
     , pc :: Bit 32 }
   deriving(Generic, Bits)
 
-data WB2Select =
-  WB2Select
+data WB2Schedule =
+  WB2Schedule
     { warp :: WarpId
     , mask :: WarpMask
     , level :: Level
@@ -128,14 +128,14 @@ makeFetch :: forall p.
   , AddrWidth p ~ 32
   , LaneWidth p ~ 4
   , 8 * LaneWidth p ~ 32 )
-    => Bit (SourceWidth p) -> Source Select2Fetch -> Module (Source Fetch2Decode, TLMaster p)
+    => Bit (SourceWidth p) -> Source Schedule2Fetch -> Module (Source Fetch2Decode, TLMaster p)
 makeFetch cacheSource inputs = do
   (cache, master) <- withName "icache" $
     makeBCacheCore @2 @20 @6 @4 @() @p cacheSource (\ _ lane -> lane)
   key :: Reg (Bit 20) <- makeReg dontCare
 
   responses :: Queue (Bit 32) <- makeSizedQueueCore 4
-  queue :: Queue Select2Fetch <- makePipelineQueue 3
+  queue :: Queue Schedule2Fetch <- makePipelineQueue 3
 
   always do
     when (cache.canLookup .&&. inputs.canPeek .&&. queue.notFull) do
@@ -280,8 +280,8 @@ data SimtState =
     , level :: Level }
   deriving(Generic, Bits)
 
-makeSelect :: Source WB2Select -> Module (Source Select2Fetch)
-makeSelect inputs = do
+makeScheduler :: Source WB2Schedule -> Module (Source Schedule2Fetch)
+makeScheduler inputs = do
   (statesA, statesB) :: ([RAM WarpId SimtState], [RAM WarpId SimtState]) <-
     unzip <$> replicateM (valueOf @WarpSize) makeQuadRAM
 
@@ -291,8 +291,8 @@ makeSelect inputs = do
   warp :: Ehr WarpId <- makeEhr 2 0
   pc :: Wire (Bit 32) <- makeWire dontCare
 
-  -- Buffer the outputs of the select stage
-  queue :: Queue Select2Fetch <-makePipelineQueue 1
+  -- Buffer the outputs of the schedule stage
+  queue :: Queue Schedule2Fetch <-makePipelineQueue 1
 
   initIndex :: Reg WarpId <- makeReg 0
   initDone :: Reg (Bit 1) <- makeReg false
@@ -333,7 +333,7 @@ makeSelect inputs = do
           [inv s.out.busy .&&. s.out.pc === pc.val .&&. s.out.level === level
             | s <- statesA]
 
-  let source :: Source Select2Fetch =
+  let source :: Source Schedule2Fetch =
         Source
           { consume= do
               sequence_
@@ -344,7 +344,7 @@ makeSelect inputs = do
               when (warp.read 0 === 0) do
                 round <== round.val + 1
           , peek=
-              Select2Fetch
+              Schedule2Fetch
                 { mask
                 , level
                 , warp= warp.read 0
@@ -786,7 +786,7 @@ makeExec instret cacheSource inputs = do
 
   return (toSource outputs, master)
 
-makeWriteBack :: Source Exec2WB -> WriteBack -> Module (Source WB2Select, Bit 32)
+makeWriteBack :: Source Exec2WB -> WriteBack -> Module (Source WB2Schedule, Bit 32)
 makeWriteBack inputs writeBack = do
   let instr = inputs.peek.instr
   let warp = inputs.peek.warp
@@ -800,7 +800,7 @@ makeWriteBack inputs writeBack = do
   return
     ( Source
       { peek=
-        WB2Select
+        WB2Schedule
           { warp= inputs.peek.warp
           , mask= inputs.peek.mask
           , level= inputs.peek.level
@@ -829,18 +829,18 @@ makeWriteBack inputs writeBack = do
 
 makeGpu :: Bit 1 -> Module (Bit 1, Bit 8)
 makeGpu rx = mdo
-  select2fetch <- withName "select" $ makeSelect wb2select
+  schedule2fetch <- withName "schedule" $ makeScheduler wb2schedule
   (exec2wb, dmaster) <- withName "exec" $ makeExec @TLConfigSimt instret dcacheSource rr2exec
-  (wb2select, instret) <- withName "wite_back" $ makeWriteBack exec2wb writeBack
+  (wb2schedule, instret) <- withName "write_back" $ makeWriteBack exec2wb writeBack
   (rr2exec, writeBack) <- withName "register_read" $ makeRegisterRead decode2rr
   decode2rr <- withName "decode" $ makeDecode fetch2decode
-  (fetch2decode, imaster) <- withName "fetch" $ makeFetch @TLConfigCached icacheSource select2fetch
+  (fetch2decode, imaster) <- withName "fetch" $ makeFetch @TLConfigCached icacheSource schedule2fetch
 
   cycle :: Reg (Bit 32) <- makeReg 0
   always do
     cycle <== cycle.val + 1
 
-  makeDCacheSlave imaster dmaster
+  withName "memory_slave" $ makeDCacheSlave imaster dmaster
 
   pure (1, zeroExtend fetch2decode.canPeek)
 
@@ -888,7 +888,7 @@ makeDCacheSlave instrMaster simtMaster = do
           , bypassChannelA= False
           , bypassChannelD= False
           , sink= 0 }
-  uncoherentSlave <- makeTLRAM @28 @TLConfigUncached config
+  uncoherentSlave <- makeTLRAM @08 @TLConfigUncached config
   makeConnection uncoherentMaster uncoherentSlave
   makeConnection coherentMaster coherentSlave
   makeDecreaseWidth True simtMaster dataSlave

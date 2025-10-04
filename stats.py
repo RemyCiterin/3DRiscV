@@ -10,7 +10,7 @@ file = json.loads(file.read())
 class Module:
     def __init__(self, names):
         self.count = 0
-        self.patterns = [re.compile(n + "*") for n in names]
+        self.patterns = [re.compile(".*" + n + ".*") for n in names]
         self.types = {}
         self.name = names[0]
 
@@ -47,34 +47,33 @@ def buildModule(prefix, tree):
         modules += buildModule(prefix, tree[i])
     return modules
 
-modules = buildModule("inst.",
-        ["",
-            ["core",
-                "alu",
-                "lsu",
-                ["fetch", "bpred"],
-                "decode",
-                "registers"
-             ],
-         "imem",
-         "dmem",
-         "broadcast",
-         "memory",
-         "xbar",
-         "mem",
-         "perf",
-         "Register",
-         "BlockRAM",
-         "ram",
-         ]
-)
 
-for name in file["modules"]["mkTop"]["cells"]:
+modules = [
+        "exec",
+        "decode",
+        "schedule",
+        "write_back",
+        "register_read",
+        "xbar",
+        "ram",
+        "fetch",
+        "broadcast",
+        "DEST_Register",
+        "BlockRAMQuad",
+        "BlockRAMDual",
+        "BlockRAMBE",
+        "BlockRAMDualBE",
+        "memory_slave",
+        ]
 
-    if match(modules, name, file["modules"]["mkTop"]["cells"][name]["type"]):
+modules=  [Module([m]) for m in modules]
+
+for name in file["modules"]["mkTopULX3S"]["cells"]:
+
+    if match(modules, name, file["modules"]["mkTopULX3S"]["cells"][name]["type"]):
         pass
     else:
-        print(name, file["modules"]["mkTop"]["cells"][name]["type"])
+        print(name, file["modules"]["mkTopULX3S"]["cells"][name]["type"])
 
 for m in modules:
     if m.count > 0:
