@@ -2,8 +2,14 @@ ENTRY(_start)
 
 MEMORY
 {
-    imem (rx): ORIGIN = 0x80000000, LENGTH = 20K
-    dmem (rw): ORIGIN = 0x80010000, LENGTH = 70K
+    /* Embedded instruction memory */
+    imem (rx): ORIGIN = 0x80000000, LENGTH = 10K
+
+    /* Embedded data memory */
+    dmem (rw): ORIGIN = 0x80010000, LENGTH = 1K
+
+    /* External synchronous dynamic random access memory */
+    sdram (rw): ORIGIN = 0x80011000, LENGTH = 70K
 }
 
 SECTIONS
@@ -17,19 +23,19 @@ SECTIONS
     *(.rodata .rodata.*)
   } > dmem
 
-  PROVIDE(__bss_start = .);
-  .sbss : ALIGN(16) {
-    *(.sbss .sbss.*)
-  } > dmem
-
-  .bss : ALIGN(16) {
-    *(.bss .bss.*)
-  } > dmem
-  PROVIDE(__bss_end = .);
-
   .data : ALIGN(16) {
       *(.data .data.*)
   } > dmem
+
+  PROVIDE(__bss_start = .);
+  .sbss : ALIGN(16) {
+    *(.sbss .sbss.*)
+  } > sdram
+
+  .bss : ALIGN(16) {
+    *(.bss .bss.*)
+  } > sdram
+  PROVIDE(__bss_end = .);
 
   . = ALIGN(4k);
   PROVIDE(stack0 = .);

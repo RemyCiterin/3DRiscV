@@ -12,9 +12,12 @@ inline fixed fixed_from_int(int x) {
 }
 
 inline fixed fixed_div(fixed n, fixed d) {
+  simt_push();
   int64_t a = (int64_t)(n) << FIXED_LOG_SCALE;
   int64_t b = (int64_t)(d);
-  return (fixed)(a / b);
+  fixed ret = (fixed)(a / b);
+  simt_pop();
+  return ret;
 }
 
 inline fixed fixed_tan(fixed x) {
@@ -108,8 +111,7 @@ void set_projection_matrix(fixed angle, fixed far, fixed near, fixed** m) {
   m[2][3] = -fixed_from_int(1);
 }
 
-
-inline fixed3 project_point(fixed** m, fixed3 p) {
+fixed3 project_point(fixed** m, fixed3 p) {
     fixed3 ret = {
       .x = fixed_mul(m[0][0], p.x) + fixed_mul(m[1][0], p.y) + fixed_mul(m[2][0], p.z) + m[3][0],
       .y = fixed_mul(m[0][1], p.x) + fixed_mul(m[1][1], p.y) + fixed_mul(m[2][1], p.z) + m[3][1],
@@ -119,11 +121,13 @@ inline fixed3 project_point(fixed** m, fixed3 p) {
     fixed w =
       fixed_mul(m[0][3], p.x) + fixed_mul(m[1][3], p.y) + fixed_mul(m[2][3], p.z) + m[3][3];
 
+    simt_push();
     if (w != 1) {
       ret.x = fixed_div(ret.x, w);
       ret.y = fixed_div(ret.y, w);
       ret.z = fixed_div(ret.z, w);
     }
+    simt_pop();
 
     return ret;
 }
