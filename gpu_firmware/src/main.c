@@ -21,12 +21,8 @@ extern __attribute__((aligned(64))) fixed z_buffer[HWIDTH * VWIDTH];
 extern __attribute__((aligned(64))) uint8_t rgb_buffer[HWIDTH * VWIDTH];
 
 
-typedef struct {
-  fixed3 vertex[3];
-  uint8_t color;
-} triangle_t;
-
 static triangle_t tri;
+static projtri_t ptri;
 
 extern __attribute__((aligned(64))) triangle_t triangles[PRIMS_BOUNDS];
 
@@ -85,6 +81,27 @@ extern void main(int threadid) {
         proj                                  // projection matrix
     );
 
+
+    ////////////////////////////////////////////////////////////////////////////:
+    // Apply the projection matrix to the current triangles
+    ////////////////////////////////////////////////////////////////////////////:
+    ptri = project_triangle(proj, tri);
+    printf("vertex0: x: ");
+    print_fixed(ptri.vertex[0].x); printf(" y: ");
+    print_fixed(ptri.vertex[0].y); printf(" z: ");
+    print_fixed(ptri.z[0]); printf("\n");
+
+    printf("vertex1: x: ");
+    print_fixed(ptri.vertex[1].x); printf(" y: ");
+    print_fixed(ptri.vertex[1].y); printf(" z: ");
+    print_fixed(ptri.z[1]); printf("\n");
+
+    printf("vertex2: x: ");
+    print_fixed(ptri.vertex[2].x); printf(" y: ");
+    print_fixed(ptri.vertex[2].y); printf(" z: ");
+    print_fixed(ptri.z[2]); printf("\n");
+
+
     ////////////////////////////////////////////////////////////////////////////:
     // Synchronize other threads
     ////////////////////////////////////////////////////////////////////////////:
@@ -105,30 +122,31 @@ extern void main(int threadid) {
   //  }
   //}
 
-  fixed3 v0 = project_point(proj, tri.vertex[0]);
-  fixed3 v1 = project_point(proj, tri.vertex[1]);
-  fixed3 v2 = project_point(proj, tri.vertex[2]);
+  int xpos = threadid & 0x7;
+  int ypos = threadid >> 3;
+
+  fixed2 point = {
+    .x = fixed_div(FIXED_SCALE * xpos, 4*FIXED_SCALE) - FIXED_SCALE,
+    .y = fixed_div(FIXED_SCALE * ypos, 4*FIXED_SCALE) - FIXED_SCALE
+  };
+
+  fixed3 inter = intersect_triangle(ptri, point);
+
+  bool res = inter.x >= 0 && inter.y >= 0 && inter.z <= FIXED_SCALE;
 
   // Wait for the execution of all the previous threads to finish
   while (threadid && !bitmask[threadid-1]) {}
 
+  //printf("xpos: %d ypos: %d\n", xpos, ypos);
+  print_fixed2(point); printf("\n");
+  //print_fixed(inter.x); printf("\n");
+  //print_fixed(inter.y); printf("\n");
+  //print_fixed(inter.z); printf("\n");
+  printf("%d", res);
+  if (xpos == 7) printf("\n");
+
   // Print statistics
-  print_stats(threadid, &timestamp);
-  printf("vertex0: x: ");
-  print_fixed(v0.x); printf(" y: ");
-  print_fixed(v0.y); printf(" z: ");
-  print_fixed(v0.z); printf("\n");
-
-  printf("vertex1: x: ");
-  print_fixed(v1.x); printf(" y: ");
-  print_fixed(v1.y); printf(" z: ");
-  print_fixed(v1.z); printf("\n");
-
-  printf("vertex2: x: ");
-  print_fixed(v2.x); printf(" y: ");
-  print_fixed(v2.y); printf(" z: ");
-  print_fixed(v2.z); printf("\n");
-
+  //print_stats(threadid, &timestamp);
 
   //for (int i=0; i < NCPU; i++) {
   //  printf("%d ", m3[i][threadid]);
