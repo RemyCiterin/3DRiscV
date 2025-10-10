@@ -186,10 +186,6 @@ projtri_t project_triangle(fixed** m, triangle_t tri) {
   fixed3 v1 = project_point(m, tri.vertex[1]);
   fixed3 v2 = project_point(m, tri.vertex[2]);
 
-  print_fixed3(v0); printf("\n");
-  print_fixed3(v1); printf("\n");
-  print_fixed3(v2); printf("\n");
-
   ret.vertex[0].x = v0.x; ret.vertex[0].y = v0.y; ret.z[0] = v0.z;
   ret.vertex[1].x = v1.x; ret.vertex[1].y = v1.y; ret.z[1] = v1.z;
   ret.vertex[2].x = v2.x; ret.vertex[2].y = v2.y; ret.z[2] = v2.z;
@@ -206,33 +202,30 @@ projtri_t project_triangle(fixed** m, triangle_t tri) {
         fixed_mul(a,d) - fixed_mul(b,c)
     );
 
-  print_fixed2(ret.vertex[0]); printf("\n");
-  print_fixed2(ret.vertex[1]); printf("\n");
-  print_fixed2(ret.vertex[2]); printf("\n");
-
   ret.color = tri.color;
 
   return ret;
 }
 
 
-inline fixed3 intersect_triangle(projtri_t tri, fixed2 point) {
-  fixed3 ret;
+//inline fixed3 intersect_triangle(projtri_t tri, fixed2 point) {
+//  fixed3 ret;
+//
+//  fixed a = tri.vertex[1].x - tri.vertex[0].x;
+//  fixed b = tri.vertex[1].y - tri.vertex[0].y;
+//
+//  fixed c = tri.vertex[2].x - tri.vertex[0].x;
+//  fixed d = tri.vertex[2].y - tri.vertex[0].y;
+//
+//  fixed x = point.x - tri.vertex[0].x;
+//  fixed y = point.y - tri.vertex[0].y;
+//
+//  ret.x = fixed_mul(tri.inv_det, fixed_mul(d,x) - fixed_mul(b,y));
+//
+//  ret.y = fixed_mul(tri.inv_det, fixed_mul(y,a) - fixed_mul(c,x));
+//
+//  ret.z = fixed_from_int(1) - ret.x - ret.y;
+//
+//  return ret;
+//}
 
-  fixed a = tri.vertex[1].x - tri.vertex[0].x;
-  fixed b = tri.vertex[1].y - tri.vertex[0].y;
-
-  fixed c = tri.vertex[2].x - tri.vertex[0].x;
-  fixed d = tri.vertex[2].y - tri.vertex[0].y;
-
-  fixed x = point.x - tri.vertex[0].x;
-  fixed y = point.y - tri.vertex[0].y;
-
-  ret.x = fixed_mul(tri.inv_det, fixed_mul(d,x) - fixed_mul(b,y));
-
-  ret.x = fixed_mul(tri.inv_det, fixed_mul(y,a) - fixed_mul(c,x));
-
-  ret.z = fixed_from_int(1) - ret.x - ret.y;
-
-  return ret;
-}

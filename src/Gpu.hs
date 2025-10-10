@@ -756,14 +756,14 @@ makeExec instret cacheSource inputs = do
   cycle :: Reg (Bit 32) <- makeReg 0
   always $ cycle <== cycle.val + 1
 
-  --always do
-  --  when (slice @20 @0 cycle.val === 0) do
-  --    display "stats: "
-  --    display "\thit: " stats.numHit
-  --    display "\treq: " stats.numReq
-  --    display "\tacquire: " stats.numAcquire
-  --    display "\trelease: " stats.numRelease
-  --    display "\tprobe: " stats.numProbe
+  always do
+    when (slice @20 @0 cycle.val === 0) do
+      display "stats: "
+      display "\thit: " stats.numHit
+      display "\treq: " stats.numReq
+      display "\tacquire: " stats.numAcquire
+      display "\trelease: " stats.numRelease
+      display "\tprobe: " stats.numProbe
 
   always do
     when (outputs.notFull .&&. dmemOut.canPeek) do

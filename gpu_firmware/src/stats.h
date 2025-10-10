@@ -10,7 +10,6 @@ void zero_timestamp(timestamp_t*);
 // Set the current values inside the timestamp
 void init_timestamp(timestamp_t*);
 
-
 int r_mcycle();
 int r_minstret();
 

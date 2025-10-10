@@ -87,5 +87,5 @@ fixed3 project_point(fixed**, fixed3);
 
 projtri_t project_triangle(fixed**, triangle_t);
 
-fixed3 intersect_triangle(projtri_t, fixed2);
+//fixed3 intersect_triangle(projtri_t, fixed2);
 

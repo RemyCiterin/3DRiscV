@@ -41,6 +41,8 @@ _start:
   bnez t0, .bss_zero_loop_end
   j .wait_for_sync
 
+
+
 .section .data
 _sync:
   .word 0
