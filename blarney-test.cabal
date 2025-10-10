@@ -39,6 +39,7 @@ executable blarney-test
     Clint,
     Sdram,
     Instr,
+    Screen,
     Uart,
     Core,
     Prediction,

@@ -14,6 +14,7 @@ import Blarney.ADT
 
 import Clint
 import System
+import Screen
 import Uart
 import Core
 import Spi
@@ -110,7 +111,7 @@ makeTLSdram sink lowerBound = do
         , channelD= toSource queueD
         , channelE= nullSink } )
 
-makeCPU :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, TLMaster TLConfig')
+makeCPU :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, TLMaster TLConfig', VgaFabric)
 makeCPU rx = mdo
   (tx, uartInterrupt, leds, uartMmio) <- makeUartMmio 217 rx
   (spi, spiMmio) <- makeSpiMmio 0x10001000
@@ -118,7 +119,11 @@ makeCPU rx = mdo
   let xbarconfig =
         XBarConfig
           { bce= True
-          , rootAddr= \ x -> x .>=. 0x80000000 ? (0,1)
+          , rootAddr= \ x ->
+              select
+                [ x .<. 0x70000000 --> 1
+                , x .>=. 0x80000000 --> 0
+                , 0x70000000 .<=. x .&&. x .<. 0x80000000 --> 2]
           , rootSink= \ x -> 0
           , rootSource= \ x ->
               select
@@ -138,8 +143,8 @@ makeCPU rx = mdo
           , sizeChannelD= 2
           , sizeChannelE= 2 }
 
-  ([master0,master1], [slave0,slave1,slave2,slave3]) <-
-    withName "xbar" $ makeTLXBar @2 @4 @TLConfig xbarconfig
+  ([master0,master1,master2], [slave0,slave1,slave2,slave3]) <-
+    withName "xbar" $ makeTLXBar @3 @4 @TLConfig xbarconfig
 
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0
@@ -150,6 +155,9 @@ makeCPU rx = mdo
   (clintMmio, clint) <- withName "clint" $ makeClint @TLConfig 2 0x2000000
   clintSlave <- makeTLMmio @TLConfig 1 (clintMmio ++ uartMmio ++ spiMmio)
   withName "clint" $ makeConnection master1 clintSlave
+
+  makeConnection master2 vgaSlave
+  (vgaFabric, vgaSlave) <- withName "vga" $ makeVga @TLConfig 0x70000000 2
 
   let systemInputs0 =
         SystemInputs
@@ -194,13 +202,13 @@ makeCPU rx = mdo
           , baseSink= 0 }
   (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
 
-  return (tx, leds, spi, uncoherentMaster)
+  return (tx, leds, spi, uncoherentMaster, vgaFabric)
 
 type RomLogSize = 15
 
-makeUlx3s :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, SdramFabric)
+makeUlx3s :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, SdramFabric, VgaFabric)
 makeUlx3s rx = mdo
-  (tx, leds, spi, master) <- makeCPU rx
+  (tx, leds, spi, master, vga) <- makeCPU rx
 
   let sdramBase :: Bit 32 = 0x80000000 + 4 * lit (2 ^ valueOf @RomLogSize)
 
@@ -236,4 +244,4 @@ makeUlx3s rx = mdo
   makeConnection masterSdram slaveSdram
   makeConnection masterSram slaveSram
 
-  return (tx, leds, spi, fabric)
+  return (tx, leds, spi, fabric, vga)

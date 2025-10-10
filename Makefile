@@ -8,6 +8,11 @@ LIB = \
 			src/Top_ulx3s.v \
 			simulation/Block*v \
 			simulation/pll_nexys_video.v \
+			simulation/clk_25_system.v \
+			simulation/fake_differential.v \
+			simulation/tmds_encoder.v \
+			simulation/vga2dvid.v \
+			simulation/dvi.v \
 			Verilog/*.v
 
 DDR3 = \

@@ -10,8 +10,10 @@ extern crate alloc;
 
 #[macro_use]
 mod printer;
+mod pointer;
 mod malloc;
 mod sdcard;
+mod screen;
 
 use core::{
     arch::{global_asm},
@@ -31,6 +33,15 @@ fn panic(info: &PanicInfo) -> ! {
 unsafe extern "C" fn bootloader_main() -> () {
     malloc::init();
     println!("Hello world!");
+
+    let pixel = screen::Pixel::new(255, 0, 255);
+
+    for i in 0..320 {
+        for j in 0..240 {
+            pixel.write_frame_buffer(i, j);
+        }
+    }
+
     sdcard::init();
     loop {}
 }

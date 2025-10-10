@@ -2,8 +2,8 @@ ENTRY(_start)
 
 MEMORY
 {
-    imem (rx): ORIGIN = 0x80000000, LENGTH = 10K
-    dmem (rw): ORIGIN = 0x80001000, LENGTH = 70K
+    imem (rx): ORIGIN = 0x80000000, LENGTH = 20K
+    dmem (rw): ORIGIN = 0x80010000, LENGTH = 70K
 }
 
 SECTIONS
@@ -31,5 +31,6 @@ SECTIONS
       *(.data .data.*)
   } > dmem
 
-  stack0 = .;
+  . = ALIGN(4k);
+  PROVIDE(stack0 = .);
 }
