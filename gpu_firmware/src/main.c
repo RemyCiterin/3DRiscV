@@ -5,11 +5,9 @@
 #include "geometry.h"
 
 #define NCPU (4 * 16)
-#define HWIDTH 320
-#define VWIDTH 240
+#define HWIDTH 60 // 320
+#define VWIDTH 40 // 240
 #define PRIMS_BOUNDS 0x100
-
-extern __attribute__((aligned(16))) char stack0[128 * NCPU];
 
 static int volatile counter = 0;
 
@@ -17,70 +15,119 @@ static uint64_t volatile bitmask[NCPU];
 
 static bool volatile wait = 0;
 
-extern __attribute__((aligned(64))) fixed z_buffer[HWIDTH * VWIDTH];
-extern __attribute__((aligned(64))) uint8_t rgb_buffer[HWIDTH * VWIDTH];
+static fixed z_buffer[HWIDTH * VWIDTH];
+static uint8_t rgb_buffer[HWIDTH * VWIDTH];
 
 
 static triangle_t tri;
 static projtri_t ptri;
 
-extern __attribute__((aligned(64))) triangle_t triangles[PRIMS_BOUNDS];
+extern triangle_t triangles[PRIMS_BOUNDS];
 
 static fixed proj_body[4][4];
 static fixed* proj[4];
 
-static bool volatile hit[32 * 32];
+static bool volatile hit[HWIDTH * VWIDTH];
 
 //static int m1[NCPU][NCPU];
 //static int m2[NCPU][NCPU];
 //static int m3[NCPU][NCPU];
 
 //static int* FRAME_BASE = 0x70000000;
-//
 
 inline fixed fixed_mul2(fixed a, fixed b) {
   int64_t res = (int64_t)a * (int64_t)b;
   return (fixed)(res >> FIXED_LOG_SCALE);
 }
-inline fixed3 intersect_triangle(projtri_t tri, fixed2 point) {
+inline fixed3 intersect_triangle2(projtri_t tri, fixed2 point) {
   fixed3 ret;
 
   fixed a = tri.vertex[1].x - tri.vertex[0].x;
-  fixed b = tri.vertex[1].y - tri.vertex[0].y;
+  fixed b = tri.vertex[2].x - tri.vertex[0].x;
 
-  fixed c = tri.vertex[2].x - tri.vertex[0].x;
+  fixed c = tri.vertex[1].y - tri.vertex[0].y;
   fixed d = tri.vertex[2].y - tri.vertex[0].y;
 
   fixed x = point.x - tri.vertex[0].x;
   fixed y = point.y - tri.vertex[0].y;
 
-  ret.x = fixed_mul2(tri.inv_det, fixed_mul2(d,x) - fixed_mul2(b,y));
+  ret.y = fixed_mul2(tri.inv_det, fixed_mul2(d,x) - fixed_mul2(b,y));
 
-  ret.y = fixed_mul2(tri.inv_det, fixed_mul2(y,a) - fixed_mul2(c,x));
+  ret.z = fixed_mul2(tri.inv_det, fixed_mul2(y,a) - fixed_mul2(c,x));
 
-  ret.z = fixed_from_int(1) - ret.x - ret.y;
+  ret.x = fixed_from_int(1) - ret.z - ret.y;
 
+  return ret;
+}
+
+inline fixed fixed_div2(fixed n, fixed d) {
+  simt_push();
+  int64_t a = (int64_t)(n) << FIXED_LOG_SCALE;
+  int64_t b = (int64_t)(d);
+  fixed ret = (fixed)(a / b);
+  simt_pop();
   return ret;
 }
 
 
 void draw_image(int threadid) {
-  for (int idx=threadid; idx < 32*32; idx+=NCPU) {
-    int xpos = idx & 31;
-    int ypos = idx >> 5;
+  simt_push();
 
+  for (int idx=threadid; idx < HWIDTH*VWIDTH; idx+=NCPU) {
+    z_buffer[idx] = 1 << 30;
+  }
+
+  simt_sync();
+
+  fixed xstep = fixed_div2(2*FIXED_SCALE, FIXED_SCALE * HWIDTH);
+  fixed ystep = fixed_div2(2*FIXED_SCALE, FIXED_SCALE * VWIDTH);
+
+  simt_sync();
+
+  for (int idx=threadid; idx < HWIDTH*VWIDTH; idx+=NCPU) {
+    int xpos = idx % HWIDTH;
+    int ypos = idx / HWIDTH;
 
     fixed2 point = {
-      .x = 2*((FIXED_SCALE * xpos) >> 5) - FIXED_SCALE,
-      .y = 2*((FIXED_SCALE * ypos) >> 5) - FIXED_SCALE
+      .x = fixed_mul2(FIXED_SCALE*xpos, xstep) - FIXED_SCALE,
+      .y = fixed_mul2(FIXED_SCALE*ypos, ystep) - FIXED_SCALE
     };
+    //fixed2 point = {
+    //  .x = 2*fixed_div2(FIXED_SCALE * xpos, FIXED_SCALE * HWIDTH) - FIXED_SCALE,
+    //  .y = 2*fixed_div2(FIXED_SCALE * ypos, FIXED_SCALE * VWIDTH) - FIXED_SCALE
+    //};
 
-    fixed3 inter = intersect_triangle(ptri, point);
 
-    bool res = inter.x >= 0 && inter.y >= 0 && inter.z >= 0;
+    simt_push();
+    bool in_bounds =
+      ptri.bounds.aa.x <= point.x && point.x <= ptri.bounds.bb.x &&
+      ptri.bounds.aa.y <= point.y && point.y <= ptri.bounds.bb.y;
 
-    hit[idx] = res;
+    if (in_bounds) {
+      fixed3 inter = intersect_triangle2(ptri, point);
+
+      bool res = inter.x >= 0 && inter.y >= 0 && inter.z >= 0;
+
+      fixed z = fixed3_dot(inter, ptri.z);
+      fixed3 vert = {.x=FIXED_SCALE*'0', .y=FIXED_SCALE*'1', .z=FIXED_SCALE*'2'};
+      fixed c = fixed3_dot(
+          vert,
+          inter
+      );
+
+      simt_push();
+      if (res && z_buffer[idx] > z) {
+        rgb_buffer[idx] = ((c+FIXED_SCALE/2) >> FIXED_LOG_SCALE);
+        z_buffer[idx] = z;
+        hit[idx] = true;
+      }
+      simt_pop();
+    }
+
+    simt_pop();
   }
+
+  simt_pop();
 }
 
 
@@ -100,6 +147,9 @@ extern void main(int threadid) {
 
     for (int i=0; i < NCPU; i++) bitmask[i] = 0;
 
+    ////////////////////////////////////////////////////////////////////////////:
+    // Initialize triangles
+    ////////////////////////////////////////////////////////////////////////////:
     tri.vertex[0].x = (fixed)(FIXED_SCALE * 0.f);
     tri.vertex[0].y = (fixed)(FIXED_SCALE * 0.f);
     tri.vertex[0].z = (fixed)(FIXED_SCALE * -3.f);
@@ -112,7 +162,7 @@ extern void main(int threadid) {
     tri.vertex[2].y = (fixed)(FIXED_SCALE * 0.f);
     tri.vertex[2].z = (fixed)(FIXED_SCALE * -3.f);
 
-    tri.color = 128;
+    tri.color = '@';
 
     ////////////////////////////////////////////////////////////////////////////:
     // Initialize projection matrix
@@ -138,17 +188,20 @@ extern void main(int threadid) {
     printf("vertex0: x: ");
     print_fixed(ptri.vertex[0].x); printf(" y: ");
     print_fixed(ptri.vertex[0].y); printf(" z: ");
-    print_fixed(ptri.z[0]); printf("\n");
+    print_fixed(ptri.z.x); printf("\n");
 
     printf("vertex1: x: ");
     print_fixed(ptri.vertex[1].x); printf(" y: ");
     print_fixed(ptri.vertex[1].y); printf(" z: ");
-    print_fixed(ptri.z[1]); printf("\n");
+    print_fixed(ptri.z.y); printf("\n");
 
     printf("vertex2: x: ");
     print_fixed(ptri.vertex[2].x); printf(" y: ");
     print_fixed(ptri.vertex[2].y); printf(" z: ");
-    print_fixed(ptri.z[2]); printf("\n");
+    print_fixed(ptri.z.z); printf("\n");
+
+    print_fixed2(ptri.bounds.aa); printf("\n");
+    print_fixed2(ptri.bounds.bb); printf("\n");
 
 
     ////////////////////////////////////////////////////////////////////////////:
@@ -192,7 +245,7 @@ extern void main(int threadid) {
   //if (xpos == 7) printf("\n");
 
   // Print statistics
-  print_stats(threadid, &timestamp);
+  if (threadid == 0) print_stats(threadid, &timestamp);
 
   //for (int i=0; i < NCPU; i++) {
   //  printf("%d ", m3[i][threadid]);
@@ -203,9 +256,13 @@ extern void main(int threadid) {
   bitmask[threadid] = 1;
 
   if (threadid == NCPU-1) {
-    for (int i=0; i < 32; i++) {
-      for (int j=0; j < 32; j++) {
-        printf("%d", hit[i*32+j]);
+    for (int i=0; i < VWIDTH; i++) {
+      for (int j=0; j < HWIDTH; j++) {
+        char c[] = "@";
+        c[0] = rgb_buffer[i*HWIDTH+j];
+
+        if (hit[i*HWIDTH+j]) printf(c);
+        else printf(" ");
       }
       printf("\n");
     }

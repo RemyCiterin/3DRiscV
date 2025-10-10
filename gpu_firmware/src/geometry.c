@@ -179,6 +179,20 @@ fixed3 project_point(fixed** m, fixed3 p) {
     return ret;
 }
 
+static inline fixed2 min2(fixed2 a, fixed2 b) {
+  fixed2 ret;
+  ret.x = a.x > b.x ? b.x : a.x;
+  ret.y = a.y > b.y ? b.y : a.y;
+  return ret;
+}
+
+static inline fixed2 max2(fixed2 a, fixed2 b) {
+  fixed2 ret;
+  ret.x = a.x < b.x ? b.x : a.x;
+  ret.y = a.y < b.y ? b.y : a.y;
+  return ret;
+}
+
 projtri_t project_triangle(fixed** m, triangle_t tri) {
   projtri_t ret;
 
@@ -186,14 +200,14 @@ projtri_t project_triangle(fixed** m, triangle_t tri) {
   fixed3 v1 = project_point(m, tri.vertex[1]);
   fixed3 v2 = project_point(m, tri.vertex[2]);
 
-  ret.vertex[0].x = v0.x; ret.vertex[0].y = v0.y; ret.z[0] = v0.z;
-  ret.vertex[1].x = v1.x; ret.vertex[1].y = v1.y; ret.z[1] = v1.z;
-  ret.vertex[2].x = v2.x; ret.vertex[2].y = v2.y; ret.z[2] = v2.z;
+  ret.vertex[0].x = v0.x; ret.vertex[0].y = v0.y; ret.z.x = v0.z;
+  ret.vertex[1].x = v1.x; ret.vertex[1].y = v1.y; ret.z.y = v1.z;
+  ret.vertex[2].x = v2.x; ret.vertex[2].y = v2.y; ret.z.z = v2.z;
 
   fixed a = ret.vertex[1].x - ret.vertex[0].x;
-  fixed b = ret.vertex[1].y - ret.vertex[0].y;
+  fixed b = ret.vertex[2].x - ret.vertex[0].x;
 
-  fixed c = ret.vertex[2].x - ret.vertex[0].x;
+  fixed c = ret.vertex[1].y - ret.vertex[0].y;
   fixed d = ret.vertex[2].y - ret.vertex[0].y;
 
   ret.inv_det =
@@ -204,28 +218,33 @@ projtri_t project_triangle(fixed** m, triangle_t tri) {
 
   ret.color = tri.color;
 
+  simt_push();
+  ret.bounds.aa = min2(min2(ret.vertex[0], ret.vertex[1]), ret.vertex[2]);
+  ret.bounds.bb = max2(max2(ret.vertex[0], ret.vertex[1]), ret.vertex[2]);
+  simt_pop();
+
   return ret;
 }
 
 
-//inline fixed3 intersect_triangle(projtri_t tri, fixed2 point) {
-//  fixed3 ret;
-//
-//  fixed a = tri.vertex[1].x - tri.vertex[0].x;
-//  fixed b = tri.vertex[1].y - tri.vertex[0].y;
-//
-//  fixed c = tri.vertex[2].x - tri.vertex[0].x;
-//  fixed d = tri.vertex[2].y - tri.vertex[0].y;
-//
-//  fixed x = point.x - tri.vertex[0].x;
-//  fixed y = point.y - tri.vertex[0].y;
-//
-//  ret.x = fixed_mul(tri.inv_det, fixed_mul(d,x) - fixed_mul(b,y));
-//
-//  ret.y = fixed_mul(tri.inv_det, fixed_mul(y,a) - fixed_mul(c,x));
-//
-//  ret.z = fixed_from_int(1) - ret.x - ret.y;
-//
-//  return ret;
-//}
+inline fixed3 intersect_triangle(projtri_t tri, fixed2 point) {
+  fixed3 ret;
+
+  fixed a = tri.vertex[1].x - tri.vertex[0].x;
+  fixed b = tri.vertex[2].x - tri.vertex[0].x;
+
+  fixed c = tri.vertex[1].y - tri.vertex[0].y;
+  fixed d = tri.vertex[2].y - tri.vertex[0].y;
+
+  fixed x = point.x - tri.vertex[0].x;
+  fixed y = point.y - tri.vertex[0].y;
+
+  ret.y = fixed_mul(tri.inv_det, fixed_mul(d,x) - fixed_mul(b,y));
+
+  ret.z = fixed_mul(tri.inv_det, fixed_mul(y,a) - fixed_mul(c,x));
+
+  ret.x = fixed_from_int(1) - ret.z - ret.y;
+
+  return ret;
+}
 

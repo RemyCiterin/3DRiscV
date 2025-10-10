@@ -9,7 +9,7 @@ MEMORY
     dmem (rw): ORIGIN = 0x80010000, LENGTH = 1K
 
     /* External synchronous dynamic random access memory */
-    sdram (rw): ORIGIN = 0x80011000, LENGTH = 70K
+    sdram (rw): ORIGIN = 0x80011000, LENGTH = 80K
 }
 
 SECTIONS
@@ -36,7 +36,4 @@ SECTIONS
     *(.bss .bss.*)
   } > sdram
   PROVIDE(__bss_end = .);
-
-  . = ALIGN(4k);
-  PROVIDE(stack0 = .);
 }

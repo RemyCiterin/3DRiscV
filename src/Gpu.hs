@@ -65,6 +65,9 @@ type WarpIdx = Bit (Log2Ceil WarpSize)
 type LogNumLevel = 5
 type Level = Bit LogNumLevel
 
+-- Logarithm of the number of bytes in a thread stack
+type LogStackSize = 10
+
 data Schedule2Fetch =
   Schedule2Fetch
     { warp :: WarpId
@@ -393,6 +396,15 @@ data CoalescedMemop =
 isCached :: Bit 32 -> Bit 1
 isCached addr = addr .>=. 0x80000000
 
+interleavStackAddr :: WarpId -> Bit WarpLogSize -> Bit 32 -> Bit 32
+interleavStackAddr warpId laneId addr =
+  if slice @31 @LogStackSize addr === ones
+  then ones # stackOffset # warpId # laneId # wordOffset
+  else addr
+  where
+    stackOffset = slice @(LogStackSize-1) @2 addr
+    wordOffset = slice @1 @0 addr
+
 -- Transform parallel memory requests using arbitrary addresses into a stream of
 -- structured memory requests using a common block of size (4 * WarpSize) bytes.
 -- This is a key performance optimisation in GPUs because it allow multiple
@@ -425,7 +437,9 @@ makeCoalescingUnit inputs = do
     when (valid0.read 0 .&&. inv (valid1.read 1)) do
       let mask = req0.val.mask
       let instr = req0.val.instr
-      let addresses = [instr.imm.val + op1 | op1 <- toList req0.val.op1]
+      let addresses =
+            [ interleavStackAddr req0.val.warp (lit i) (instr.imm.val + op1)
+              | (op1, i) <- zip (toList req0.val.op1) [0..]]
       let leader = firstHot mask
       let base =
             select
@@ -756,14 +770,14 @@ makeExec instret cacheSource inputs = do
   cycle :: Reg (Bit 32) <- makeReg 0
   always $ cycle <== cycle.val + 1
 
-  always do
-    when (slice @20 @0 cycle.val === 0) do
-      display "stats: "
-      display "\thit: " stats.numHit
-      display "\treq: " stats.numReq
-      display "\tacquire: " stats.numAcquire
-      display "\trelease: " stats.numRelease
-      display "\tprobe: " stats.numProbe
+  --always do
+  --  when (slice @20 @0 cycle.val === 0) do
+  --    display "stats: "
+  --    display "\thit: " stats.numHit
+  --    display "\treq: " stats.numReq
+  --    display "\tacquire: " stats.numAcquire
+  --    display "\trelease: " stats.numRelease
+  --    display "\tprobe: " stats.numProbe
 
   always do
     when (outputs.notFull .&&. dmemOut.canPeek) do
@@ -900,6 +914,46 @@ type TLConfigCached = TLParams 32 4 4 8 8
 type TLConfigUncached = TLParams 32 4 4 8 0
 type TLConfigSimt = TLParams 32 (4*WarpSize) 4 8 8
 
+makeSRAM :: Module (TLSlave TLConfigUncached)
+makeSRAM = do
+  let stackconfig =
+        TLRAMConfig
+          { fileName= Nothing
+          , lowerBound= -64*1024
+          , bypassChannelA= False
+          , bypassChannelD= False
+          , sink= 0 }
+  stackSlave <- makeTLRAM @(LogStackSize + LogNumWarp + WarpLogSize - 2) @TLConfigUncached stackconfig
+
+  let ramconfig =
+        TLRAMConfig
+          { fileName= Just "IMem.hex"
+          , lowerBound= 0x80000000
+          , bypassChannelA= False
+          , bypassChannelD= False
+          , sink= 0 }
+  ramSlave <- makeTLRAM @28 @TLConfigUncached ramconfig
+
+  let xbarconfig =
+        XBarConfig
+          { bce= True
+          , rootAddr= \ x -> x .>=. 0x8F000000 ? (1,0)
+          , rootSink= \ _ -> 0
+          , rootSource= \ _ -> 0
+          , sizeChannelA= 2
+          , sizeChannelB= 2
+          , sizeChannelC= 2
+          , sizeChannelD= 2
+          , sizeChannelE= 2 }
+
+  ([ramMaster, stackMaster], [slave]) <-
+    withName "xbar" $ makeTLXBar @2 @1 @TLConfigUncached xbarconfig
+
+  makeConnection ramMaster ramSlave
+  makeConnection stackMaster stackSlave
+
+  return slave
+
 makeDCacheSlave :: TLMaster TLConfigCached -> TLMaster TLConfigSimt -> Module ()
 makeDCacheSlave instrMaster simtMaster = do
   let xbarconfig =
@@ -931,14 +985,8 @@ makeDCacheSlave instrMaster simtMaster = do
   (coherentSlave, uncoherentMaster) <-
     withName "broadcast" $ makeBroadcast @TLConfigCached bconfig
 
-  let config =
-        TLRAMConfig
-          { fileName= Just "IMem.hex"
-          , lowerBound= 0x80000000
-          , bypassChannelA= False
-          , bypassChannelD= False
-          , sink= 0 }
-  uncoherentSlave <- makeTLRAM @28 @TLConfigUncached config
+  uncoherentSlave <- makeSRAM
+
   makeConnection uncoherentMaster uncoherentSlave
   makeConnection coherentMaster coherentSlave
   makeDecreaseWidth True simtMaster dataSlave

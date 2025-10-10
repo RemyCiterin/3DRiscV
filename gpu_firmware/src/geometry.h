@@ -17,6 +17,11 @@ typedef struct {
   fixed y;
 } fixed2;
 
+typedef struct {
+  fixed2 aa;
+  fixed2 bb;
+} aabb_t;
+
 // Representation of a triangle in 3D
 typedef struct {
   fixed3 vertex[3];
@@ -34,10 +39,13 @@ typedef struct {
   fixed2 vertex[3];
 
   // Position of each vertex in the Z axis (used for the Z buffer)
-  fixed z[3];
+  fixed3 z;
 
   // Color of the current triangle
   uint8_t color;
+
+  // Bounds of the triangle
+  aabb_t bounds;
 } projtri_t;
 
 fixed fixed_from_int(int);
@@ -87,5 +95,5 @@ fixed3 project_point(fixed**, fixed3);
 
 projtri_t project_triangle(fixed**, triangle_t);
 
-//fixed3 intersect_triangle(projtri_t, fixed2);
+fixed3 intersect_triangle(projtri_t, fixed2);
 

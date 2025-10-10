@@ -20,11 +20,8 @@ _start:
   bltu t0, t1, .bss_zero_loop
 .bss_zero_loop_end:
 
-  csrr t0, mhartid
-  addi t0, t0, 1
-  slli t0, t0, 12
-  la sp, stack0
-  add sp, sp, t0
+  # Each thread view it's stack at the end of the address space
+  addi sp, zero, -16
 
   la t0, _sync
   li t1, 1
