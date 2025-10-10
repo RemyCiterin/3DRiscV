@@ -55,43 +55,43 @@ module mkTopULX3S (
   assign sdram_din = sdram_d;
   assign sdram_d = sdram_den ? sdram_dout : 16'bzzzz;
 
-  SocUlx3s inst (
-    .out_0(ftdi_rxd),
-    .out_1(led),
-    .out_2_miso_0(sd_miso),
-    .out_2_miso_en(1),
-    .out_2_clk(sd_clk),
-    .out_2_mosi(sd_mosi),
-    .out_2_cs(sd_cs),
-    .in0(ftdi_txd),
-    .out_3_sdram_din_en(1),
-    .out_3_sdram_din_0(sdram_din),
-    .out_3_sdram_csn(sdram_csn),
-    .out_3_sdram_rasn(sdram_rasn),
-    .out_3_sdram_casn(sdram_casn),
-    .out_3_sdram_wen(sdram_wen),
-    .out_3_sdram_a(sdram_a),
-    .out_3_sdram_ba(sdram_ba),
-    .out_3_sdram_dqm(sdram_dqm),
-    .out_3_sdram_dout(sdram_dout),
-    .out_3_sdram_den(sdram_den),
-    .out_4_hsync(vga_hsync),
-    .out_4_vsync(vga_vsync),
-    .out_4_blank(vga_blank),
-    .out_4_red(r_video),
-    .out_4_green(g_video),
-    .out_4_blue(b_video),
-    .clock(CLK),
-    .reset(RST)
-  );
-
-  //TestCore inst (
+  //SocUlx3s inst (
   //  .out_0(ftdi_rxd),
   //  .out_1(led),
+  //  .out_2_miso_0(sd_miso),
+  //  .out_2_miso_en(1),
+  //  .out_2_clk(sd_clk),
+  //  .out_2_mosi(sd_mosi),
+  //  .out_2_cs(sd_cs),
   //  .in0(ftdi_txd),
+  //  .out_3_sdram_din_en(1),
+  //  .out_3_sdram_din_0(sdram_din),
+  //  .out_3_sdram_csn(sdram_csn),
+  //  .out_3_sdram_rasn(sdram_rasn),
+  //  .out_3_sdram_casn(sdram_casn),
+  //  .out_3_sdram_wen(sdram_wen),
+  //  .out_3_sdram_a(sdram_a),
+  //  .out_3_sdram_ba(sdram_ba),
+  //  .out_3_sdram_dqm(sdram_dqm),
+  //  .out_3_sdram_dout(sdram_dout),
+  //  .out_3_sdram_den(sdram_den),
+  //  .out_4_hsync(vga_hsync),
+  //  .out_4_vsync(vga_vsync),
+  //  .out_4_blank(vga_blank),
+  //  .out_4_red(r_video),
+  //  .out_4_green(g_video),
+  //  .out_4_blue(b_video),
   //  .clock(CLK),
   //  .reset(RST)
   //);
+
+  TestCore inst (
+    .out_0(ftdi_rxd),
+    .out_1(led),
+    .in0(ftdi_txd),
+    .clock(CLK),
+    .reset(RST)
+  );
 
   //Uart inst (
   //  .out_tx(ftdi_rxd),
