@@ -32,6 +32,6 @@ fixed fixed3_dot(fixed3, fixed3);
 
 fixed3 fixed3_cross(fixed3, fixed3);
 
-void set_projection_matrix(fixed angle, fixed far, fixed near, fixed** m);
+void set_projection_matrix(fixed angle, fixed ratio, fixed far, fixed near, fixed** m);
 
 fixed3 project_point(fixed** m, fixed3 point);

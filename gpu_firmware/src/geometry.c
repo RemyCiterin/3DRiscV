@@ -49,7 +49,6 @@ void print_fixed(fixed x) {
   else if (f >= 100) printf("0%d", f);
   else if (f >= 10) printf("00%d", f);
   else printf("000%d", f);
-  printf("\n");
 
   simt_pop();
 }
@@ -87,14 +86,20 @@ inline fixed3 fixed3_cross(fixed3 a, fixed3 b) {
   return ret;
 }
 
-void set_projection_matrix(fixed angle, fixed far, fixed near, fixed** m) {
-  fixed pi_div_2 = (fixed)((3.14159265f / 2.0f) * FIXED_SCALE);
-  fixed scale = fixed_div(
+// Arguments:
+//  - `angle` is the field of view in radian
+//  - `ratio` is the aspect ratio
+//  - `far` is the distance to the far plan
+//  - `near` is the distance to the near plan
+void set_projection_matrix(fixed angle, fixed ratio, fixed far, fixed near, fixed** m) {
+  fixed h = fixed_div(
     fixed_from_int(1),
     fixed_tan(
-      fixed_div(fixed_mul(angle, pi_div_2), fixed_from_int(180))
+      fixed_div(angle, fixed_from_int(2))
     )
   );
+
+  fixed w = fixed_div(h, ratio);
 
   simt_push();
   for (int i=0; i < 4; i++) {
@@ -104,8 +109,8 @@ void set_projection_matrix(fixed angle, fixed far, fixed near, fixed** m) {
   }
   simt_pop();
 
-  m[0][0] = scale;
-  m[1][1] = scale;
+  m[0][0] = w;
+  m[1][1] = h;
   m[2][2] = -fixed_div(far, far - near);
   m[3][2] = -fixed_div(fixed_mul(far, near), far - near);
   m[2][3] = -fixed_from_int(1);
