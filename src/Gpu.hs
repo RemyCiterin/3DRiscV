@@ -57,8 +57,8 @@ displayAscii term =
 type LogNumWarp = 4
 type WarpId = Bit LogNumWarp
 
-type WarpLogSize = 2
-type WarpSize = 2 ^ WarpLogSize
+type LogWarpSize = 2
+type WarpSize = 2 ^ LogWarpSize
 type WarpMask = Bit WarpSize
 type WarpIdx = Bit (Log2Ceil WarpSize)
 
@@ -381,9 +381,9 @@ data CoalescedMemop =
     -- ^ decoded instruction
     , pc :: Bit 32
     -- ^ program counter of the memory instruction
-    , offset :: Vec WarpSize (Bit (2 + WarpLogSize))
+    , offset :: Vec WarpSize (Bit (2 + LogWarpSize))
     -- ^ for each thread, offset of it's data into the memory block (in bytes)
-    , block :: Bit (32 - 2 - WarpLogSize)
+    , block :: Bit (32 - 2 - LogWarpSize)
     -- ^ base address of the memory block
     , lane :: Bit (32 * WarpSize)
     -- ^ data operands of the warp
@@ -396,7 +396,7 @@ data CoalescedMemop =
 isCached :: Bit 32 -> Bit 1
 isCached addr = addr .>=. 0x80000000
 
-interleavStackAddr :: WarpId -> Bit WarpLogSize -> Bit 32 -> Bit 32
+interleavStackAddr :: WarpId -> Bit LogWarpSize -> Bit 32 -> Bit 32
 interleavStackAddr warpId laneId addr =
   if slice @31 @LogStackSize addr === ones
   then ones # stackOffset # warpId # laneId # wordOffset
@@ -423,8 +423,8 @@ makeCoalescingUnit inputs = do
   warp1 :: Reg WarpId <- makeReg dontCare
   instr1 :: Reg Instr <- makeReg dontCare
   pc1 :: Reg (Bit 32) <- makeReg dontCare
-  offset1 :: Reg (Vec WarpSize (Bit (2 + WarpLogSize))) <- makeReg dontCare
-  block1 :: Reg (Bit (32 - 2 - WarpLogSize)) <- makeReg dontCare
+  offset1 :: Reg (Vec WarpSize (Bit (2 + LogWarpSize))) <- makeReg dontCare
+  block1 :: Reg (Bit (32 - 2 - LogWarpSize)) <- makeReg dontCare
   lane1 :: Reg (Vec WarpSize (Bit 32)) <- makeReg dontCare
   valid1 :: Ehr (Bit 1) <- makeEhr 2 false
 
@@ -443,13 +443,13 @@ makeCoalescingUnit inputs = do
       let leader = firstHot mask
       let base =
             select
-              [ cond --> slice @31 @(WarpLogSize+2) addr
+              [ cond --> slice @31 @(LogWarpSize+2) addr
                 | (cond, addr) <- zip (toBitList leader) addresses]
       let actives :: WarpMask =
             if isCached (base # 0)
             then
               fromBitList
-                [slice @31 @(WarpLogSize+2) a === base .&&. unsafeAt i mask
+                [slice @31 @(LogWarpSize+2) a === base .&&. unsafeAt i mask
                   | (a,i) <- zip addresses [0..]]
             else
               leader
@@ -472,7 +472,7 @@ makeCoalescingUnit inputs = do
       warp1 <== req0.val.warp
       instr1 <== instr
       pc1 <== req0.val.pc
-      offset1 <== fromList [slice @(WarpLogSize+1) @0 a | a <- addresses]
+      offset1 <== fromList [slice @(LogWarpSize+1) @0 a | a <- addresses]
       block1 <== base
       lane1 <== req0.val.op2
 
@@ -524,7 +524,7 @@ makeMemoryUnit cacheSource inputs0 = do
   inputs <- makeCoalescingUnit inputs0
 
   (cache, master) <- withName "dcache" $
-    makeBCacheCore @2 @20 @6 @(4-WarpLogSize) @() @p cacheSource (\ _ lane -> lane)
+    makeBCacheCore @2 @20 @6 @(4-LogWarpSize) @() @p cacheSource (\ _ lane -> lane)
   key :: Reg (Bit 20) <- makeReg dontCare
 
   queue :: Queue CoalescedMemop <- makePipelineQueue 2
@@ -923,7 +923,7 @@ makeSRAM = do
           , bypassChannelA= False
           , bypassChannelD= False
           , sink= 0 }
-  stackSlave <- makeTLRAM @(LogStackSize + LogNumWarp + WarpLogSize - 2) @TLConfigUncached stackconfig
+  stackSlave <- makeTLRAM @(LogStackSize + LogNumWarp + LogWarpSize - 2) @TLConfigUncached stackconfig
 
   let ramconfig =
         TLRAMConfig

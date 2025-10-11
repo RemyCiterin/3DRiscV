@@ -24,8 +24,17 @@ typedef struct {
 
 // Representation of a triangle in 3D
 typedef struct {
+  // Position of each pixel in the 3D space
   fixed3 vertex[3];
-  uint8_t color;
+
+  // Texture ID
+  uint8_t texture;
+
+  // U-Coordinates of each vertex in the texture buffer
+  uint16_t u[3];
+
+  // V-Coordinates of each vertex in the texture buffer
+  uint16_t v[3];
 } triangle_t;
 
 // Projection of a triangle in 2D
@@ -41,11 +50,17 @@ typedef struct {
   // Position of each vertex in the Z axis (used for the Z buffer)
   fixed3 z;
 
-  // Color of the current triangle
-  uint8_t color;
-
   // Bounds of the triangle
   aabb_t bounds;
+
+  // U-Coordinates of each vertex in the texture buffer
+  uint16_t u[3];
+
+  // V-Coordinates of each vertex in the texture buffer
+  uint16_t v[3];
+
+  // Texture ID
+  uint8_t texture;
 } projtri_t;
 
 fixed fixed_from_int(int);

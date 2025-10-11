@@ -216,7 +216,13 @@ projtri_t project_triangle(fixed** m, triangle_t tri) {
         fixed_mul(a,d) - fixed_mul(b,c)
     );
 
-  ret.color = tri.color;
+  ret.texture = tri.texture;
+  ret.u[0] = tri.u[0];
+  ret.v[0] = tri.v[0];
+  ret.u[1] = tri.u[1];
+  ret.v[1] = tri.v[1];
+  ret.u[2] = tri.u[2];
+  ret.v[2] = tri.v[2];
 
   simt_push();
   ret.bounds.aa = min2(min2(ret.vertex[0], ret.vertex[1]), ret.vertex[2]);
