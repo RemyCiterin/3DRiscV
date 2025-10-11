@@ -42,22 +42,6 @@ static inline char read_texture(int u, int v) {
   return texture[u*25+v];
 }
 
-
-int fibo(int n) {
-  int ret = n;
-
-  simt_push();
-  if (n > 1)
-    ret = fibo(n-1) + fibo(n-2);
-  simt_pop();
-
-  return ret;
-}
-
-inline fixed fixed_mul2(fixed a, fixed b) {
-  int64_t res = (int64_t)a * (int64_t)b;
-  return (fixed)(res >> FIXED_LOG_SCALE);
-}
 inline fixed3 intersect_triangle2(projtri_t tri, fixed2 point) {
   fixed3 ret;
 
@@ -70,21 +54,12 @@ inline fixed3 intersect_triangle2(projtri_t tri, fixed2 point) {
   fixed x = point.x - tri.vertex[0].x;
   fixed y = point.y - tri.vertex[0].y;
 
-  ret.y = fixed_mul2(tri.inv_det, fixed_mul2(d,x) - fixed_mul2(b,y));
+  ret.y = fixed_mul(tri.inv_det, fixed_mul(d,x) - fixed_mul(b,y));
 
-  ret.z = fixed_mul2(tri.inv_det, fixed_mul2(y,a) - fixed_mul2(c,x));
+  ret.z = fixed_mul(tri.inv_det, fixed_mul(y,a) - fixed_mul(c,x));
 
   ret.x = fixed_from_int(1) - ret.z - ret.y;
 
-  return ret;
-}
-
-inline fixed fixed_div2(fixed n, fixed d) {
-  simt_push();
-  int64_t a = (int64_t)(n) << FIXED_LOG_SCALE;
-  int64_t b = (int64_t)(d);
-  fixed ret = (fixed)(a / b);
-  simt_pop();
   return ret;
 }
 
@@ -99,8 +74,8 @@ void draw_image(int threadid) {
 
   simt_sync();
 
-  fixed xstep = fixed_div2(2*FIXED_SCALE, FIXED_SCALE * HWIDTH);
-  fixed ystep = fixed_div2(2*FIXED_SCALE, FIXED_SCALE * VWIDTH);
+  fixed xstep = fixed_div(2*FIXED_SCALE, FIXED_SCALE * HWIDTH);
+  fixed ystep = fixed_div(2*FIXED_SCALE, FIXED_SCALE * VWIDTH);
 
   simt_sync();
 
@@ -109,8 +84,8 @@ void draw_image(int threadid) {
 
   for (int idx=threadid; idx < HWIDTH*VWIDTH; idx+=NCPU) {
     fixed2 point = {
-      .x = fixed_mul2(FIXED_SCALE*xpos, xstep) - FIXED_SCALE,
-      .y = fixed_mul2(FIXED_SCALE*ypos, ystep) - FIXED_SCALE
+      .x = fixed_mul(FIXED_SCALE*xpos, xstep) - FIXED_SCALE,
+      .y = fixed_mul(FIXED_SCALE*ypos, ystep) - FIXED_SCALE
     };
 
     simt_push();
@@ -143,11 +118,9 @@ void draw_image(int threadid) {
       simt_pop();
     }
 
-    simt_pop();
-
+    simt_sync();
 
     // Update coordinates
-    simt_push();
     xpos += NCPU;
     while (xpos >= HWIDTH) {
       xpos -= HWIDTH;

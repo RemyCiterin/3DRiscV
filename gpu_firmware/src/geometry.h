@@ -1,5 +1,8 @@
+#pragma once
+
 #include <stdbool.h>
 #include <stdint.h>
+#include "stdlib.h"
 
 #define FIXED_LOG_SCALE 16
 #define FIXED_SCALE (1 << FIXED_LOG_SCALE)
@@ -63,17 +66,29 @@ typedef struct {
   uint8_t texture;
 } projtri_t;
 
-fixed fixed_from_int(int);
+inline fixed fixed_mul(fixed a, fixed b) {
+  int64_t res = (int64_t)a * (int64_t)b;
+  return (fixed)(res >> FIXED_LOG_SCALE);
+}
+
+inline fixed fixed_from_int(int x) {
+  return x << FIXED_LOG_SCALE;
+}
+
+inline fixed fixed_div(fixed n, fixed d) {
+  simt_push();
+  int64_t a = (int64_t)(n) << FIXED_LOG_SCALE;
+  int64_t b = (int64_t)(d);
+  fixed ret = (fixed)(a / b);
+  simt_pop();
+  return ret;
+}
 
 void print_fixed(fixed);
 
 void print_fixed2(fixed2);
 
 void print_fixed3(fixed3);
-
-fixed fixed_mul(fixed, fixed);
-
-fixed fixed_div(fixed, fixed);
 
 fixed fixed_tan(fixed);
 

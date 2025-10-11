@@ -2,25 +2,7 @@
 #include <stdint.h>
 #include "stdlib.h"
 
-inline fixed fixed_mul(fixed a, fixed b) {
-  int64_t res = (int64_t)a * (int64_t)b;
-  return (fixed)(res >> FIXED_LOG_SCALE);
-}
-
-inline fixed fixed_from_int(int x) {
-  return x << FIXED_LOG_SCALE;
-}
-
-inline fixed fixed_div(fixed n, fixed d) {
-  simt_push();
-  int64_t a = (int64_t)(n) << FIXED_LOG_SCALE;
-  int64_t b = (int64_t)(d);
-  fixed ret = (fixed)(a / b);
-  simt_pop();
-  return ret;
-}
-
-inline fixed fixed_tan(fixed x) {
+fixed fixed_tan(fixed x) {
   // see https://andrewkay.name/blog/post/efficiently-approximating-tan-x/
   fixed pisqby4 = (fixed)(2.4674011002723397f * FIXED_SCALE);
   fixed adjpisqby4 = (fixed)(2.471688400562703f * FIXED_SCALE);

@@ -10,6 +10,7 @@ Mem.hex
 Mem.ihex
 DMem.hex
 IMem.hex
+GpuMem.hex
 zig/kernel.asm
 zig/user.asm
 zig/log.txt

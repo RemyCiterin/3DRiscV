@@ -6,10 +6,10 @@ MEMORY
     imem (rx): ORIGIN = 0x80000000, LENGTH = 10K
 
     /* Embedded data memory */
-    dmem (rw): ORIGIN = 0x80010000, LENGTH = 2K
+    dmem (rw): ORIGIN = 0x80004000, LENGTH = 2K
 
     /* External synchronous dynamic random access memory */
-    sdram (rw): ORIGIN = 0x80011000, LENGTH = 80K
+    sdram (rw): ORIGIN = 0x80008000, LENGTH = 80K
 }
 
 SECTIONS

@@ -1,3 +1,5 @@
+#pragma once
+
 void printf(const char*, ...);
 //unsigned strlen(const char*);
 //void* memset(void*, int, unsigned);
@@ -19,4 +21,3 @@ inline __attribute__((always_inline)) void simt_sync() {
   simt_pop();
   simt_push();
 }
-

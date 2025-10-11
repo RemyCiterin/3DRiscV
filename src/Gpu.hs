@@ -282,14 +282,15 @@ makeRegisterRead inputs = do
 data SimtState =
   SimtState
     { busy :: Bit 1
-    , pc :: Bit 32
     , level :: Level }
   deriving(Generic, Bits)
 
-makeScheduler :: Source WB2Schedule -> Module (Source Schedule2Fetch)
-makeScheduler inputs = do
+makeScheduler :: Source (Bit 32) -> Source WB2Schedule -> Module (Source Schedule2Fetch)
+makeScheduler resets inputs = do
   (statesA, statesB) :: ([RAM WarpId SimtState], [RAM WarpId SimtState]) <-
     unzip <$> replicateM (valueOf @WarpSize) makeQuadRAM
+
+  programCounters :: [RAM WarpId (Bit 32)] <- replicateM (valueOf @WarpSize) makeDualRAMForward
 
   -- Use a round robin algorithm to choose the current program counter of the warp
   round :: Reg WarpIdx <- makeReg 0
@@ -300,7 +301,6 @@ makeScheduler inputs = do
   -- Buffer the outputs of the schedule stage
   queue :: Queue Schedule2Fetch <-makePipelineQueue 1
 
-  initIndex :: Reg WarpId <- makeReg 0
   initDone :: Reg (Bit 1) <- makeReg false
 
   let level :: Level = tree1 (\ x y -> x .>. y ? (x,y)) [s.out.level | s <- statesA]
@@ -310,14 +310,15 @@ makeScheduler inputs = do
     when inputs.canPeek do
       forM_ [0..valueOf @WarpSize - 1] \ i -> do
         when (inputs.peek.mask!i) do
+          (programCounters!i).store inputs.peek.warp (inputs.peek.pc!i)
           (statesB!i).store inputs.peek.warp
             SimtState
               { busy= false
-              , pc= inputs.peek.pc!i
               , level= inputs.peek.level }
       inputs.consume
 
     sequence_ [s.load (warp.read 1) | s <- statesA]
+    sequence_ [pc.load (warp.read 1) | pc <- programCounters]
 
     -- Scheduler: choose the first thread availables from `round.val`
     let choosen :: WarpMask =
@@ -325,26 +326,45 @@ makeScheduler inputs = do
           rotr (firstHot (rotl actives round.val)) round.val
 
     forM_ [0..valueOf @WarpSize-1] \ i -> do
-      when (choosen!i) do pc <== (statesA!i).out.pc
+      when (choosen!i) do pc <== (programCounters!i).out
 
-    when (inv initDone.val) do
-      sequence_
-        [ s.store initIndex.val SimtState{busy= false, pc= 0x80000000, level= 1}
-        | s <-statesA ]
-      initDone <== initIndex.val + 1 === 0
-      initIndex <== initIndex.val + 1
+  runStmt do
+    while true do
+      -- Ensure the `while` loop is at least one cycle long
+      tick
+      while resets.canPeek do
+        -- Reset warp and round counter
+        action do
+          round <== 0
+          warp.write 0 0
+          initDone <== false
+
+        while resets.canPeek do
+          -- Don't reset the warp if the pipeline still contains some of it's threads
+          wait $ andList [inv s.out.busy | s <- statesA]
+          action do
+            sequence_
+              [ do
+                pc.store (warp.read 0) resets.peek
+                st.store (warp.read 0) SimtState{busy= false, level= 1}
+              | (st, pc) <- zip statesA programCounters ]
+            warp.write 0 (warp.read 0 + 1)
+
+            when (warp.read 1 === 0) do
+              initDone <== true
+              resets.consume
 
   let mask =
         fromBitList
-          [inv s.out.busy .&&. s.out.pc === pc.val .&&. s.out.level === level
-            | s <- statesA]
+          [inv s.out.busy .&&. ptr.out === pc.val .&&. s.out.level === level
+            | (s,ptr) <- zip statesA programCounters]
 
   let source :: Source Schedule2Fetch =
         Source
           { consume= do
               sequence_
                 [ when (unsafeAt i mask) do
-                  s.store (warp.read 0) SimtState{busy= true, pc= s.out.pc, level= level}
+                  s.store (warp.read 0) SimtState{busy= true, level= level}
                 | (s,i) <- zip statesA [0..]]
               warp.write 0 (1 + warp.read 0)
               when (warp.read 0 === 0) do
@@ -358,6 +378,8 @@ makeScheduler inputs = do
           , canPeek=
               orList [inv s.out.busy | s <- statesA] .&&.
               inv (inputs.canPeek .&&. warp.read 0 === inputs.peek.warp) .&&.
+              inv (delay true resets.canPeek) .&&.
+              inv resets.canPeek .&&.
               initDone.val }
 
   makeConnection source (toSink queue)
@@ -891,48 +913,134 @@ makeWriteBack inputs writeBack = do
       , canPeek = inputs.canPeek }
     , instret.val )
 
+
+makeSimtCore :: forall p.
+  ( KnownTLParams p
+  , AddrWidth p ~ 32
+  , LaneWidth p ~ 4 )
+    => Source (Bit 32)
+    -> Bit (SourceWidth p)
+    -> Bit (SourceWidth p)
+    -> Module (TLMaster p, TLMaster p)
+makeSimtCore resets icacheSource dcacheSource = mdo
+  -------------------------------------------------------------------------------------
+  -- Scheduler
+  -------------------------------------------------------------------------------------
+  schedule2fetch <- withName "schedule" $ makeScheduler resets wb2schedule
+
+  -------------------------------------------------------------------------------------
+  -- Fetch stage
+  -------------------------------------------------------------------------------------
+  (fetch2decode, imaster) <-
+    withName "fetch" $ makeFetch @p icacheSource schedule2fetch
+
+  -------------------------------------------------------------------------------------
+  -- Decode stage
+  -------------------------------------------------------------------------------------
+  decode2rr <- withName "decode" $ makeDecode fetch2decode
+
+  -------------------------------------------------------------------------------------
+  -- Register-read stage
+  -------------------------------------------------------------------------------------
+  (rr2exec, writeBack) <- withName "register_read" $ makeRegisterRead decode2rr
+
+  -------------------------------------------------------------------------------------
+  -- Exec stage
+  -------------------------------------------------------------------------------------
+  (exec2wb, dmaster') <- withName "exec" $ makeExec
+    @(TLParams 32 (4*WarpSize) (SizeWidth p) (SourceWidth p) (SinkWidth p))
+    instret dcacheSource rr2exec
+
+  -------------------------------------------------------------------------------------
+  -- Write-back stage
+  -------------------------------------------------------------------------------------
+  (wb2schedule, instret) <- withName "write_back" $ makeWriteBack exec2wb writeBack
+
+  -------------------------------------------------------------------------------------
+  -- 32-bits memory interface
+  -------------------------------------------------------------------------------------
+  queueA :: Queue (ChannelA p) <- makeQueue
+  queueB :: Queue (ChannelB p) <- makeQueue
+  queueC :: Queue (ChannelC p) <- makeQueue
+  queueD :: Queue (ChannelD p) <- makeQueue
+  queueE :: Queue (ChannelE p) <- makeQueue
+
+  let dslave =
+        TLSlave
+          { channelA= toSink queueA
+          , channelB= toSource queueB
+          , channelC= toSink queueC
+          , channelD= toSource queueD
+          , channelE= toSink queueE }
+
+  let dmaster =
+        TLMaster
+          { channelA= toSource queueA
+          , channelB= toSink queueB
+          , channelC= toSource queueC
+          , channelD= toSink queueD
+          , channelE= toSource queueE }
+
+  makeDecreaseWidth
+    @WarpSize @p @(TLParams 32 (4*WarpSize) (SizeWidth p) (SourceWidth p) (SinkWidth p))
+    True dmaster' dslave
+
+  return (imaster, dmaster)
+
+
 makeGpu :: Bit 1 -> Module (Bit 1, Bit 8)
 makeGpu rx = mdo
-  schedule2fetch <- withName "schedule" $ makeScheduler wb2schedule
-  (exec2wb, dmaster) <- withName "exec" $ makeExec @TLConfigSimt instret dcacheSource rr2exec
-  (wb2schedule, instret) <- withName "write_back" $ makeWriteBack exec2wb writeBack
-  (rr2exec, writeBack) <- withName "register_read" $ makeRegisterRead decode2rr
-  decode2rr <- withName "decode" $ makeDecode fetch2decode
-  (fetch2decode, imaster) <- withName "fetch" $ makeFetch @TLConfigCached icacheSource schedule2fetch
-
-  cycle :: Reg (Bit 32) <- makeReg 0
+  resets <- makeQueue
   always do
-    cycle <== cycle.val + 1
+    when (delay true false) do
+      resets.enq 0x80000000
+
+  (imaster, dmaster) <- makeSimtCore (toSource resets) icacheSource dcacheSource
 
   withName "memory_slave" $ makeDCacheSlave imaster dmaster
 
-  pure (1, zeroExtend fetch2decode.canPeek)
+  pure (1, zeroExtend imaster.channelA.canPeek)
 
 dcacheSource = 0
 icacheSource = 1
+
 type TLConfigCached = TLParams 32 4 4 8 8
 type TLConfigUncached = TLParams 32 4 4 8 0
 type TLConfigSimt = TLParams 32 (4*WarpSize) 4 8 8
 
-makeSRAM :: Module (TLSlave TLConfigUncached)
-makeSRAM = do
+makeGpuStacks :: forall p.
+  ( KnownTLParams p
+  , AddrWidth p ~ 32
+  , LaneWidth p ~ 4 )
+    => Bit (SinkWidth p) -> Module (TLSlave p)
+makeGpuStacks sink = do
   let stackconfig =
         TLRAMConfig
           { fileName= Nothing
-          , lowerBound= -64*1024
+          , lowerBound= - stackSize * warpSize * numWarp
           , bypassChannelA= False
           , bypassChannelD= False
           , sink= 0 }
-  stackSlave <- makeTLRAM @(LogStackSize + LogNumWarp + LogWarpSize - 2) @TLConfigUncached stackconfig
+  makeTLRAM
+    @(LogStackSize + LogNumWarp + LogWarpSize - 2) @p
+    stackconfig
+  where
+    stackSize = lit $ 2 ^ valueOf @LogStackSize
+    warpSize = lit $ 2 ^ valueOf @LogWarpSize
+    numWarp = lit $ 2 ^ valueOf @LogNumWarp
+
+makeSRAM :: Module (TLSlave TLConfigUncached)
+makeSRAM = do
+  stackSlave <- makeGpuStacks @TLConfigUncached 0
 
   let ramconfig =
         TLRAMConfig
-          { fileName= Just "IMem.hex"
+          { fileName= Just "GpuMem.hex"
           , lowerBound= 0x80000000
           , bypassChannelA= False
           , bypassChannelD= False
           , sink= 0 }
-  ramSlave <- makeTLRAM @28 @TLConfigUncached ramconfig
+  ramSlave <- makeTLRAM @14 @TLConfigUncached ramconfig
 
   let xbarconfig =
         XBarConfig
@@ -954,8 +1062,8 @@ makeSRAM = do
 
   return slave
 
-makeDCacheSlave :: TLMaster TLConfigCached -> TLMaster TLConfigSimt -> Module ()
-makeDCacheSlave instrMaster simtMaster = do
+makeDCacheSlave :: TLMaster TLConfigCached -> TLMaster TLConfigCached -> Module ()
+makeDCacheSlave instrMaster dataMaster = do
   let xbarconfig =
         XBarConfig
           { bce= True
@@ -989,4 +1097,4 @@ makeDCacheSlave instrMaster simtMaster = do
 
   makeConnection uncoherentMaster uncoherentSlave
   makeConnection coherentMaster coherentSlave
-  makeDecreaseWidth True simtMaster dataSlave
+  makeConnection dataMaster dataSlave
