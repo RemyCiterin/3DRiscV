@@ -26,6 +26,7 @@ executable blarney-test
     TileLink.Utils,
     TileLink.GetPut,
     TileLink.RAM,
+    TileLink.LLC,
     TileLink,
     Gpu,
     DDR3,
