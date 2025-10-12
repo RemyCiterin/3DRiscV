@@ -10,6 +10,7 @@ import Blarney.Sharing
 import Blarney.Arbiter
 import Blarney.SourceSink
 import Blarney.Connectable
+import Blarney.TypeFamilies
 import Blarney.Utils
 import Blarney.ADT
 
@@ -19,8 +20,6 @@ import TileLink.Utils
 import TileLink.AcquireRelease
 import TileLink.Interconnect
 import TileLink.Broadcast
-
-
 
 --             hit
 -- InputA ------------> Probe new addr
@@ -34,6 +33,7 @@ type OffsetW = 4
 -- IndexW + TagW must be 26
 type IndexW = 8
 type TagW = 18
+type Ways = 4
 
 -- Up to snoop targets
 type OwnerW = 8
@@ -43,7 +43,7 @@ type Owner = Bit OwnerW
 type Offset = Bit OffsetW
 type Index = Bit IndexW
 type Tag = Bit TagW
-type Ways = 4
+type Way = Bit (Log2Ceil Ways)
 
 getIndex :: Bit 32 -> Index
 getIndex addr = slice @(6+IndexW-1) @6 addr
@@ -99,10 +99,10 @@ makeTransactionQueue sinks = do
                   fromBitList (map (===sink) sinks)
             valid.write 1 (valid.read 1 .&. inv invalidated) }
 
-type Request p =
+type RequestKind =
   TaggedUnion
-    [ "ReqA" ::: (Bit (SinkWidth p), ChannelA p)
-    , "ReqC" ::: ChannelC p ]
+    [ "RequestA" ::: ()
+    , "RequestC" ::: () ]
 
 data LLCConfig p =
   LLCConfig
@@ -123,6 +123,12 @@ makeLLC :: forall p p'.
   , KnownTLParams p )
   => LLCConfig p -> Module (TLSlave p, TLMaster p')
 makeLLC config = do
+  randomWay :: Reg Way <- makeReg 0
+  always (randomWay <== randomWay.val + 1)
+
+  [memWrArbiter, cpuWrArbiter] <- makeStaticArbiter 2
+  [memRdArbiter, cpuRdArbiter] <- makeStaticArbiter 2
+
   slaveA :: Queue (ChannelA p') <- makeQueue
   slaveD :: Queue (ChannelD p') <- makeQueue
 
@@ -131,11 +137,9 @@ makeLLC config = do
   queueC :: Queue (ChannelC p) <- makeQueue
   queueD :: Queue (ChannelD p) <- makeQueue
   queueE :: Queue (ChannelE p) <- makeQueue
-  metaA <- makeMetaSourceA @p (toSource queueA)
-  metaC <- makeMetaSourceC @p (toSource queueC)
   let sourceE = toSource queueE
-  let sourceA = metaA.source
-  let sourceC = metaC.source
+  let sourceA = toSource queueA
+  let sourceC = toSource queueC
   let sinkB = toSink queueB
   let sinkD = toSink queueD
 
@@ -148,20 +152,24 @@ makeLLC config = do
   perms :: [RAM Index TLPerm] <- replicateM (valueOf @Ways) makeDualRAMForward
   owners :: [RAM Index Owner] <- replicateM (valueOf @Ways) makeDualRAMForward
 
-  stage1Q :: Queue (Request p) <- makePipelineQueue 1
+  stage1 :: Queue RequestKind <- makePipelineQueue 1
+  sink1 :: Reg (Bit (SinkWidth p)) <- makeReg dontCare
+  requestA1 :: Reg (ChannelA p) <- makeReg dontCare
+  requestC1 :: Reg (ChannelC p) <- makeReg dontCare
 
   -------------------------------------------------------------------------------------------
   -- Stage 1: Lookup
   -------------------------------------------------------------------------------------------
   always do
     -- Stage 1 ready
-    when (stage1Q.notFull) do
+    when (stage1.notFull) do
       if sourceC.canPeek then do
         -- We received a ProbeAck* response or a Release* request
         sequence_ [owner.load (getIndex sourceC.peek.address) | owner <- owners]
         sequence_ [perm.load (getIndex sourceC.peek.address) | perm <- perms]
         sequence_ [tag.load (getIndex sourceC.peek.address) | tag <- tags]
-        stage1Q.enq (tag #ReqC sourceC.peek)
+        stage1.enq (item #RequestC)
+        requestC1 <== sourceC.peek
 
       else if retryQ.notFull .&&. sourceA.canPeek .&&. transactions.canEnq then do
         -- We received an Acquire* request
@@ -174,7 +182,9 @@ makeLLC config = do
           retryQ.enq sourceA.peek
         else do
           sink <- transactions.enq sourceA.peek
-          stage1Q.enq (tag #ReqA (sink, sourceA.peek))
+          stage1.enq (item #RequestA)
+          requestA1 <== sourceA.peek
+          sink1 <== sink
 
       else if retryQ.canDeq .&&. transactions.canEnq then do
         -- Retry a previous Acquire* request
@@ -183,8 +193,10 @@ makeLLC config = do
         sequence_ [tag.load (getIndex retryQ.first.address) | tag <- tags]
 
         when (inv (transactions.search retryQ.first.address)) do
-          sink <- transactions.enq sourceA.peek
-          stage1Q.enq (tag #ReqA (sink, sourceA.peek))
+          sink <- transactions.enq retryQ.first
+          stage1.enq (item #RequestA)
+          requestA1 <== retryQ.first
+          sink1 <== sink
           retryQ.deq
 
       else if sourceE.canPeek then do
@@ -197,6 +209,36 @@ makeLLC config = do
   -------------------------------------------------------------------------------------------
   -- Stage 1: Matching
   -------------------------------------------------------------------------------------------
+
+  always do
+    when stage1.canDeq do
+      let kind = stage1.first
+
+      -- Address of the request
+      let address =
+            kind `isTagged` #RequestC ? (requestC1.val.address, requestA1.val.address)
+
+      let tag = getTag address
+
+      let hits :: Bit Ways =
+            fromBitList
+              [ p.out =!= nothing .&&. t.out === tag
+                | (t,p) <- zip tags perms ]
+
+      let way :: Way =
+            selectDefault randomWay.val
+              [ hit --> lit i
+                | (hit,i) <- zip (toBitList hits) [0..] ]
+
+      if kind `isTagged` #RequestC then do
+        cpuWrArbiter.request
+
+      else do
+        pure ()
+
+      when cpuWrArbiter.grant do
+        -- Write to the data ram
+        stage1.deq
 
   return
     ( TLSlave
