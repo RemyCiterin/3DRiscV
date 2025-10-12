@@ -53,8 +53,9 @@ module mkTop (
   assign RST = !RST_N;
 
   TestCore inst (
-    .out(tx),
     .in0(rx),
+    .out_0(tx),
+    .out_1(led),
     .clock(clk83mhz),
     .reset(RST)
   );

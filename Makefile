@@ -151,6 +151,7 @@ yosys:
 	yosys -q -p \
 		"synth_xilinx -flatten -abc9 -arch xc7 -top mkTop; write_json build/mkTop.json" \
 		$(LIB) $(DDR3)
+	./filter_scopeinfo.py
 
 # The chip database only needs to be generated once
 # that is why we don't clean it with make clean
