@@ -18,6 +18,7 @@ import Screen
 import Uart
 import Core
 import Spi
+import Gpu
 
 import TileLink
 import TileLink.CoherentBCache
@@ -133,10 +134,7 @@ makeCPU rx = mdo
                 , x === 3 --> 0
                 , x === 4 --> 1
                 , x === 5 --> 2
-                , x === 6 --> 3
-                , x === 7 --> 3
-                , x === 8 --> 2
-                , x === 9 --> 3 ]
+                , x === 6 --> 3 ]
           , sizeChannelA= 2
           , sizeChannelB= 2
           , sizeChannelC= 2
@@ -149,8 +147,8 @@ makeCPU rx = mdo
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0
   withName "xbar" $ makeConnection dmaster0 slave1
-  --withName "xbar" $ makeConnection imaster1 slave2
-  --withName "xbar" $ makeConnection dmaster1 slave3
+  withName "xbar" $ makeConnection imaster1 slave2
+  withName "xbar" $ makeConnection dmaster1 slave3
 
   (clintMmio, clint) <- withName "clint" $ makeClint @TLConfig 2 0x2000000
   clintSlave <- makeTLMmio @TLConfig 1 (clintMmio ++ uartMmio ++ spiMmio)
@@ -181,23 +179,28 @@ makeCPU rx = mdo
           , hartId= 0 }
   (imaster0, dmaster0) <- withName "core0" $ makeCore coreconfig0 systemInputs0
 
-  let coreconfig1 =
-        CoreConfig
-          { fetchSource= 5
-          , dataSource= 6
-          , mmioSource= 7
-          , itlbSource= 8
-          , dtlbSource= 9
-          , hartId= 1 }
-  --(imaster1, dmaster1) <- withName "core1" $ makeCore coreconfig1 systemInputs1
+  gpuResets <- makeQueue
+  always do
+    when (delay true false) do
+      gpuResets.enq 0x80000000
+
+  let gpuBaseHartid :: Bit 32 = 1
+  let gpuInstSource :: Bit 8 = 5
+  let gpuDataSource :: Bit 8 = 6
+  (imaster1, dmaster1) <-
+    withName "gpu" $ makeSimtCore @TLConfig
+      gpuBaseHartid
+      (toSource gpuResets)
+      gpuInstSource
+      gpuDataSource
 
   let bconfig =
         BroadcastConfig
           { sources=
               [ coreconfig0.fetchSource
-              , coreconfig0.dataSource ]
-              -- , coreconfig1.fetchSource
-              -- , coreconfig1.dataSource ]
+              , coreconfig0.dataSource
+              , gpuInstSource
+              , gpuDataSource ]
           , logSize= 6
           , baseSink= 0 }
   (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
@@ -211,6 +214,7 @@ makeUlx3s rx = mdo
   (tx, leds, spi, master, vga) <- makeCPU rx
 
   let sdramBase :: Bit 32 = 0x80000000 + 4 * lit (2 ^ valueOf @RomLogSize)
+  let stacksBase :: Bit 32 = 0x8F000000
 
   let sramconfig =
         TLRAMConfig
@@ -223,8 +227,12 @@ makeUlx3s rx = mdo
   let xbarconfig =
         XBarConfig
           { bce= False
-          , rootAddr= \ x -> x .>=. sdramBase ? (0,1)
-          , rootSink= \ x -> x === 0 ? (0, 1)
+          , rootAddr= \ x ->
+              select
+                [ x .<. sdramBase --> 1
+                , x .>=. sdramBase .&&. x .<. stacksBase --> 0
+                , x .>=. stacksBase --> 2 ]
+          , rootSink= \ x -> 0
           , rootSource= \ x -> 0
           , sizeChannelA= 2
           , sizeChannelB= 2
@@ -234,13 +242,16 @@ makeUlx3s rx = mdo
 
   makeConnection master slave
 
-  ([masterSdram, masterSram], [slave]) <-
-    withName "xbar" $ makeTLXBar @2 @1 @TLConfig' xbarconfig
+  ([masterSdram, masterSram, masterStacks], [slave]) <-
+    withName "xbar" $ makeTLXBar @3 @1 @TLConfig' xbarconfig
+
+  slaveStacks <- makeGpuStacks @TLConfig' 0
 
   (fabric, slaveSdram) <- withName "sdram" $ makeTLSdram @TLConfig' 0 sdramBase
 
   slaveSram <- withName "sram" $ makeTLRAM @RomLogSize @TLConfig' sramconfig
 
+  makeConnection masterStacks slaveStacks
   makeConnection masterSdram slaveSdram
   makeConnection masterSram slaveSram
 

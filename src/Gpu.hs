@@ -765,10 +765,11 @@ makeExec :: forall p.
   , LaneWidth p ~ 4 * WarpSize
   , 8 * LaneWidth p ~ 32 * WarpSize )
     => Bit 32
+    -> Bit 32
     -> Bit (SourceWidth p)
     -> Source RR2Exec
     -> Module (Source Exec2WB, TLMaster p)
-makeExec instret cacheSource inputs = do
+makeExec minHartid instret cacheSource inputs = do
   (dmemOut, master, stats) <-
     makeMemoryUnitWrapper @p cacheSource
       (inputs{canPeek= inputs.canPeek .&&. inputs.peek.instr.isMemAccess})
@@ -842,7 +843,8 @@ makeExec instret cacheSource inputs = do
       -- read thread id
       if instr.opcode `is` [CSRRW,CSRRS,CSRRC] .&&. instr.csr === 0xf14 then do
         nextRD <== fromList
-              [ 0 # warp # (lit (toInteger i) :: WarpIdx) | i <- [0..valueOf @WarpSize - 1]]
+              [ minHartid + (0 # warp # (lit (toInteger i) :: WarpIdx))
+                | i <- [0..valueOf @WarpSize - 1]]
       else if instr.opcode `is` [CSRRW,CSRRS,CSRRC] .&&. instr.csr === 0xb00 then do
         nextRD <== fromList
               [ cycle.val | i <- [0..valueOf @WarpSize - 1]]
@@ -918,11 +920,12 @@ makeSimtCore :: forall p.
   ( KnownTLParams p
   , AddrWidth p ~ 32
   , LaneWidth p ~ 4 )
-    => Source (Bit 32)
+    => Bit 32
+    -> Source (Bit 32)
     -> Bit (SourceWidth p)
     -> Bit (SourceWidth p)
     -> Module (TLMaster p, TLMaster p)
-makeSimtCore resets icacheSource dcacheSource = mdo
+makeSimtCore minHartid resets icacheSource dcacheSource = mdo
   -------------------------------------------------------------------------------------
   -- Scheduler
   -------------------------------------------------------------------------------------
@@ -949,7 +952,7 @@ makeSimtCore resets icacheSource dcacheSource = mdo
   -------------------------------------------------------------------------------------
   (exec2wb, dmaster') <- withName "exec" $ makeExec
     @(TLParams 32 (4*WarpSize) (SizeWidth p) (SourceWidth p) (SinkWidth p))
-    instret dcacheSource rr2exec
+    minHartid instret dcacheSource rr2exec
 
   -------------------------------------------------------------------------------------
   -- Write-back stage
@@ -995,7 +998,7 @@ makeGpu rx = mdo
     when (delay true false) do
       resets.enq 0x80000000
 
-  (imaster, dmaster) <- makeSimtCore (toSource resets) icacheSource dcacheSource
+  (imaster, dmaster) <- makeSimtCore 1 (toSource resets) icacheSource dcacheSource
 
   withName "memory_slave" $ makeDCacheSlave imaster dmaster
 

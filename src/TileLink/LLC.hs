@@ -30,6 +30,8 @@ import TileLink.Broadcast
 -- OffsetW must be 4 bytes: size of a cache line
 type OffsetW = 4
 
+type AddrW = 32
+
 -- IndexW + TagW must be 26
 type IndexW = 8
 type TagW = 18
@@ -40,15 +42,16 @@ type OwnerW = 8
 
 type Owner = Bit OwnerW
 
+type Addr = Bit AddrW
 type Offset = Bit OffsetW
 type Index = Bit IndexW
 type Tag = Bit TagW
 type Way = Bit (Log2Ceil Ways)
 
-getIndex :: Bit 32 -> Index
+getIndex :: Addr -> Index
 getIndex addr = slice @(6+IndexW-1) @6 addr
 
-getTag :: Bit 32 -> Tag
+getTag :: Addr -> Tag
 getTag addr = slice @31 @(32-TagW) addr
 
 type ReqKind = Bit 1
@@ -99,10 +102,6 @@ makeTransactionQueue sinks = do
                   fromBitList (map (===sink) sinks)
             valid.write 1 (valid.read 1 .&. inv invalidated) }
 
-type RequestKind =
-  TaggedUnion
-    [ "RequestA" ::: ()
-    , "RequestC" ::: () ]
 
 data LLCConfig p =
   LLCConfig
@@ -111,7 +110,6 @@ data LLCConfig p =
     , baseSink :: Bit (SinkWidth p)
     -- ^ lowest sink ID of the range of sinks allocated to the LLC
     , logNumSink :: Int }
-
 
 -- Last Level Cache
 --  - Non blocking
@@ -140,105 +138,118 @@ makeLLC config = do
   let sourceE = toSource queueE
   let sourceA = toSource queueA
   let sourceC = toSource queueC
-  let sinkB = toSink queueB
   let sinkD = toSink queueD
+
+  probeM <- makeProbeFSM config.sources (toSink queueB)
 
   transactions :: TransactionQueue p <-
     makeTransactionQueue [ config.baseSink + lit i | i <- [0..2 ^ config.logNumSink - 1] ]
 
   retryQ :: Queue (ChannelA p) <- makeSizedQueue 4
 
-  tags :: [RAM Index Tag] <- replicateM (valueOf @Ways) makeDualRAMForward
-  perms :: [RAM Index TLPerm] <- replicateM (valueOf @Ways) makeDualRAMForward
-  owners :: [RAM Index Owner] <- replicateM (valueOf @Ways) makeDualRAMForward
+  (tagsA, tagsC) <- makeDualPortdeRAM @Tag
+  (permsA, permsC) <- makeDualPortdeRAM @TLPerm
+  (ownersA, ownersC) <- makeDualPortdeRAM @Owner
 
-  stage1 :: Queue RequestKind <- makePipelineQueue 1
-  sink1 :: Reg (Bit (SinkWidth p)) <- makeReg dontCare
-  requestA1 :: Reg (ChannelA p) <- makeReg dontCare
-  requestC1 :: Reg (ChannelC p) <- makeReg dontCare
+  stage1A :: Queue (Bit (SinkWidth p), ChannelA p) <- makePipelineQueue 2
+  stage1C :: Queue (ChannelC p) <- makePipelineQueue 2
 
   -------------------------------------------------------------------------------------------
   -- Stage 1: Lookup
   -------------------------------------------------------------------------------------------
   always do
-    -- Stage 1 ready
-    when (stage1.notFull) do
-      if sourceC.canPeek then do
-        -- We received a ProbeAck* response or a Release* request
-        sequence_ [owner.load (getIndex sourceC.peek.address) | owner <- owners]
-        sequence_ [perm.load (getIndex sourceC.peek.address) | perm <- perms]
-        sequence_ [tag.load (getIndex sourceC.peek.address) | tag <- tags]
-        stage1.enq (item #RequestC)
-        requestC1 <== sourceC.peek
+    if sourceE.canPeek then do
+      -- We received a GrantAck response
+      transactions.deq sourceE.peek.sink
+      sourceE.consume
 
-      else if retryQ.notFull .&&. sourceA.canPeek .&&. transactions.canEnq then do
+    else if stage1C.notFull .&&. sourceC.canPeek then do
+      -- We received a ProbeAck* response or a Release* request
+      sequence_ [owner.load (getIndex sourceC.peek.address) | owner <- ownersC]
+      sequence_ [perm.load (getIndex sourceC.peek.address) | perm <- permsC]
+      sequence_ [tag.load (getIndex sourceC.peek.address) | tag <- tagsC]
+      stage1C.enq sourceC.peek
+      sourceC.consume
+
+    else when (stage1A.notFull .&&. transactions.canEnq) do
+
+      if retryQ.notFull .&&. sourceA.canPeek then do
         -- We received an Acquire* request
-        sequence_ [owner.load (getIndex sourceA.peek.address) | owner <- owners]
-        sequence_ [perm.load (getIndex sourceA.peek.address) | perm <- perms]
-        sequence_ [tag.load (getIndex sourceA.peek.address) | tag <- tags]
+        sequence_ [owner.load (getIndex sourceA.peek.address) | owner <- ownersA]
+        sequence_ [perm.load (getIndex sourceA.peek.address) | perm <- permsA]
+        sequence_ [tag.load (getIndex sourceA.peek.address) | tag <- tagsA]
 
         -- slove acquire hazard
         if transactions.search sourceA.peek.address then do
           retryQ.enq sourceA.peek
         else do
           sink <- transactions.enq sourceA.peek
-          stage1.enq (item #RequestA)
-          requestA1 <== sourceA.peek
-          sink1 <== sink
+          stage1A.enq (sink, sourceA.peek)
 
-      else if retryQ.canDeq .&&. transactions.canEnq then do
+        sourceA.consume
+
+      else if retryQ.canDeq then do
         -- Retry a previous Acquire* request
-        sequence_ [owner.load (getIndex retryQ.first.address) | owner <- owners]
-        sequence_ [perm.load (getIndex retryQ.first.address) | perm <- perms]
-        sequence_ [tag.load (getIndex retryQ.first.address) | tag <- tags]
+        sequence_ [owner.load (getIndex retryQ.first.address) | owner <- ownersA]
+        sequence_ [perm.load (getIndex retryQ.first.address) | perm <- permsA]
+        sequence_ [tag.load (getIndex retryQ.first.address) | tag <- tagsA]
 
         when (inv (transactions.search retryQ.first.address)) do
           sink <- transactions.enq retryQ.first
-          stage1.enq (item #RequestA)
-          requestA1 <== retryQ.first
-          sink1 <== sink
+          stage1A.enq (sink, retryQ.first)
           retryQ.deq
-
-      else if sourceE.canPeek then do
-        -- We received a GrantAck response
-        transactions.deq sourceE.peek.sink
 
       else do
         pure ()
 
   -------------------------------------------------------------------------------------------
-  -- Stage 1: Matching
+  -- Stage 1 C: Matching channel C inputs
   -------------------------------------------------------------------------------------------
 
   always do
-    when stage1.canDeq do
-      let kind = stage1.first
+    when stage1C.canDeq do
+      let req = stage1C.first
 
-      -- Address of the request
-      let address =
-            kind `isTagged` #RequestC ? (requestC1.val.address, requestA1.val.address)
-
-      let tag = getTag address
+      let tag = getTag req.address
 
       let hits :: Bit Ways =
             fromBitList
               [ p.out =!= nothing .&&. t.out === tag
-                | (t,p) <- zip tags perms ]
+                | (t,p) <- zip tagsC permsC ]
 
       let way :: Way =
             selectDefault randomWay.val
               [ hit --> lit i
                 | (hit,i) <- zip (toBitList hits) [0..] ]
 
-      if kind `isTagged` #RequestC then do
-        cpuWrArbiter.request
-
-      else do
-        pure ()
-
+      cpuWrArbiter.request
       when cpuWrArbiter.grant do
         -- Write to the data ram
-        stage1.deq
+        stage1C.deq
+
+  -------------------------------------------------------------------------------------------
+  -- Stage 1 A: Matching channel A inputs
+  -------------------------------------------------------------------------------------------
+
+  always do
+    when (stage1A.canDeq .&&. probeM.canPut) do
+      let (sink, req) = stage1A.first
+
+      let tag = getTag req.address
+
+      let hits :: Bit Ways =
+            fromBitList
+              [ p.out =!= nothing .&&. t.out === tag
+                | (t,p) <- zip tagsA permsA ]
+
+      let way :: Way =
+            selectDefault randomWay.val
+              [ hit --> lit i
+                | (hit,i) <- zip (toBitList hits) [0..] ]
+
+      -- TODO: send the correct probe requests
+      probeM.put (dontCare, dontCare, dontCare)
+      stage1A.deq
 
   return
     ( TLSlave
@@ -253,3 +264,40 @@ makeLLC config = do
       , channelC= nullSource
       , channelD= toSink slaveD
       , channelE= nullSource })
+  where
+    makeDualPortdeRAM :: forall a. Bits a => Module ([RAM Index a], [RAM Index a])
+    makeDualPortdeRAM = do
+      ram :: [RAM Index a] <- replicateM (valueOf @Ways) makeDualRAMForward
+      portA <- mapM makeSafeRAM ram
+      portB <- mapM makeSafeRAM ram
+      return (portA, portB)
+
+    makeProbeFSM ::
+      [Bit (SourceWidth p)]
+      -> Sink (ChannelB p)
+      -> Module (Sink (OpcodeB, Addr, Owner))
+    makeProbeFSM sources sinkB = do
+      opcode :: Reg OpcodeB <- makeReg dontCare
+      address :: Reg Addr <- makeReg dontCare
+      owners :: Reg Owner <- makeReg 0
+
+      always do
+        when (owners.val =!= 0 .&&. sinkB.canPut) do
+          let choosen = firstHot owners.val
+          let source = select [ cond --> src | (cond,src) <- zip (toBitList choosen) sources ]
+          owners <== owners.val .&. inv choosen
+          sinkB.put
+            ChannelB
+              { address= address.val
+              , opcode= opcode.val
+              , size= 6
+              , source }
+
+      return
+        Sink
+          { canPut= owners.val === 0
+          , put= \ (op,addr,oneHot) -> do
+              owners <== oneHot
+              address <== addr
+              opcode <== op }
+

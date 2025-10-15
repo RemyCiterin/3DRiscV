@@ -43,6 +43,21 @@ unsafe extern "C" fn bootloader_main() -> () {
     }
 
     sdcard::init();
-    loop {}
+
+
+    for block in 0..10000 {unsafe{
+        if block % 100 == 0 {
+            print!("\rread block {}    ", block);
+        }
+
+        let base: u32 = 0x8001_0000 + 512 * block;
+
+        let slice: &mut [u8] = core::slice::from_raw_parts_mut(base as *mut u8, 512);
+
+        sdcard::read_block(block, slice);
+    }}
+
+    println!();
+
 }
 
