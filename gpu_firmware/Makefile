@@ -1,5 +1,5 @@
 CFLAGS =	-march=rv32im_zicsr -mabi=ilp32 -fno-builtin \
-					-ffreestanding -nostdlib -O2
+					-ffreestanding -nostdlib -O2 -ggdb
 CC = riscv32-none-elf-gcc
 LD = riscv32-none-elf-ld
 

@@ -30,6 +30,8 @@ static fixed* proj[4];
 
 static bool volatile hit[HWIDTH * VWIDTH];
 
+timestamp_t global_timestamp;
+
 //static int m1[NCPU][NCPU];
 //static int m2[NCPU][NCPU];
 //static int m3[NCPU][NCPU];
@@ -136,20 +138,38 @@ void draw_image(int threadid) {
   simt_pop();
 }
 
+extern void cpu_main() {
+  init_timestamp(&global_timestamp);
 
-extern void main(int threadid) {
+  while (!bitmask[NCPU-1]) {}
+
+  print_stats(0, &global_timestamp);
+
+  for (int i=0; i < VWIDTH; i++) {
+    char* line = alloca(HWIDTH+1);
+
+    for (int j=0; j < HWIDTH; j++)
+      line[j] = rgb_buffer[i*HWIDTH+j];
+    line[HWIDTH] = 0;
+
+    for (int j=HWIDTH-1; i > 0; j--) {
+      if (line[j] != ' ') {
+        line[j+1] = 0;
+        break;
+      }
+    }
+
+    printf("%s\n", line);
+  }
+
+  while (true) {
+    printf("Hello world!\n");
+  }
+}
+
+extern void gpu_main(int threadid) {
   // Initialize thread locks
   if (threadid == 0) {
-    //for (int i=0; i < NCPU; i ++) {
-    //  for (int j=0; j < NCPU; j++) {
-    //    m1[i][j] = i;
-    //  }
-    //}
-    //for (int i=0; i < NCPU; i ++) {
-    //  for (int j=0; j < NCPU; j++) {
-    //    m2[i][j] = i;
-    //  }
-    //}
 
     for (int i=0; i < NCPU; i++) bitmask[i] = 0;
 
@@ -198,23 +218,6 @@ extern void main(int threadid) {
     // Apply the projection matrix to the current triangles
     ////////////////////////////////////////////////////////////////////////////
     ptri = project_triangle(proj, tri);
-    printf("vertex0: x: ");
-    print_fixed(ptri.vertex[0].x); printf(" y: ");
-    print_fixed(ptri.vertex[0].y); printf(" z: ");
-    print_fixed(ptri.z.x); printf("\n");
-
-    printf("vertex1: x: ");
-    print_fixed(ptri.vertex[1].x); printf(" y: ");
-    print_fixed(ptri.vertex[1].y); printf(" z: ");
-    print_fixed(ptri.z.y); printf("\n");
-
-    printf("vertex2: x: ");
-    print_fixed(ptri.vertex[2].x); printf(" y: ");
-    print_fixed(ptri.vertex[2].y); printf(" z: ");
-    print_fixed(ptri.z.z); printf("\n");
-
-    print_fixed2(ptri.bounds.aa); printf("\n");
-    print_fixed2(ptri.bounds.bb); printf("\n");
 
 
     ////////////////////////////////////////////////////////////////////////////
@@ -226,58 +229,13 @@ extern void main(int threadid) {
   while (!wait) {}
 
   simt_sync();
-  timestamp_t timestamp;
-  init_timestamp(&timestamp);
-  simt_sync();
-
-
-  //for (int i=0; i < NCPU; i++) {
-  //  for (int j=0; j < NCPU; j++) {
-  //    m3[i][threadid] += m1[i][j] * m2[j][threadid];
-  //  }
-  //}
 
   draw_image(threadid);
-
-  //int xpos = threadid & 0x7;
-  //int ypos = threadid >> 3;
-
-  //fixed3 inter = intersect_triangle(ptri, point);
-
-  //bool res = inter.x >= 0 && inter.y >= 0 && inter.z >= 0;
 
   // Wait for the execution of all the previous threads to finish
   while (threadid && !bitmask[threadid-1]) {}
 
-  //printf("xpos: %d ypos: %d\n", xpos, ypos);
-  //print_fixed2(point); printf("\n");
-  //print_fixed(inter.x); printf("\n");
-  //print_fixed(inter.y); printf("\n");
-  //print_fixed(inter.z); printf("\n");
-  //printf("%d", res);
-  //if (xpos == 7) printf("\n");
-
-  // Print statistics
-  if (threadid == 0) print_stats(threadid, &timestamp);
-  //print_stats(threadid, &timestamp);
-
-  //for (int i=0; i < NCPU; i++) {
-  //  printf("%d ", m3[i][threadid]);
-  //}
-  //printf("\n");
 
   // Allow the next thread to start
   bitmask[threadid] = 1;
-
-  if (threadid == NCPU-1) {
-    for (int i=0; i < VWIDTH; i++) {
-      char* line = alloca(HWIDTH+1);
-
-      for (int j=0; j < HWIDTH; j++)
-        line[j] = rgb_buffer[i*HWIDTH+j];
-      line[HWIDTH] = 0;
-
-      printf("%s\n", line);
-    }
-  }
 }

@@ -3,11 +3,17 @@
 
 static char digits[] = "0123456789ABCDEF";
 
+#define UART0 0x10000000
+#define Reg(reg) ((volatile unsigned char *)(UART0 + reg))
+
+#define ReadReg(reg) (*(Reg(reg)))
+#define WriteReg(reg, v) (*(Reg(reg)) = (v))
+
 static void
 putc(char c)
 {
-  char* UART_BASE=(char*)0x10000000;
-  *UART_BASE=c;
+  while (0x01 & ~ReadReg(1)) {}
+  WriteReg(0,c);
 }
 
 static void

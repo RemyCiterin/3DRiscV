@@ -263,7 +263,6 @@ makeDecreaseWidthChannelC sink source = do
       indexReg <== index + 1
       when last source.consume
 
-
 makeDecreaseWidthChannelD :: forall n p1 p2.
   ( KnownTLParams p1
   , KnownTLParams p2

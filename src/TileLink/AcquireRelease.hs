@@ -242,7 +242,7 @@ makeBurstFSM source slave arbiter ram = do
       if hasDataC opcode then do
         arbiter.request
       else do
-        slave.channelC.put msg.val
+        queue.enq ()
         size <== 0
 
     when (arbiter.grant) do

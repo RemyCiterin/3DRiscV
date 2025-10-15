@@ -152,6 +152,11 @@ makeFetch cacheSource inputs = do
       inputs.consume
       key <== msb
 
+      when (inputs.peek.pc .<. 0x80000000) do
+        display_ "error: fetch access non cached memory region: 0x"
+        display_ (formatHex 0 inputs.peek.pc) " mask: "
+        display (formatHex 0 inputs.peek.mask) " warp: " inputs.peek.warp
+
     when (cache.canMatch) do
       cache.match key.val
 
@@ -376,7 +381,7 @@ makeScheduler resets inputs = do
                 , warp= warp.read 0
                 , pc= pc.val }
           , canPeek=
-              orList [inv s.out.busy | s <- statesA] .&&.
+              orList [inv s.out.busy .&&. s.out.level === level | s <- statesA] .&&.
               inv (inputs.canPeek .&&. warp.read 0 === inputs.peek.warp) .&&.
               inv (delay true resets.canPeek) .&&.
               inv resets.canPeek .&&.
@@ -562,6 +567,9 @@ makeMemoryUnit cacheSource inputs0 = do
         when debug (display_ "print char: ")
         displayAscii (slice @7 @0 (inputs.peek.lane))
         when debug (display "")
+
+      when (addr .<. 0x80000000) do
+        display "error: uncached memory access"
 
       if inputs.peek.isStore
       then do

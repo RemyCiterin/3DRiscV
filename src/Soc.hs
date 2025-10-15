@@ -256,3 +256,43 @@ makeUlx3s rx = mdo
   makeConnection masterSram slaveSram
 
   return (tx, leds, spi, fabric, vga)
+
+
+makeTestCore :: Bit 1 -> Module (Bit 1, Bit 8)
+makeTestCore rx = mdo
+  (tx, leds, spi, master, vga) <- makeCPU rx
+
+  let stacksBase :: Bit 32 = 0x8F000000
+
+  let xbarconfig =
+        XBarConfig
+          { bce= False
+          , rootAddr= \ x -> x .<. stacksBase ? (0, 1)
+          , rootSink= \ x -> 0
+          , rootSource= \ x -> 0
+          , sizeChannelA= 2
+          , sizeChannelB= 2
+          , sizeChannelC= 2
+          , sizeChannelD= 2
+          , sizeChannelE= 2 }
+
+  makeConnection master slave
+
+  ([masterSram, masterStacks], [slave]) <-
+    withName "xbar" $ makeTLXBar @2 @1 @TLConfig' xbarconfig
+
+  slaveStacks <- makeGpuStacks @TLConfig' 0
+
+  let sramconfig =
+        TLRAMConfig
+          { fileName= Just "Mem.hex"
+          , lowerBound= 0x80000000
+          , bypassChannelA= False
+          , bypassChannelD= False
+          , sink= 1 }
+  slaveSram <- withName "sram" $ makeTLRAM @RomLogSize @TLConfig' sramconfig
+
+  makeConnection masterStacks slaveStacks
+  makeConnection masterSram slaveSram
+
+  return (tx, leds)

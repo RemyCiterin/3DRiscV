@@ -479,7 +479,7 @@ makeProbeFSM sink logSize channelB metaC sources = do
     when (valid.val .&&. orList [need.val | need <- needProbe] .&&. channelB.canPut) do
       channelB.put
         ChannelB
-          { opcode= tag #ProbeBlock (item #N)
+          { opcode= opcode.val -- tag #ProbeBlock (item #N)
           , address= address.val
           , size= logSize
           , source }
