@@ -910,7 +910,7 @@ makeWriteBack inputs writeBack = do
 
           when debug do
             display
-              "[" warp "@" cycle.val ":" instret.val "] pc= 0x"
+              "[" warp ":" (formatHex 1 mask) "@" cycle.val ":" instret.val "] pc= 0x"
               (formatHex 0 inputs.peek.pc) " "  (fshow instr)
 
             when (instr.rd.valid) do

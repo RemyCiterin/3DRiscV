@@ -4,3 +4,6 @@
 [submodule "UberDDR3"]
 	path = UberDDR3
 	url = git@github.com:AngeloJacobo/UberDDR3.git
+[submodule "compiler-experiments"]
+	path = compiler-experiments
+	url = https://github.com/RemyCiterin/compiler-experiments

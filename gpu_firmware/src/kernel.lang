@@ -1,0 +1,64 @@
+// Multiplication of a fixed point by an integer
+#define TIMES(x,y) @fmul(x*FIXED_SCALE,y)
+
+// Fixed point are 16 bits of integer part and 16 bits of fraction
+#define FIXED_LOG_SCALE 16
+
+#define FIXED_SCALE (1 << FIXED_LOG_SCALE)
+
+
+// Convert an integer into a fixed point
+#define FIXED(x) (x << FIXED_LOG_SCALE)
+
+// Convert a fixed point into an integer
+#define INT(x) (x >> FIXED_LOG_SCALE)
+
+// Number of lines in the frame buffer
+#define VWIDTH 40
+
+// Length of a line in the frame buffer
+#define HWIDTH 60
+
+// Number of parallel threads
+#define NCPU 64
+
+// Maximum value for a signed integer
+#define MAX_INT ((1 << 31) - 1)
+
+// Increment the index in the frame
+#define INCR_FRAME_COORDINATES(xpos,ypos) \
+  { xpos = xpos + NCPU; \
+    if (xpos >= HWIDTH) {xpos = xpos - HWIDTH; ypos = ypos + 1;} \
+    if (ypos >= VWIDTH) {ypos = 0;} \
+  }
+
+kernel(threadid, frame_buffer, bitmask) {
+  //////////////////////////////////////////////////////
+  // Intialize index and frame coordinates
+  //////////////////////////////////////////////////////
+  // Loop index
+  let idx=threadid;
+
+  // Frame coordinates
+  let xpos, ypos;
+  xpos=threadid;
+  ypos=0;
+
+  while (idx < HWIDTH*VWIDTH) {
+    frame_buffer[idx] = ' ';
+
+    let z=MAX_INT;
+    if (idx < z) {
+      frame_buffer[idx] = '@';
+    }
+
+
+    //////////////////////////////////////////////////////
+    // Update index and frame coordinates
+    //////////////////////////////////////////////////////
+    //INCR_FRAME_COORDINATES(xpos, ypos)
+    idx = idx + NCPU;
+  }
+
+  bitmask[threadid] = 1;
+}

@@ -39,6 +39,9 @@ displayAscii term =
   --    formatCond (fromInteger i === x) (fshow (ascii!i)) <>
   --    go x is
 
+debug :: Bool
+debug = False
+
 isCached :: Bit 32 -> Bit 1
 isCached addr = addr .>=. 0x80000000
 
@@ -757,14 +760,14 @@ makeCore
             epoch.write 0 (epoch.read 0 + 1)
 
           else do
-            --when (hartId == 0) do
-            --  display
-            --    "\t[" hartId "@" cycle.val "] retire pc: "
-            --    (formatHex 8 req.pc) " instr: " (fshow instr)
+            when (hartId == 0 && debug) do
+              display
+                "\t[" hartId "@" cycle.val "] retire pc: "
+                (formatHex 8 req.pc) " instr: " (fshow instr)
 
             when (rd =!= 0) do
-              --when (hartId == 0) do
-              --  display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
+              when (hartId == 0 && debug) do
+                display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 resp.rd)
               registers.write rd resp.rd
 
             if (resp.pc =!= req.prediction .||. resp.flush) then do

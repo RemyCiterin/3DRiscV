@@ -41,7 +41,7 @@ typedef struct {
 } triangle_t;
 
 // Projection of a triangle in 2D
-typedef struct {
+typedef struct __attribute__((packed)) {
   // Determinant of the matrix
   // | a b |
   // | c d |
