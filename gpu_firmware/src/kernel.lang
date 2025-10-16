@@ -4,8 +4,8 @@
 // Fixed point are 16 bits of integer part and 16 bits of fraction
 #define FIXED_LOG_SCALE 16
 
+// One in fixde point is 65536
 #define FIXED_SCALE (1 << FIXED_LOG_SCALE)
-
 
 // Convert an integer into a fixed point
 #define FIXED(x) (x << FIXED_LOG_SCALE)
@@ -17,7 +17,7 @@
 #define VWIDTH 40
 
 // Length of a line in the frame buffer
-#define HWIDTH 60
+#define HWIDTH 64
 
 // Number of parallel threads
 #define NCPU 64
@@ -32,7 +32,8 @@
     if (ypos >= VWIDTH) {ypos = 0;} \
   }
 
-kernel(threadid, frame_buffer, bitmask) {
+
+kernel(threadid, frame_buffer, bitmask, triangle) {
   //////////////////////////////////////////////////////
   // Intialize index and frame coordinates
   //////////////////////////////////////////////////////
@@ -44,19 +45,68 @@ kernel(threadid, frame_buffer, bitmask) {
   xpos=threadid;
   ypos=0;
 
+  let xstep = (2*FIXED_SCALE) / HWIDTH;
+  let ystep = (2*FIXED_SCALE) / VWIDTH;
+
   while (idx < HWIDTH*VWIDTH) {
+    //////////////////////////////////////////////////////
+    // Initialize pixel
+    //////////////////////////////////////////////////////
     frame_buffer[idx] = ' ';
+    let z_max=MAX_INT;
 
-    let z=MAX_INT;
-    if (idx < z) {
-      frame_buffer[idx] = '@';
+    let x = @fmul(xstep, FIXED_SCALE*xpos) - FIXED_SCALE;
+    let y = @fmul(ystep, FIXED_SCALE*ypos) - FIXED_SCALE;
+
+    //////////////////////////////////////////////////////
+    // Read triangle data
+    //////////////////////////////////////////////////////
+    let inv_det, Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz, AAx, AAy, BBx, BBy;
+    AAx = triangle[10];
+    AAy = triangle[11];
+    BBx = triangle[12];
+    BBy = triangle[13];
+
+    if ((x > AAx) && (x < BBx) && (y > AAy) && (y < BBy)) {
+      inv_det = triangle[0];
+      Ax = triangle[1];
+      Ay = triangle[2];
+      Bx = triangle[3];
+      By = triangle[4];
+      Cx = triangle[5];
+      Cy = triangle[6];
+
+      let u, v, w;
+      {
+        let a = Bx - Ax;
+        let b = Cx - Ax;
+        let c = By - Ay;
+        let d = Cy - Ay;
+
+        let X = x - Ax;
+        let Y = y - Ay;
+
+        v = @fmul(inv_det, @fmul(d,X) - @fmul(b,Y));
+        w = @fmul(inv_det, @fmul(a,Y) - @fmul(c,X));
+        u = (FIXED_SCALE - w) - v;
+      }
+
+      if ((v >= 0) && (u >= 0) && (w >= 0)) {
+        Az = triangle[7];
+        Bz = triangle[8];
+        Cz = triangle[9];
+
+        let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
+
+
+        frame_buffer[idx] = '@';
+      }
     }
-
 
     //////////////////////////////////////////////////////
     // Update index and frame coordinates
     //////////////////////////////////////////////////////
-    //INCR_FRAME_COORDINATES(xpos, ypos)
+    INCR_FRAME_COORDINATES(xpos, ypos)
     idx = idx + NCPU;
   }
 

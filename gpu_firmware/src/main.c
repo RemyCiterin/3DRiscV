@@ -6,7 +6,7 @@
 #include "geometry.h"
 
 #define NCPU (4 * 16)
-#define HWIDTH 60 // 320
+#define HWIDTH 64 // 320
 #define VWIDTH 40 // 240
 #define PRIMS_BOUNDS 0x100
 
@@ -67,19 +67,16 @@ inline fixed3 intersect_triangle2(projtri_t tri, fixed2 point) {
 
 
 void draw_image(int threadid) {
-  simt_push();
 
   for (int idx=threadid; idx < HWIDTH*VWIDTH; idx+=NCPU) {
     rgb_buffer[idx] = ' ';
     z_buffer[idx] = 1 << 30;
   }
 
-  simt_sync();
 
   fixed xstep = fixed_div(2*FIXED_SCALE, FIXED_SCALE * HWIDTH);
   fixed ystep = fixed_div(2*FIXED_SCALE, FIXED_SCALE * VWIDTH);
 
-  simt_sync();
 
   int xpos = threadid;
   int ypos = 0;
@@ -90,7 +87,6 @@ void draw_image(int threadid) {
       .y = fixed_mul(FIXED_SCALE*ypos, ystep) - FIXED_SCALE
     };
 
-    simt_push();
     bool in_bounds =
       ptri.bounds.aa.x <= point.x && point.x <= ptri.bounds.bb.x &&
       ptri.bounds.aa.y <= point.y && point.y <= ptri.bounds.bb.y;
@@ -102,7 +98,6 @@ void draw_image(int threadid) {
 
       fixed z = fixed3_dot(inter, ptri.z);
 
-      simt_push();
       if (res && z_buffer[idx] > z && z >= FIXED_SCALE) {
         fixed u =
           inter.x * (fixed)(ptri.u[0]) +
@@ -117,10 +112,8 @@ void draw_image(int threadid) {
         z_buffer[idx] = z;
         hit[idx] = true;
       }
-      simt_pop();
     }
 
-    simt_sync();
 
     // Update coordinates
     xpos += NCPU;
@@ -132,19 +125,75 @@ void draw_image(int threadid) {
     if (ypos >= VWIDTH) {
       ypos = 0;
     }
-    simt_pop();
   }
 
-  simt_pop();
 }
 
 extern void cpu_main() {
+  ////////////////////////////////////////////////////////////////////////////
+  // Initialize triangles
+  ////////////////////////////////////////////////////////////////////////////
+  tri.vertex[0].x = (fixed)(FIXED_SCALE * -0.8f);
+  tri.vertex[0].y = (fixed)(FIXED_SCALE * -0.7f);
+  tri.vertex[0].z = (fixed)(FIXED_SCALE * -3.0f);
+
+  tri.vertex[1].x = (fixed)(FIXED_SCALE * -0.8f);
+  tri.vertex[1].y = (fixed)(FIXED_SCALE * 0.75f);
+  tri.vertex[1].z = (fixed)(FIXED_SCALE * -3.0f);
+
+  tri.vertex[2].x = (fixed)(FIXED_SCALE * -0.08f);
+  tri.vertex[2].y = (fixed)(FIXED_SCALE * -0.7f);
+  tri.vertex[2].z = (fixed)(FIXED_SCALE * -3.0f);
+
+  tri.u[0] = 0;
+  tri.v[0] = 0;
+
+  tri.u[1] = 23;
+  tri.v[1] = 0;
+
+  tri.u[2] = 0;
+  tri.v[2] = 23;
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Initialize projection matrix
+  ////////////////////////////////////////////////////////////////////////////
+  proj[0] = &proj_body[0][0];
+  proj[1] = &proj_body[1][0];
+  proj[2] = &proj_body[2][0];
+  proj[3] = &proj_body[3][0];
+
+  set_projection_matrix(
+      (fixed)(FIXED_SCALE * (3.14159 / 4)), // field of view
+      (fixed)(FIXED_SCALE * (240.f/320.f)), // aspect ratio
+      fixed_from_int(2),                    // far plan distance
+      fixed_from_int(1),                    // near plan distance
+      proj                                  // projection matrix
+  );
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Apply the projection matrix to the current triangles
+  ////////////////////////////////////////////////////////////////////////////
+  ptri = project_triangle(proj, tri);
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Synchronize other threads
+  ////////////////////////////////////////////////////////////////////////////
+  wait = 1;
   init_timestamp(&global_timestamp);
 
+  ////////////////////////////////////////////////////////////////////////////
+  // Wait for the kernel computation to finish
+  ////////////////////////////////////////////////////////////////////////////
   for (int i=0; i < NCPU; i++) while (!bitmask[i]) {}
 
+  ////////////////////////////////////////////////////////////////////////////
+  // Show statistics
+  ////////////////////////////////////////////////////////////////////////////
   print_stats(0, &global_timestamp);
 
+  ////////////////////////////////////////////////////////////////////////////
+  // Display screen buffer content
+  ////////////////////////////////////////////////////////////////////////////
   for (int i=0; i < VWIDTH; i++) {
     char* line = alloca(HWIDTH+1);
 
@@ -152,11 +201,9 @@ extern void cpu_main() {
       line[j] = rgb_buffer[i*HWIDTH+j];
     line[HWIDTH] = 0;
 
-    for (int j=HWIDTH-1; i > 0; j--) {
-      if (line[j] != ' ') {
-        line[j+1] = 0;
-        break;
-      }
+    for (int j=HWIDTH-1; j >= 0; j--) {
+      if (line[j] != ' ') break;
+      line[j+1] = 0;
     }
 
     printf("%s\n", line);
@@ -167,9 +214,13 @@ extern void cpu_main() {
   }
 }
 
-extern int kernel(int, volatile uint32_t*, volatile uint32_t*);
+extern int kernel(int, int*, int*, int*);
+
+extern int set_texture(int*);
+
 extern void gpu_main(int threadid) {
-  kernel(threadid, rgb_buffer, bitmask);
+  while (!wait) {}
+  kernel(threadid, (int*)rgb_buffer, (int*)bitmask, (int*)(&ptri));
 
   // // Initialize thread locks
   // if (threadid == 0) {
@@ -231,9 +282,7 @@ extern void gpu_main(int threadid) {
 
   // while (!wait) {}
 
-  // simt_sync();
   // if (threadid == 0) init_timestamp(&global_timestamp);
-  // simt_sync();
 
   // draw_image(threadid);
 

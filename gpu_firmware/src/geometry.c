@@ -15,8 +15,6 @@ fixed fixed_tan(fixed x) {
 }
 
 void print_fixed(fixed x) {
-  simt_push();
-
   fixed a = x > 0 ? x : -x;
   int i = a >> FIXED_LOG_SCALE;
   int f = a & (FIXED_SCALE - 1);
@@ -31,8 +29,6 @@ void print_fixed(fixed x) {
   else if (f >= 100) printf("0%d", f);
   else if (f >= 10) printf("00%d", f);
   else printf("000%d", f);
-
-  simt_pop();
 }
 
 void print_fixed2(fixed2 point) {
@@ -125,13 +121,11 @@ void set_projection_matrix(fixed angle, fixed ratio, fixed far, fixed near, fixe
 
   fixed w = fixed_div(h, ratio);
 
-  simt_push();
   for (int i=0; i < 4; i++) {
     for (int j=0; j < 4; j++) {
       m[i][j] = 0;
     }
   }
-  simt_pop();
 
   m[0][0] = w;
   m[1][1] = h;
@@ -150,13 +144,11 @@ fixed3 project_point(fixed** m, fixed3 p) {
     fixed w =
       fixed_mul(m[0][3], p.x) + fixed_mul(m[1][3], p.y) + fixed_mul(m[2][3], p.z) + m[3][3];
 
-    simt_push();
     if (w != 1) {
       ret.x = fixed_div(ret.x, w);
       ret.y = fixed_div(ret.y, w);
       ret.z = fixed_div(ret.z, w);
     }
-    simt_pop();
 
     return ret;
 }
@@ -206,10 +198,8 @@ projtri_t project_triangle(fixed** m, triangle_t tri) {
   ret.u[2] = tri.u[2];
   ret.v[2] = tri.v[2];
 
-  simt_push();
   ret.bounds.aa = min2(min2(ret.vertex[0], ret.vertex[1]), ret.vertex[2]);
   ret.bounds.bb = max2(max2(ret.vertex[0], ret.vertex[1]), ret.vertex[2]);
-  simt_pop();
 
   return ret;
 }

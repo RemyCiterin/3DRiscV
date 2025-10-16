@@ -3,10 +3,10 @@ ENTRY(_start)
 MEMORY
 {
     /* Embedded instruction memory */
-    imem (rx): ORIGIN = 0x80000000, LENGTH = 10K
+    imem (rx): ORIGIN = 0x80000000, LENGTH = 12K
 
     /* Embedded data memory */
-    dmem (rw): ORIGIN = 0x80004000, LENGTH = 2K
+    dmem (rw): ORIGIN = 0x80004000, LENGTH = 3K
 
     /* External synchronous dynamic random access memory */
     sdram (rw): ORIGIN = 0x80008000, LENGTH = 80K

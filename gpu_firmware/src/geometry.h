@@ -9,18 +9,18 @@
 
 typedef int fixed;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   fixed x;
   fixed y;
   fixed z;
 } fixed3;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   fixed x;
   fixed y;
 } fixed2;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   fixed2 aa;
   fixed2 bb;
 } aabb_t;
@@ -57,13 +57,13 @@ typedef struct __attribute__((packed)) {
   aabb_t bounds;
 
   // U-Coordinates of each vertex in the texture buffer
-  uint16_t u[3];
+  int u[3];
 
   // V-Coordinates of each vertex in the texture buffer
-  uint16_t v[3];
+  int v[3];
 
   // Texture ID
-  uint8_t texture;
+  int texture;
 } projtri_t;
 
 inline fixed fixed_mul(fixed a, fixed b) {
@@ -76,11 +76,9 @@ inline fixed fixed_from_int(int x) {
 }
 
 inline fixed fixed_div(fixed n, fixed d) {
-  simt_push();
   int64_t a = (int64_t)(n) << FIXED_LOG_SCALE;
   int64_t b = (int64_t)(d);
   fixed ret = (fixed)(a / b);
-  simt_pop();
   return ret;
 }
 
