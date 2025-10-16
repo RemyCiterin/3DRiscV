@@ -27,7 +27,7 @@ module BlockRAMTrueDual (
 
   generate
     if (INIT_FILE != "UNUSED") begin
-      initial $readmemh(INIT_FILE, RAM);
+      initial $readmemh(INIT_FILE, RAM, 0, 2**ADDR_WIDTH-1);
     end else begin
       integer i;
       initial
@@ -36,7 +36,7 @@ module BlockRAMTrueDual (
     end
   endgenerate
 
-  // Port A 
+  // Port A
   always @(posedge CLK)
   begin
     if (WE_A) begin
@@ -47,11 +47,11 @@ module BlockRAMTrueDual (
         DO_A <= {DATA_WIDTH{1'hx}};;
       end else begin
         DO_A <= (WE_B && ADDR_A == ADDR_B) ? {DATA_WIDTH{1'hx}} : RAM[ADDR_A];
-      end 
+      end
     end
-  end 
+  end
 
-  // Port B 
+  // Port B
   always @(posedge CLK)
   begin
     if (WE_B) begin
@@ -62,7 +62,7 @@ module BlockRAMTrueDual (
         DO_B <= {DATA_WIDTH{1'hx}};
       end else begin
         DO_B <= (WE_A && ADDR_A == ADDR_B) ? {DATA_WIDTH{1'hx}} : RAM[ADDR_B];
-      end 
+      end
     end
   end
 

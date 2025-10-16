@@ -187,6 +187,12 @@ extern void cpu_main() {
   for (int i=0; i < NCPU; i++) while (!bitmask[i]) {}
 
   ////////////////////////////////////////////////////////////////////////////
+  // Blink LED
+  ////////////////////////////////////////////////////////////////////////////
+  volatile uint8_t* LED = (volatile uint8_t*)0x10000004;
+  *LED = 0xAA;
+
+  ////////////////////////////////////////////////////////////////////////////
   // Show statistics
   ////////////////////////////////////////////////////////////////////////////
   print_stats(0, &global_timestamp);
@@ -219,6 +225,7 @@ extern int kernel(int, int*, int*, int*);
 extern int set_texture(int*);
 
 extern void gpu_main(int threadid) {
+  //bitmask[threadid] = 1;
   while (!wait) {}
   kernel(threadid, (int*)rgb_buffer, (int*)bitmask, (int*)(&ptri));
 

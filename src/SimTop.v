@@ -7,41 +7,51 @@ module top_sim;
 
   reg resetq = 0;
 
-  //wire oled_vdd;
-  //wire oled_res;
-  //wire oled_sclk;
-  //wire oled_vbat;
-  //wire oled_sdin;
-  //wire oled_dc;
-  //wire oled_debug;
-
-  //TestOled inst (
-  //  .out_oled_vdd(oled_vdd),
-  //  .out_oled_reset(oled_res),
-  //  .out_oled_clk(oled_sclk),
-  //  .out_oled_vbat(oled_vbat),
-  //  .out_oled_dout(oled_sdin),
-  //  .out_oled_isData(oled_dc),
-  //  .out_oled_debug(oled_debug),
-  //  .clock(clk),
-  //  .reset(resetq)
-  //);
-
-  TestSdram top(
+  SocUlx3s inst (
+    //.out_0(ftdi_rxd),
+    //.out_1(led),
+    .out_2_miso_0(1),
+    .out_2_miso_en(1),
+    //.out_2_clk(sd_clk),
+    //.out_2_mosi(sd_mosi),
+    //.out_2_cs(sd_cs),
+    .in0(1),//ftdi_txd),
+    .out_3_sdram_din_en(1),
+    .out_3_sdram_din_0(sdram_din),
+    .out_3_sdram_csn(sdram_csn),
+    .out_3_sdram_rasn(sdram_rasn),
+    .out_3_sdram_casn(sdram_casn),
+    .out_3_sdram_wen(sdram_wen),
+    .out_3_sdram_a(sdram_a),
+    .out_3_sdram_ba(sdram_ba),
+    .out_3_sdram_dqm(sdram_dqm),
+    .out_3_sdram_dout(sdram_dout),
+    .out_3_sdram_den(sdram_den),
+    //.out_4_hsync(vga_hsync),
+    //.out_4_vsync(vga_vsync),
+    //.out_4_blank(vga_blank),
+    //.out_4_red(r_video),
+    //.out_4_green(g_video),
+    //.out_4_blue(b_video),
     .clock(clk),
-    .reset(resetq),
-    .out_sdram_din_0(sdram_din),
-    .out_sdram_din_en(1),
-    .out_sdram_dout(sdram_dout),
-    .out_sdram_den(sdram_den),
-    .out_sdram_csn(sdram_csn),
-    .out_sdram_wen(sdram_wen),
-    .out_sdram_rasn(sdram_rasn),
-    .out_sdram_casn(sdram_casn),
-    .out_sdram_a(sdram_a),
-    .out_sdram_ba(sdram_ba),
-    .out_sdram_dqm(sdram_dqm)
+    .reset(resetq)
   );
+
+  //TestSdram top(
+  //  .clock(clk),
+  //  .reset(resetq),
+  //  .out_sdram_din_0(sdram_din),
+  //  .out_sdram_din_en(1),
+  //  .out_sdram_dout(sdram_dout),
+  //  .out_sdram_den(sdram_den),
+  //  .out_sdram_csn(sdram_csn),
+  //  .out_sdram_wen(sdram_wen),
+  //  .out_sdram_rasn(sdram_rasn),
+  //  .out_sdram_casn(sdram_casn),
+  //  .out_sdram_a(sdram_a),
+  //  .out_sdram_ba(sdram_ba),
+  //  .out_sdram_dqm(sdram_dqm)
+  //);
 
   wire  sdram_csn;       // chip select
   wire  sdram_clk;       // clock to SDRAM

@@ -5,6 +5,10 @@ _start:
   csrr t0, mhartid
   bnez t0, .wait_for_sync
 
+  li t0, 0x10000004
+  li t1, 0xAA
+  sb t1, (t0)
+
  # Clear .bss section
   la t0, __bss_start
   la t1, __bss_end

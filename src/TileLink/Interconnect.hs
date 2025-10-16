@@ -22,7 +22,7 @@ makeSharedBurstSink :: forall p a.
     -> Sink a
     -> Module [Sink a]
 makeSharedBurstSink hasData getSize n sink = do
-  liftNat (log2 n) $ \ (_ :: Proxy width) -> do
+  liftNat (log2ceil n) $ \ (_ :: Proxy width) -> do
     let laneSize = constant $ toInteger $ valueOf @(LaneWidth p)
     token :: Reg (Bit width) <- makeReg dontCare
     sinks <- makeSharedSink n sink
@@ -65,7 +65,7 @@ data XBarConfig n m p =
     { bce :: Bool
     , rootSource :: Bit (SourceWidth p) -> Bit (Log2Ceil m)
     , rootSink :: Bit (SinkWidth p) -> Bit (Log2Ceil n)
-    , rootAddr :: Bit (AddrWidth p) -> Bit (Log2Ceil m)
+    , rootAddr :: Bit (AddrWidth p) -> Bit (Log2Ceil n)
     , sizeChannelA :: Int
     , sizeChannelB :: Int
     , sizeChannelC :: Int
@@ -82,8 +82,6 @@ makeTLXBarNoBCE config = do
 
   let laneSize :: TLSize = constant (toInteger (valueOf @(LaneWidth p)))
 
-  tokenA :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
-  tokenD :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
   sizeA :: Reg TLSize <- makeReg 0
   sizeD :: Reg TLSize <- makeReg 0
 
@@ -139,9 +137,6 @@ makeTLXBarBCE config = do
 
   let laneSize :: TLSize = constant (toInteger (valueOf @(LaneWidth p)))
 
-  tokenA :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
-  tokenC :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
-  tokenD :: Reg (Bit (Log2Ceil m)) <- makeReg dontCare
   sizeA :: Reg TLSize <- makeReg 0
   sizeC :: Reg TLSize <- makeReg 0
   sizeD :: Reg TLSize <- makeReg 0

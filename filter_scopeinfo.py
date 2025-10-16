@@ -18,7 +18,6 @@ for module in content["modules"]:
             if "type" in cells[name]:
                 if cells[name]["type"] == "$scopeinfo":
                     paths.append(["modules", module, "cells", name])
-                    print(name)
 
 
 def remove_path(map, path):

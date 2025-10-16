@@ -23,7 +23,7 @@ module BlockRAM (
 
   generate
     if (INIT_FILE != "UNUSED") begin
-      initial $readmemh(INIT_FILE, RAM);
+      initial $readmemh(INIT_FILE, RAM, 0, 2**ADDR_WIDTH-1);
     end else begin
       integer i;
       initial
@@ -42,8 +42,8 @@ module BlockRAM (
         DO <= {DATA_WIDTH{1'hx}};
       end else begin
         DO <= RAM[ADDR];
-      end 
+      end
     end
-  end 
+  end
 
 endmodule

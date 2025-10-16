@@ -37,7 +37,7 @@ main = do
      | otherwise -> do
         writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
-        writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"
+        --writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"
         writeVerilogModule Soc.makeUlx3s "SocUlx3s" "Verilog/"
         writeVerilogModule Soc.makeTestCore "TestCore" "Verilog/"
         --writeVerilogModule Soc.makeUlx3s "TestCore" "Verilog/"
