@@ -32,8 +32,25 @@
     if (ypos >= VWIDTH) {ypos = 0;} \
   }
 
+//////////////////////////////////////////////////////
+// API for the CPU to access to the performance counters of the GPU
+//////////////////////////////////////////////////////
+extern start_timestamp;
+extern finish_timestamp;
 
-kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
+//////////////////////////////////////////////////////
+// API for the CPU to start only when the GPU threads stops
+//////////////////////////////////////////////////////
+extern bitmask;
+
+kernel(threadid, frame_buffer, triangles, num_triangles) {
+  if (threadid == 0) {
+    //////////////////////////////////////////////////////
+    // Read performance counters
+    //////////////////////////////////////////////////////
+    init_timestamp(&start_timestamp);
+  }
+
   //////////////////////////////////////////////////////
   // Intialize index and frame coordinates
   //////////////////////////////////////////////////////
@@ -55,8 +72,8 @@ kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
     frame_buffer[idx] = ' ';
     let z_max=MAX_INT;
 
-    let x = @fmul(xstep, FIXED_SCALE*xpos) - FIXED_SCALE;
-    let y = @fmul(ystep, FIXED_SCALE*ypos) - FIXED_SCALE;
+    let x = xpos * xstep - FIXED_SCALE;
+    let y = ypos * ystep - FIXED_SCALE;
 
     let triangle_idx = 0;
 
@@ -64,7 +81,8 @@ kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
       let triangle = triangles[triangle_idx];
 
       //////////////////////////////////////////////////////
-      // Read triangle data
+      // Test for an intersection with the bounding box
+      // of the triangle
       //////////////////////////////////////////////////////
       let inv_det, Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz, AAx, AAy, BBx, BBy, Au, Bu, Cu, Av, Bv, Cv;
       AAx = triangle[10];
@@ -73,6 +91,10 @@ kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
       BBy = triangle[13];
 
       if ((x > AAx) && (x < BBx) && (y > AAy) && (y < BBy)) {
+        //////////////////////////////////////////////////////
+        // Test for an intersection with the triangle, and
+        // compute barycentric coordinates
+        //////////////////////////////////////////////////////
         inv_det = triangle[0];
         Ax = triangle[1];
         Ay = triangle[2];
@@ -97,6 +119,9 @@ kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
         }
 
         if ((v >= 0) && (u >= 0) && (w >= 0)) {
+          //////////////////////////////////////////////////////
+          // Compare the value of Z with the one in the Z-buffer
+          //////////////////////////////////////////////////////
           Az = triangle[7];
           Bz = triangle[8];
           Cz = triangle[9];
@@ -104,6 +129,9 @@ kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
           let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
 
           if ((z >= FIXED_SCALE) && (z < z_max)) {
+            //////////////////////////////////////////////////////
+            // Compute texture coordinates
+            //////////////////////////////////////////////////////
             let texture = triangle[20];
             Au = triangle[14];
             Bu = triangle[15];
@@ -123,8 +151,6 @@ kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
 
             z_max = z;
           }
-
-
         }
       }
 
@@ -138,5 +164,16 @@ kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
     idx = idx + NCPU;
   }
 
-  bitmask[threadid] = 1;
+  if (threadid == 0) {
+    //////////////////////////////////////////////////////
+    // Read performance counters
+    //////////////////////////////////////////////////////
+    init_timestamp(&finish_timestamp);
+  }
+
+  //////////////////////////////////////////////////////
+  // Synchronize with the host CPU
+  //////////////////////////////////////////////////////
+  let locks = &bitmask;
+  locks[threadid] = 1;
 }

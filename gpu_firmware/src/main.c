@@ -8,11 +8,9 @@
 #define NCPU (4 * 16)
 #define HWIDTH 64 // 320
 #define VWIDTH 40 // 240
-#define PRIMS_BOUNDS 0x100
+#define PRIMS_BOUNDS 32
 
 static int volatile counter = 0;
-
-uint32_t volatile bitmask[NCPU];
 
 bool volatile wait = 0;
 
@@ -32,17 +30,15 @@ static fixed* proj[4];
 
 static bool volatile hit[HWIDTH * VWIDTH];
 
-timestamp_t global_timestamp;
+timestamp_t volatile start_timestamp;
+timestamp_t volatile finish_timestamp;
+uint32_t volatile bitmask[NCPU];
 
 //static int* FRAME_BASE = 0x70000000;
 
 static char raw_texture_data[] = "          _____                   /\\    \\                 /::\\    \\               /::::\\    \\             /::::::\\    \\           /:::/\\:::\\    \\         /:::/__\\:::\\    \\       /::::\\   \\:::\\    \\     /::::::\\   \\:::\\    \\   /:::/\\:::\\   \\:::\\    \\ /:::/  \\:::\\   \\:::\\____\\\\::/    \\:::\\  /:::/    / \\/____/ \\:::\\/:::/    /           \\::::::/    /             \\::::/    /              /:::/    /              /:::/    /              /:::/    /              /:::/    /               \\::/    /                 \\/____/         ";
 
 static int texture_data[25*30];
-
-static inline char read_texture(int u, int v) {
-  return texture_data[u*25+v];
-}
 
 static texture_t texture = {
   .width = 25,
@@ -111,7 +107,6 @@ extern void cpu_main() {
   // Synchronize other threads
   ////////////////////////////////////////////////////////////////////////////
   wait = 1;
-  init_timestamp(&global_timestamp);
 
   ////////////////////////////////////////////////////////////////////////////
   // Wait for the kernel computation to finish
@@ -122,12 +117,12 @@ extern void cpu_main() {
   // Blink LED
   ////////////////////////////////////////////////////////////////////////////
   volatile uint8_t* LED = (volatile uint8_t*)0x10000004;
-  *LED = 0xAA;
+  *LED = 0x55;
 
   ////////////////////////////////////////////////////////////////////////////
   // Show statistics
   ////////////////////////////////////////////////////////////////////////////
-  print_stats(0, &global_timestamp);
+  print_stats(0, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
 
   ////////////////////////////////////////////////////////////////////////////
   // Display screen buffer content
@@ -152,83 +147,11 @@ extern void cpu_main() {
   }
 }
 
-extern int kernel(int, int*, int*, projtri_t**, int);
+extern int kernel(int, int*, projtri_t**, int);
 
 extern int set_texture(int*);
 
 extern void gpu_main(int threadid) {
-  //bitmask[threadid] = 1;
   while (!wait) {}
-  kernel(threadid, (int*)rgb_buffer, (int*)bitmask, ptri, 1);
-
-  // // Initialize thread locks
-  // if (threadid == 0) {
-
-  //   for (int i=0; i < NCPU; i++) bitmask[i] = 0;
-
-  //   ////////////////////////////////////////////////////////////////////////////
-  //   // Initialize triangles
-  //   ////////////////////////////////////////////////////////////////////////////
-  //   tri.vertex[0].x = (fixed)(FIXED_SCALE * -0.8f);
-  //   tri.vertex[0].y = (fixed)(FIXED_SCALE * -0.7f);
-  //   tri.vertex[0].z = (fixed)(FIXED_SCALE * -3.0f);
-
-  //   tri.vertex[1].x = (fixed)(FIXED_SCALE * -0.8f);
-  //   tri.vertex[1].y = (fixed)(FIXED_SCALE * 0.75f);
-  //   tri.vertex[1].z = (fixed)(FIXED_SCALE * -3.0f);
-
-  //   tri.vertex[2].x = (fixed)(FIXED_SCALE * -0.08f);
-  //   tri.vertex[2].y = (fixed)(FIXED_SCALE * -0.7f);
-  //   tri.vertex[2].z = (fixed)(FIXED_SCALE * -3.0f);
-
-  //   tri.u[0] = 0;
-  //   tri.v[0] = 0;
-
-  //   tri.u[1] = 23;
-  //   tri.v[1] = 0;
-
-  //   tri.u[2] = 0;
-  //   tri.v[2] = 23;
-
-  //   ////////////////////////////////////////////////////////////////////////////
-  //   // Initialize projection matrix
-  //   ////////////////////////////////////////////////////////////////////////////
-  //   proj[0] = &proj_body[0][0];
-  //   proj[1] = &proj_body[1][0];
-  //   proj[2] = &proj_body[2][0];
-  //   proj[3] = &proj_body[3][0];
-
-  //   set_projection_matrix(
-  //       (fixed)(FIXED_SCALE * (3.14159 / 4)), // field of view
-  //       (fixed)(FIXED_SCALE * (240.f/320.f)), // aspect ratio
-  //       fixed_from_int(2),                    // far plan distance
-  //       fixed_from_int(1),                    // near plan distance
-  //       proj                                  // projection matrix
-  //   );
-
-
-  //   ////////////////////////////////////////////////////////////////////////////
-  //   // Apply the projection matrix to the current triangles
-  //   ////////////////////////////////////////////////////////////////////////////
-  //   ptri = project_triangle(proj, tri);
-
-
-  //   ////////////////////////////////////////////////////////////////////////////
-  //   // Synchronize other threads
-  //   ////////////////////////////////////////////////////////////////////////////
-  //   wait = 1;
-  // }
-
-  // while (!wait) {}
-
-  // if (threadid == 0) init_timestamp(&global_timestamp);
-
-  // draw_image(threadid);
-
-  // // Wait for the execution of all the previous threads to finish
-  // while (threadid && !bitmask[threadid-1]) {}
-
-
-  // // Allow the next thread to start
-  // bitmask[threadid] = 1;
+  kernel(threadid, (int*)rgb_buffer, ptri, 1);
 }

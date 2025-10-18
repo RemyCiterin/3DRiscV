@@ -44,9 +44,9 @@ static void print_order_magnitude(int x) {
   else printf("%d", x);
 }
 
-void print_stats(int threadid, const timestamp_t* t) {
-  int ins = r_minstret() - t->instret;
-  int time = r_mcycle() - t->cycle;
+void print_stats(int threadid, const timestamp_t* before, const timestamp_t* after) {
+  int ins = after->instret - before->instret;
+  int time = after->cycle - before->cycle;
 
   printf("thread %d finish at ", threadid);
   print_order_magnitude(time);

@@ -1,5 +1,5 @@
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   int instret;
   int cycle;
 } timestamp_t;
@@ -13,4 +13,4 @@ void init_timestamp(timestamp_t*);
 int r_mcycle();
 int r_minstret();
 
-void print_stats(int, const timestamp_t*);
+void print_stats(int, const timestamp_t* before, const timestamp_t* after);
