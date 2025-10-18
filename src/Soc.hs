@@ -207,7 +207,7 @@ makeCPU rx = mdo
 
   return (tx, leds, spi, uncoherentMaster, vgaFabric)
 
-type RomLogSize = 14
+type RomLogSize = 15
 
 makeUlx3s :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, SdramFabric, VgaFabric)
 makeUlx3s rx = mdo

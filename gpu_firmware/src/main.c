@@ -21,7 +21,9 @@ uint32_t volatile rgb_buffer[HWIDTH * VWIDTH];
 
 
 static triangle_t tri;
-static projtri_t ptri;
+
+static projtri_t ptri0;
+static projtri_t* ptri[1];
 
 extern triangle_t triangles[PRIMS_BOUNDS];
 
@@ -32,104 +34,33 @@ static bool volatile hit[HWIDTH * VWIDTH];
 
 timestamp_t global_timestamp;
 
-//static int m1[NCPU][NCPU];
-//static int m2[NCPU][NCPU];
-//static int m3[NCPU][NCPU];
-
 //static int* FRAME_BASE = 0x70000000;
 
-static char texture[] = "          _____                   /\\    \\                 /::\\    \\               /::::\\    \\             /::::::\\    \\           /:::/\\:::\\    \\         /:::/__\\:::\\    \\       /::::\\   \\:::\\    \\     /::::::\\   \\:::\\    \\   /:::/\\:::\\   \\:::\\    \\ /:::/  \\:::\\   \\:::\\____\\\\::/    \\:::\\  /:::/    / \\/____/ \\:::\\/:::/    /           \\::::::/    /             \\::::/    /              /:::/    /              /:::/    /              /:::/    /              /:::/    /               \\::/    /                 \\/____/         ";
+static char raw_texture_data[] = "          _____                   /\\    \\                 /::\\    \\               /::::\\    \\             /::::::\\    \\           /:::/\\:::\\    \\         /:::/__\\:::\\    \\       /::::\\   \\:::\\    \\     /::::::\\   \\:::\\    \\   /:::/\\:::\\   \\:::\\    \\ /:::/  \\:::\\   \\:::\\____\\\\::/    \\:::\\  /:::/    / \\/____/ \\:::\\/:::/    /           \\::::::/    /             \\::::/    /              /:::/    /              /:::/    /              /:::/    /              /:::/    /               \\::/    /                 \\/____/         ";
+
+static int texture_data[25*30];
 
 static inline char read_texture(int u, int v) {
-  return texture[u*25+v];
+  return texture_data[u*25+v];
 }
 
-inline fixed3 intersect_triangle2(projtri_t tri, fixed2 point) {
-  fixed3 ret;
-
-  fixed a = tri.vertex[1].x - tri.vertex[0].x;
-  fixed b = tri.vertex[2].x - tri.vertex[0].x;
-
-  fixed c = tri.vertex[1].y - tri.vertex[0].y;
-  fixed d = tri.vertex[2].y - tri.vertex[0].y;
-
-  fixed x = point.x - tri.vertex[0].x;
-  fixed y = point.y - tri.vertex[0].y;
-
-  ret.y = fixed_mul(tri.inv_det, fixed_mul(d,x) - fixed_mul(b,y));
-
-  ret.z = fixed_mul(tri.inv_det, fixed_mul(y,a) - fixed_mul(c,x));
-
-  ret.x = fixed_from_int(1) - ret.z - ret.y;
-
-  return ret;
-}
-
-
-void draw_image(int threadid) {
-
-  for (int idx=threadid; idx < HWIDTH*VWIDTH; idx+=NCPU) {
-    rgb_buffer[idx] = ' ';
-    z_buffer[idx] = 1 << 30;
-  }
-
-
-  fixed xstep = fixed_div(2*FIXED_SCALE, FIXED_SCALE * HWIDTH);
-  fixed ystep = fixed_div(2*FIXED_SCALE, FIXED_SCALE * VWIDTH);
-
-
-  int xpos = threadid;
-  int ypos = 0;
-
-  for (int idx=threadid; idx < HWIDTH*VWIDTH; idx+=NCPU) {
-    fixed2 point = {
-      .x = fixed_mul(FIXED_SCALE*xpos, xstep) - FIXED_SCALE,
-      .y = fixed_mul(FIXED_SCALE*ypos, ystep) - FIXED_SCALE
-    };
-
-    bool in_bounds =
-      ptri.bounds.aa.x <= point.x && point.x <= ptri.bounds.bb.x &&
-      ptri.bounds.aa.y <= point.y && point.y <= ptri.bounds.bb.y;
-
-    if (in_bounds) {
-      fixed3 inter = intersect_triangle2(ptri, point);
-
-      bool res = inter.x >= 0 && inter.y >= 0 && inter.z >= 0;
-
-      fixed z = fixed3_dot(inter, ptri.z);
-
-      if (res && z_buffer[idx] > z && z >= FIXED_SCALE) {
-        fixed u =
-          inter.x * (fixed)(ptri.u[0]) +
-          inter.y * (fixed)(ptri.u[1]) +
-          inter.z * (fixed)(ptri.u[2]);
-        fixed v =
-          inter.x * (fixed)(ptri.v[0]) +
-          inter.y * (fixed)(ptri.v[1]) +
-          inter.z * (fixed)(ptri.v[2]);
-
-        rgb_buffer[idx] = read_texture(u >> FIXED_LOG_SCALE, v >> FIXED_LOG_SCALE);
-        z_buffer[idx] = z;
-        hit[idx] = true;
-      }
-    }
-
-
-    // Update coordinates
-    xpos += NCPU;
-    while (xpos >= HWIDTH) {
-      xpos -= HWIDTH;
-      ypos += 1;
-    }
-
-    if (ypos >= VWIDTH) {
-      ypos = 0;
-    }
-  }
-
-}
+static texture_t texture = {
+  .width = 25,
+  .height = 30,
+  .data = NULL
+};
 
 extern void cpu_main() {
+  ////////////////////////////////////////////////////////////////////////////
+  // Initialize textures
+  ////////////////////////////////////////////////////////////////////////////
+  for (int i=0; raw_texture_data[i]; i++) {
+    texture_data[i] = (int)raw_texture_data[i];
+  }
+
+  texture.data = texture_data;
+  tri.texture = &texture;
+
   ////////////////////////////////////////////////////////////////////////////
   // Initialize triangles
   ////////////////////////////////////////////////////////////////////////////
@@ -173,7 +104,8 @@ extern void cpu_main() {
   ////////////////////////////////////////////////////////////////////////////
   // Apply the projection matrix to the current triangles
   ////////////////////////////////////////////////////////////////////////////
-  ptri = project_triangle(proj, tri);
+  ptri[0] = alloca(sizeof(projtri_t));
+  *ptri[0] = project_triangle(proj, tri);
 
   ////////////////////////////////////////////////////////////////////////////
   // Synchronize other threads
@@ -220,14 +152,14 @@ extern void cpu_main() {
   }
 }
 
-extern int kernel(int, int*, int*, int*);
+extern int kernel(int, int*, int*, projtri_t**, int);
 
 extern int set_texture(int*);
 
 extern void gpu_main(int threadid) {
   //bitmask[threadid] = 1;
   while (!wait) {}
-  kernel(threadid, (int*)rgb_buffer, (int*)bitmask, (int*)(&ptri));
+  kernel(threadid, (int*)rgb_buffer, (int*)bitmask, ptri, 1);
 
   // // Initialize thread locks
   // if (threadid == 0) {

@@ -37,13 +37,17 @@ type IndexW = 8
 type TagW = 18
 type Ways = 4
 
+-- A cache block is 6 bytes long (64 bytes)
+type LogBlockWidth = 6
+type BlockWidth = 2 ^ LogBlockWidth
+type Block = Bit (8 * BlockWidth)
+
 -- Up to snoop targets
 type OwnerW = 8
 
 type Owner = Bit OwnerW
 
 type Addr = Bit AddrW
-type Offset = Bit OffsetW
 type Index = Bit IndexW
 type Tag = Bit TagW
 type Way = Bit (Log2Ceil Ways)
@@ -74,10 +78,11 @@ data TransactionQueue p =
 
 makeTransactionQueue :: forall p.
   ( KnownTLParams p
+  , LaneWidth p ~ BlockWidth
   , AddrWidth p ~ 32 )
     => [Bit (SinkWidth p)] -> Module (TransactionQueue p)
 makeTransactionQueue sinks = do
-  let logSize = log2 (length sinks)
+  let logSize = log2ceil (length sinks)
   liftNat logSize $ \(_ :: Proxy aw) -> do
     liftNat (2 ^ logSize) $ \(_ :: Proxy size) -> do
       addresses :: [Reg (Bit (AddrWidth p))] <- replicateM (2 ^ logSize) (makeReg dontCare)
@@ -117,7 +122,7 @@ data LLCConfig p =
 makeLLC :: forall p p'.
   ( p' ~ TLParams (AddrWidth p) (LaneWidth p) (SizeWidth p) (SinkWidth p) 0
   , AddrWidth p ~ 32
-  , LaneWidth p ~ 4
+  , LaneWidth p ~ BlockWidth
   , KnownTLParams p )
   => LLCConfig p -> Module (TLSlave p, TLMaster p')
 makeLLC config = do
@@ -247,8 +252,19 @@ makeLLC config = do
               [ hit --> lit i
                 | (hit,i) <- zip (toBitList hits) [0..] ]
 
+      -- Cache miss
+      if hits =!= 0 then do
+        let perm = select [hit --> perms.out | (hit, perms) <- zip (toBitList hits) permsA]
+        let owner = select [hit --> owner.out | (hit, owner) <- zip (toBitList hits) ownersA]
+
+        probeM.put (dontCare, req.address, owner)
+
+        pure ()
+
+      else do
+        pure ()
+
       -- TODO: send the correct probe requests
-      probeM.put (dontCare, dontCare, dontCare)
       stage1A.deq
 
   return

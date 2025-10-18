@@ -33,7 +33,7 @@
   }
 
 
-kernel(threadid, frame_buffer, bitmask, triangle) {
+kernel(threadid, frame_buffer, bitmask, triangles, num_triangles) {
   //////////////////////////////////////////////////////
   // Intialize index and frame coordinates
   //////////////////////////////////////////////////////
@@ -58,49 +58,77 @@ kernel(threadid, frame_buffer, bitmask, triangle) {
     let x = @fmul(xstep, FIXED_SCALE*xpos) - FIXED_SCALE;
     let y = @fmul(ystep, FIXED_SCALE*ypos) - FIXED_SCALE;
 
-    //////////////////////////////////////////////////////
-    // Read triangle data
-    //////////////////////////////////////////////////////
-    let inv_det, Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz, AAx, AAy, BBx, BBy;
-    AAx = triangle[10];
-    AAy = triangle[11];
-    BBx = triangle[12];
-    BBy = triangle[13];
+    let triangle_idx = 0;
 
-    if ((x > AAx) && (x < BBx) && (y > AAy) && (y < BBy)) {
-      inv_det = triangle[0];
-      Ax = triangle[1];
-      Ay = triangle[2];
-      Bx = triangle[3];
-      By = triangle[4];
-      Cx = triangle[5];
-      Cy = triangle[6];
+    while (triangle_idx < num_triangles) {
+      let triangle = triangles[triangle_idx];
 
-      let u, v, w;
-      {
-        let a = Bx - Ax;
-        let b = Cx - Ax;
-        let c = By - Ay;
-        let d = Cy - Ay;
+      //////////////////////////////////////////////////////
+      // Read triangle data
+      //////////////////////////////////////////////////////
+      let inv_det, Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz, AAx, AAy, BBx, BBy, Au, Bu, Cu, Av, Bv, Cv;
+      AAx = triangle[10];
+      AAy = triangle[11];
+      BBx = triangle[12];
+      BBy = triangle[13];
 
-        let X = x - Ax;
-        let Y = y - Ay;
+      if ((x > AAx) && (x < BBx) && (y > AAy) && (y < BBy)) {
+        inv_det = triangle[0];
+        Ax = triangle[1];
+        Ay = triangle[2];
+        Bx = triangle[3];
+        By = triangle[4];
+        Cx = triangle[5];
+        Cy = triangle[6];
 
-        v = @fmul(inv_det, @fmul(d,X) - @fmul(b,Y));
-        w = @fmul(inv_det, @fmul(a,Y) - @fmul(c,X));
-        u = (FIXED_SCALE - w) - v;
+        let u, v, w;
+        {
+          let a = Bx - Ax;
+          let b = Cx - Ax;
+          let c = By - Ay;
+          let d = Cy - Ay;
+
+          let X = x - Ax;
+          let Y = y - Ay;
+
+          v = @fmul(inv_det, @fmul(d,X) - @fmul(b,Y));
+          w = @fmul(inv_det, @fmul(a,Y) - @fmul(c,X));
+          u = (FIXED_SCALE - w) - v;
+        }
+
+        if ((v >= 0) && (u >= 0) && (w >= 0)) {
+          Az = triangle[7];
+          Bz = triangle[8];
+          Cz = triangle[9];
+
+          let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
+
+          if ((z >= FIXED_SCALE) && (z < z_max)) {
+            let texture = triangle[20];
+            Au = triangle[14];
+            Bu = triangle[15];
+            Cu = triangle[16];
+            Av = triangle[17];
+            Bv = triangle[18];
+            Cv = triangle[19];
+
+            let U, V;
+            U = (Au * u) + (Bu * v) + (Cu * w);
+            V = (Av * u) + (Bv * v) + (Cv * w);
+
+            let height = texture[0];
+            let width = texture[1];
+
+            frame_buffer[idx] = texture[2][width * (U >> FIXED_LOG_SCALE) + (V >> FIXED_LOG_SCALE)];
+
+            z_max = z;
+          }
+
+
+        }
       }
 
-      if ((v >= 0) && (u >= 0) && (w >= 0)) {
-        Az = triangle[7];
-        Bz = triangle[8];
-        Cz = triangle[9];
-
-        let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
-
-
-        frame_buffer[idx] = '@';
-      }
+      triangle_idx = triangle_idx + 1;
     }
 
     //////////////////////////////////////////////////////

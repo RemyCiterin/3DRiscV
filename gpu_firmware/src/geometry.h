@@ -25,13 +25,19 @@ typedef struct __attribute__((packed)) {
   fixed2 bb;
 } aabb_t;
 
+typedef struct __attribute__((packed)) {
+  int height;
+  int width;
+  int* data;
+} texture_t;
+
 // Representation of a triangle in 3D
 typedef struct {
   // Position of each pixel in the 3D space
   fixed3 vertex[3];
 
   // Texture ID
-  uint8_t texture;
+  texture_t *texture;
 
   // U-Coordinates of each vertex in the texture buffer
   uint16_t u[3];
@@ -63,7 +69,7 @@ typedef struct __attribute__((packed)) {
   int v[3];
 
   // Texture ID
-  int texture;
+  texture_t* texture;
 } projtri_t;
 
 inline fixed fixed_mul(fixed a, fixed b) {
