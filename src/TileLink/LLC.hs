@@ -63,6 +63,12 @@ reqChannelA, reqChannelC :: ReqKind
 reqChannelA = 0
 reqChannelC = 1
 
+-- Return the ownership one hot encodding corresponding to a unique source
+toOwner :: forall n. KnownNat n => [Bit n] -> Bit n -> Owner
+toOwner sources source =
+      fromBitList
+        [if i < length sources then sources!i === source else false
+          | i <- [0..2 ^ (valueOf @OwnerW) - 1]]
 
 data TransactionQueue p =
   TransactionQueue
@@ -74,18 +80,25 @@ data TransactionQueue p =
     --   match a given address
     , deq :: Bit (SinkWidth p) -> Action ()
     -- ^ remove (the unique) transaction that correspond to a given source
+    , setOwner :: Bit (SinkWidth p) -> Owner -> Action ()
+    -- ^ set the one hot encodding of the copies to invalidate
+    , updOwner :: Bit (AddrWidth p) -> Bit (SourceWidth p) -> Action ()
+    -- ^ update the one hot encodding of the copies to invalidate
+    , getOwner :: Bit (SinkWidth p) -> Owner
+    -- ^ get the one hot encodding of the copies to invalidate
     } deriving(Generic)
 
 makeTransactionQueue :: forall p.
   ( KnownTLParams p
   , LaneWidth p ~ BlockWidth
   , AddrWidth p ~ 32 )
-    => [Bit (SinkWidth p)] -> Module (TransactionQueue p)
-makeTransactionQueue sinks = do
+    => [Bit (SinkWidth p)] -> [Bit (SourceWidth p)] -> Module (TransactionQueue p)
+makeTransactionQueue sinks sources = do
   let logSize = log2ceil (length sinks)
   liftNat logSize $ \(_ :: Proxy aw) -> do
     liftNat (2 ^ logSize) $ \(_ :: Proxy size) -> do
       addresses :: [Reg (Bit (AddrWidth p))] <- replicateM (2 ^ logSize) (makeReg dontCare)
+      owners :: [Reg Owner] <- replicateM (2 ^ logSize) (makeReg 0)
 
       valid :: Ehr (Bit size) <- makeEhr 2 0
       head :: Reg (Bit aw) <- makeReg 0
@@ -105,7 +118,15 @@ makeTransactionQueue sinks = do
           , deq= \ sink -> do
             let invalidated :: Bit size =
                   fromBitList (map (===sink) sinks)
-            valid.write 1 (valid.read 1 .&. inv invalidated) }
+            valid.write 1 (valid.read 1 .&. inv invalidated)
+          , setOwner= \ sink oneHot -> do
+            sequence_ [when (sink === s) $ o <== oneHot | (s,o) <- zip sinks owners]
+          , updOwner= \ addr source -> do
+            forM_ [0..length sinks - 1] \ i -> do
+              when (getIndex addr === getIndex (addresses!i).val) do
+                owners!i <== (owners!i).val .&. inv (toOwner sources source)
+          , getOwner= \ sink ->
+            select [sink === s --> o.val | (s,o) <- zip sinks owners] }
 
 
 data LLCConfig p =
@@ -126,11 +147,12 @@ makeLLC :: forall p p'.
   , KnownTLParams p )
   => LLCConfig p -> Module (TLSlave p, TLMaster p')
 makeLLC config = do
-  randomWay :: Reg Way <- makeReg 0
-  always (randomWay <== randomWay.val + 1)
-
   [memWrArbiter, cpuWrArbiter] <- makeStaticArbiter 2
   [memRdArbiter, cpuRdArbiter] <- makeStaticArbiter 2
+  [cArbiter, aArbiter] <- makeStaticArbiter 2
+
+  -- Data ram, the address of a block is (index # way)
+  ram :: RAMBE (IndexW + Log2 Ways) BlockWidth <- makeDualRAMForwardBE
 
   slaveA :: Queue (ChannelA p') <- makeQueue
   slaveD :: Queue (ChannelD p') <- makeQueue
@@ -148,7 +170,9 @@ makeLLC config = do
   probeM <- makeProbeFSM config.sources (toSink queueB)
 
   transactions :: TransactionQueue p <-
-    makeTransactionQueue [ config.baseSink + lit i | i <- [0..2 ^ config.logNumSink - 1] ]
+    makeTransactionQueue
+      [ config.baseSink + lit i | i <- [0..2 ^ config.logNumSink - 1] ]
+      config.sources
 
   retryQ :: Queue (ChannelA p) <- makeSizedQueue 4
 
@@ -208,64 +232,151 @@ makeLLC config = do
         pure ()
 
   -------------------------------------------------------------------------------------------
-  -- Stage 1 C: Matching channel C inputs
+  -- Stage 2 C: Matching channel C inputs
   -------------------------------------------------------------------------------------------
 
   always do
     when stage1C.canDeq do
       let req = stage1C.first
 
-      let tag = getTag req.address
+      let key = getTag req.address
+      let index = getIndex req.address
 
       let hits :: Bit Ways =
             fromBitList
-              [ p.out =!= nothing .&&. t.out === tag
+              [ p.out =!= nothing .&&. t.out === key
                 | (t,p) <- zip tagsC permsC ]
 
       let way :: Way =
-            selectDefault randomWay.val
+            select
               [ hit --> lit i
                 | (hit,i) <- zip (toBitList hits) [0..] ]
 
+      dynamicAssert (getLaneMask @p req.address req.size === ones) "non cache line channel C access"
+
+      cArbiter.request
       cpuWrArbiter.request
-      when cpuWrArbiter.grant do
-        -- Write to the data ram
+      when (cArbiter.grant .&&. cpuWrArbiter.grant) do
+        -- Update the state in the transaction queue in case of a probe response
+        when (req.opcode.isProbeAck .||. req.opcode.isProbeAckData) do
+          transactions.updOwner req.address req.source
+
+        when (hasDataC req.opcode) do
+          ram.storeBE (getIndex (req.address) # way) ones req.lane
+
+        -- Update ownership and permissions of the memory block
+        --sequence_
+        --  [ when hit do
+        --    let invalidate = orList (map (===req.opcode.reduce) [ t2n, b2n ])
+
+        --    when invalidate do
+        --      (ownersC!i).store index
+        --        ((ownersC!i).out .&. (inv (toOwner config.sources req.source)))
+        --    | (hit,i::Int) <- zip (toBitList hits) [0..]]
+
         stage1C.deq
 
   -------------------------------------------------------------------------------------------
-  -- Stage 1 A: Matching channel A inputs
+  -- Stage 2 A: Matching channel A inputs
   -------------------------------------------------------------------------------------------
 
+  randomWay :: Reg (Bit Ways) <- makeReg 1
+  always $ randomWay <== rotr randomWay.val (1::Bit 1)
+  grantQ1 :: Queue (ChannelD p) <- makeQueue
+  probeQ :: Queue (Option (Bit (AddrWidth p)), Bit 1, Bit (SinkWidth p), ChannelA p, Way) <-
+    makeSizedQueue (config.logNumSink-1)
+
   always do
-    when (stage1A.canDeq .&&. probeM.canPut) do
+    when (stage1A.canDeq .&&. probeM.canPut .&&. grantQ1.notFull .&&. probeQ.notFull) do
       let (sink, req) = stage1A.first
 
-      let tag = getTag req.address
+      let key = getTag req.address
 
       let hits :: Bit Ways =
             fromBitList
-              [ p.out =!= nothing .&&. t.out === tag
+              [ p.out =!= nothing .&&. t.out === key
                 | (t,p) <- zip tagsA permsA ]
 
-      let way :: Way =
-            selectDefault randomWay.val
-              [ hit --> lit i
-                | (hit,i) <- zip (toBitList hits) [0..] ]
-
-      -- Cache miss
+            -- Cache hit
       if hits =!= 0 then do
+        let way :: Way =
+              select
+                [ hit --> lit i
+                  | (hit,i) <- zip (toBitList hits) [0..] ]
+
         let perm = select [hit --> perms.out | (hit, perms) <- zip (toBitList hits) permsA]
         let owner = select [hit --> owner.out | (hit, owner) <- zip (toBitList hits) ownersA]
+        let isAcquire = req.opcode.isAcquirePerms .||. req.opcode.isAcquireBlock
 
-        probeM.put (dontCare, req.address, owner)
+        let needTrunk =
+              req.opcode.isPutData .||.
+                (isAcquire .&&. (decodeGrow req.opcode.grow).snd === trunk)
 
-        pure ()
+        -- Miss: we need to probe the block first
+        if perm === branch .&&. inv needTrunk then do
+          grantQ1.enq
+            ChannelD
+              { sink
+              , opcode=
+                  select
+                    [ req.opcode.isGet --> item #AccessAckData
+                    , req.opcode.isPutData --> item #AccessAck
+                    , req.opcode.isAcquirePerms --> tag #GrantData (needTrunk ? (item #T, item #B))
+                    , req.opcode.isAcquireBlock --> tag #GrantData (needTrunk ? (item #T, item #B))
+                    ]
+              , source= req.source
+              , size= req.size
+              , lane= dontCare }
+        else do
+          probeM.put (tag #ProbeBlock (needTrunk ? (item #N, item #B)), req.address, owner)
+          probeQ.enq (none, false, sink, req, way)
+          transactions.setOwner sink owner
+      else do
+        let choosen = randomWay.val
+        let way =
+              select
+                [ cond --> lit i
+                  | (i, cond) <- zip [0..] (toBitList choosen) ]
+        let address =
+              select
+                [ cond --> tag.out # (getIndex req.address) # 0
+                  | (tag, cond) <- zip tagsA (toBitList choosen) ]
+        let owner =
+              select
+                [ cond --> p.out === nothing ? (0, o.out)
+                  | (o, p, cond) <- zip3 ownersA permsA (toBitList choosen) ]
+        probeM.put (tag #ProbeBlock (item #N), address, owner)
+        probeQ.enq (owner =!= 0 ? (some address, none), true, sink, req, way)
+
+      stage1A.deq
+
+  -------------------------------------------------------------------------------------------
+  -- Stage 3: Matching channel A inputs
+  -------------------------------------------------------------------------------------------
+
+  always do
+    let (needRelease, needAcquire, sink, req, way) = probeQ.first
+    when (probeQ.canDeq .&&. transactions.getOwner sink === 0 .&&. slaveA.notFull) do
+
+      if needRelease.valid then do
+        memRdArbiter.request
+        when memRdArbiter.grant do
+          ram.loadBE (getIndex needRelease.val # way)
+          -- TODO: send the read requet at the next cycle
+          pure ()
+
+      else if needAcquire then do
+        slaveA.enq
+          ChannelA
+            { opcode= item #Get
+            , address= req.address
+            , source= sink
+            , lane= dontCare
+            , mask= ones
+            , size= 6 }
 
       else do
         pure ()
-
-      -- TODO: send the correct probe requests
-      stage1A.deq
 
   return
     ( TLSlave
