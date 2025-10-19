@@ -21,11 +21,71 @@ import TileLink.AcquireRelease
 import TileLink.Interconnect
 import TileLink.Broadcast
 
---             hit
--- InputA ------------> Probe new addr
---         |
---         |    mis
---         +----------> Probe old addr
+-- # Channel A pipeline: AcquirePerms/AcquireBlock/PutData/Get:
+--
+-- When we read a message from the channel A, we checck if their exists another
+-- transaction using the same address or such that they must use similar ressources
+-- (like the same address or the same pair "set"/"way"), one way to do this
+-- is just to put the new message into a "retry queue" if it use the same "set"
+-- than another transaction.
+--
+-- Doing so, each request in the transaction queue uses an unique "set" (and
+-- have a unique "index"). When we start a new transaction, we perform the "lookup"
+-- and "matching" stages to check if the requested cache blocks are already in the
+-- cache. In case of a hit, we start by sending a probe request to all the other
+-- caches that contains a copy of the block, except when the block is requested in
+-- read-only mode, and all the other copies are read-only. Then we start the
+-- "grant" stage. Otherwise we choose a block to evict, then we send a probe request
+-- to all the caches containing a copy of this block ("release" stage), we evict the
+-- block, then we acquire the requested block in the cache, and finally we perform
+-- the "grant" stage.
+--
+-- During the grant stage we send the requested block to its source, and we update
+-- the meta-data (tag/permissions).
+--
+-- As a set is only used once in the pipeline, we don't have any source of data/
+-- meta-data hazard in the tag/permissions updates of the channle A pipeline.
+-- In particular we don't have to check is a pair "set"/"way" is already used by
+-- another stage before doing the eviction of a block.
+--
+--               hit
+-- Matching ------------> Probe new addr ----------------------------> Grant
+--           |                                                           ^
+--           |    mis                                                    |
+--           +----------> Probe old addr ----------> Release             |
+--                             |                        |                |
+--                             |                        v                |
+--                             +-------------------> Acquire ------------+
+--
+-- This pipeline is completly out-of-order as TileLink doesn't require it.
+--
+-- # ChannelC pipeline: Release/ReleaseData/ProbeAck/ProbeAckData
+--
+-- If the message is a probe response, then we inform the transaction queue that
+-- we receive a response for a given address/source.
+--
+-- We don't update the permissions/meta-data of a block in this pipeline as we are
+-- not sure that those permissions are still out-of-date. Doing so we over-approxime
+-- the list of copies of the cache blocks, but it make reasoning about meta-data
+-- hazard a lot easier.
+--
+-- Matching ----------> Data Write
+--
+-- # Common lookup stage
+--
+-- The lookup stage of the channelA/channelC pipeline are the same (with the highest priority
+-- for the channelC), but the matching stages are different. This is because a channelC
+-- message blocked by one or more messages for the channelA may cause a deadlock.
+-- Using two matching stages ensure that lookup for the channelC can't be blocked by
+-- a stall of the channelA matching. But this have a cost because we must ensure that
+-- outputs of the meta-data RAMs are still up-to-date and correspond to the last request
+-- of the lockup stage of the chossen pipeline, even if the other pipeline did a lookup.
+--
+-- This is also at this stage that we invalidate the transaction queue entries when we
+-- receive a message from the channelE (with a highest priority than the channels A and
+-- C)
+
+
 
 -- OffsetW must be 4 bytes: size of a cache line
 type OffsetW = 4
@@ -78,6 +138,8 @@ data TransactionQueue p =
     , search :: Bit (AddrWidth p) -> Bit 1
     -- ^ return if the transaction queue contains at least one acquire that
     --   match a given address
+    , getAddress :: Bit (SinkWidth p) -> Bit (AddrWidth p)
+    -- ^ return the address of an MSHR
     , deq :: Bit (SinkWidth p) -> Action ()
     -- ^ remove (the unique) transaction that correspond to a given source
     , setOwner :: Bit (SinkWidth p) -> Owner -> Action ()
@@ -86,6 +148,20 @@ data TransactionQueue p =
     -- ^ update the one hot encodding of the copies to invalidate
     , getOwner :: Bit (SinkWidth p) -> Owner
     -- ^ get the one hot encodding of the copies to invalidate
+    , setAcquire :: Bit (SinkWidth p) -> Action ()
+    -- ^ if set, we need to acquire the cache block before going to the grant stage
+    , clearAcquire :: Bit (SinkWidth p) -> Action ()
+    -- ^ clear the acquire bit of the MSHR
+    , getAcquire :: Bit (SinkWidth p) -> Bit 1
+    -- ^ get the acquire bit of the MSHR
+    , setRelease :: Bit (SinkWidth p) -> Action ()
+    -- ^ if set, we need to release the cache block before going to the grant stage
+    , clearRelease :: Bit (SinkWidth p) -> Action ()
+    -- ^ clear the release bit of the MSHR
+    , getRelease :: Bit (SinkWidth p) -> Bit 1
+    -- ^ get the value of the release bit of a given block
+    , setWay :: Bit (SinkWidth p) -> Way -> Action ()
+    , getWay :: Bit (SinkWidth p) -> Way
     } deriving(Generic)
 
 makeTransactionQueue :: forall p.
@@ -100,6 +176,11 @@ makeTransactionQueue sinks sources = do
       addresses :: [Reg (Bit (AddrWidth p))] <- replicateM (2 ^ logSize) (makeReg dontCare)
       owners :: [Reg Owner] <- replicateM (2 ^ logSize) (makeReg 0)
 
+      acquires :: [Reg (Bit 1)] <- replicateM (2 ^ logSize) (makeReg false)
+      releases :: [Reg (Bit 1)] <- replicateM (2 ^ logSize) (makeReg false)
+
+      ways :: [Reg Way] <- replicateM (2 ^ logSize) (makeReg dontCare)
+
       valid :: Ehr (Bit size) <- makeEhr 2 0
       head :: Reg (Bit aw) <- makeReg 0
 
@@ -111,6 +192,10 @@ makeTransactionQueue sinks sources = do
             addresses!head.val <== input.address
             head <== head.val + 1
             return (sinks!head.val)
+          , getAddress= \ sink ->
+            select
+              [ s === sink --> addr.val
+                | (addr, s) <- zip addresses sinks]
           , search= \ addr ->
             orList
               [ v .&&. getIndex addr === getIndex a.val
@@ -126,7 +211,40 @@ makeTransactionQueue sinks sources = do
               when (getIndex addr === getIndex (addresses!i).val) do
                 owners!i <== (owners!i).val .&. inv (toOwner sources source)
           , getOwner= \ sink ->
-            select [sink === s --> o.val | (s,o) <- zip sinks owners] }
+            select [sink === s --> o.val | (s,o) <- zip sinks owners]
+          , setAcquire= \ sink -> do
+            sequence_
+              [ when (s === sink) (acq <== true)
+                | (acq, s) <- zip acquires sinks ]
+          , clearAcquire= \ sink -> do
+            sequence_
+              [ when (s === sink) (acq <== false)
+                | (acq, s) <- zip acquires sinks ]
+          , getAcquire= \ sink ->
+            select
+              [ s === sink --> acq.val
+                | (acq, s) <- zip acquires sinks]
+          , setRelease= \ sink -> do
+            sequence_
+              [ when (s === sink) (rel <== true)
+                | (rel, s) <- zip releases sinks ]
+          , clearRelease= \ sink -> do
+            sequence_
+              [ when (s === sink) (rel <== false)
+                | (rel, s) <- zip releases sinks ]
+          , getRelease= \ sink ->
+            select
+              [ s === sink --> rel.val
+                | (rel, s) <- zip releases sinks]
+          , setWay= \ sink way ->
+            sequence_
+              [ when (s === sink) (w <== way)
+                | (w,s) <- zip ways sinks ]
+          , getWay= \ sink ->
+            select
+              [ s === sink --> w.val
+                | (w,s) <- zip ways sinks ]
+          }
 
 
 data LLCConfig p =
@@ -174,7 +292,7 @@ makeLLC config = do
       [ config.baseSink + lit i | i <- [0..2 ^ config.logNumSink - 1] ]
       config.sources
 
-  retryQ :: Queue (ChannelA p) <- makeSizedQueue 4
+  retryQ :: Queue (ChannelA p) <- makeSizedQueue config.logNumSink
 
   (tagsA, tagsC) <- makeDualPortdeRAM @Tag
   (permsA, permsC) <- makeDualPortdeRAM @TLPerm
@@ -182,6 +300,33 @@ makeLLC config = do
 
   stage1A :: Queue (Bit (SinkWidth p), ChannelA p) <- makePipelineQueue 2
   stage1C :: Queue (ChannelC p) <- makePipelineQueue 2
+
+  -------------------------------------------------------------------------------------------
+  -- Memory responses
+  -------------------------------------------------------------------------------------------
+  always do
+    let resp = slaveD.first
+    let way = transactions.getWay resp.source
+    let address = transactions.getAddress resp.source
+    let index = getIndex address
+
+    when (slaveD.canDeq) do
+      -- Response to a release
+      if resp.opcode.isAccessAck then do
+        transactions.clearRelease resp.source
+        slaveD.deq
+
+      -- Response to an acquire
+      else if resp.opcode.isAccessAckData then do
+        memWrArbiter.request
+        when memWrArbiter.grant do
+          ram.storeBE (index # way) ones resp.lane
+          transactions.clearAcquire resp.source
+          slaveD.deq
+
+      -- Unknown opcode
+      else do
+        dynamicAssert false "invalid memory response"
 
   -------------------------------------------------------------------------------------------
   -- Stage 1: Lookup
@@ -252,7 +397,7 @@ makeLLC config = do
               [ hit --> lit i
                 | (hit,i) <- zip (toBitList hits) [0..] ]
 
-      dynamicAssert (getLaneMask @p req.address req.size === ones) "non cache line channel C access"
+      dynamicAssert (getLaneMask @p req.address req.size === ones) "incomplete channel C access"
 
       cArbiter.request
       cpuWrArbiter.request
@@ -263,16 +408,6 @@ makeLLC config = do
 
         when (hasDataC req.opcode) do
           ram.storeBE (getIndex (req.address) # way) ones req.lane
-
-        -- Update ownership and permissions of the memory block
-        --sequence_
-        --  [ when hit do
-        --    let invalidate = orList (map (===req.opcode.reduce) [ t2n, b2n ])
-
-        --    when invalidate do
-        --      (ownersC!i).store index
-        --        ((ownersC!i).out .&. (inv (toOwner config.sources req.source)))
-        --    | (hit,i::Int) <- zip (toBitList hits) [0..]]
 
         stage1C.deq
 
@@ -307,6 +442,8 @@ makeLLC config = do
         let perm = select [hit --> perms.out | (hit, perms) <- zip (toBitList hits) permsA]
         let owner = select [hit --> owner.out | (hit, owner) <- zip (toBitList hits) ownersA]
         let isAcquire = req.opcode.isAcquirePerms .||. req.opcode.isAcquireBlock
+
+        transactions.setWay sink way
 
         let needTrunk =
               req.opcode.isPutData .||.
@@ -347,11 +484,12 @@ makeLLC config = do
                   | (o, p, cond) <- zip3 ownersA permsA (toBitList choosen) ]
         probeM.put (tag #ProbeBlock (item #N), address, owner)
         probeQ.enq (owner =!= 0 ? (some address, none), true, sink, req, way)
+        transactions.setWay sink way
 
       stage1A.deq
 
   -------------------------------------------------------------------------------------------
-  -- Stage 3: Matching channel A inputs
+  -- Stage 3: Post probe stages
   -------------------------------------------------------------------------------------------
 
   always do
