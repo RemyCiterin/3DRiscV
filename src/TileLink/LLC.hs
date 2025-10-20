@@ -270,7 +270,7 @@ makeLLC config = do
   [cArbiter, aArbiter] <- makeStaticArbiter 2
 
   -- Data ram, the address of a block is (index # way)
-  ram :: RAMBE (IndexW + Log2 Ways) BlockWidth <- makeDualRAMForwardBE
+  ram :: RAMBE (IndexW + Log2Ceil Ways) BlockWidth <- makeDualRAMForwardBE
 
   slaveA :: Queue (ChannelA p') <- makeQueue
   slaveD :: Queue (ChannelD p') <- makeQueue
