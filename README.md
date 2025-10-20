@@ -47,7 +47,7 @@ The bootloader is in Rust so you may need to install cargo first.
 Finaly, connect the SD card to your ulx3s board, and connect the board to your computer, then run:
 
 ```bash
-make test_bootloader compile ulx3s
+make test_bootloader compile_no_gpu ulx3s
 ```
 
 You must see this screen:

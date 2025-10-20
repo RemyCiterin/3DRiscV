@@ -30,6 +30,7 @@ import Soc
 main :: IO ()
 main = do
   args <- getArgs
+  let enableGpu = not ("--no-gpu" `elem` args)
   if | "--simulate" `elem` args -> do
         pure ()
      | "--formal" `elem` args -> do
@@ -38,8 +39,8 @@ main = do
         writeVerilogTop Cache.testCache "TestCache" "Verilog/"
         writeVerilogModule Uart.testUart "Uart" "Verilog/"
         --writeVerilogModule Core.makeTestCore "TestCore" "Verilog/"
-        writeVerilogModule Soc.makeUlx3s "SocUlx3s" "Verilog/"
-        writeVerilogModule Soc.makeTestCore "TestCore" "Verilog/"
+        writeVerilogModule (Soc.makeUlx3s enableGpu) "SocUlx3s" "Verilog/"
+        writeVerilogModule (Soc.makeTestCore enableGpu) "TestCore" "Verilog/"
         --writeVerilogModule Soc.makeUlx3s "TestCore" "Verilog/"
         writeVerilogModule Spi.makeTestSpi "TestSpi" "Verilog/"
         writeVerilogModule DDR3.makeWrapperDDR3 "TestDDR3" "Verilog/"

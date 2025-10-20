@@ -22,6 +22,10 @@ DDR3 = \
 compile:
 	cabal run blarney-test -- --enable-name-prop
 
+.PHONY: compile_no_gpu
+compile_no_gpu:
+	cabal run blarney-test -- --enable-name-prop --no-gpu
+
 .PHONY: formal
 formal:
 	cabal run blarney-test -- --formal

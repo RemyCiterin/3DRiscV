@@ -112,8 +112,8 @@ makeTLSdram sink lowerBound = do
         , channelD= toSource queueD
         , channelE= nullSink } )
 
-makeCPU :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, TLMaster TLConfig', VgaFabric)
-makeCPU rx = mdo
+makeCPU :: Bool -> Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, TLMaster TLConfig', VgaFabric)
+makeCPU enableGpu rx = mdo
   (tx, uartInterrupt, leds, uartMmio) <- makeUartMmio 217 rx
   (spi, spiMmio) <- makeSpiMmio 0x10001000
 
@@ -147,8 +147,6 @@ makeCPU rx = mdo
   withName "xbar" $ makeConnection master0 slave
   withName "xbar" $ makeConnection imaster0 slave0
   withName "xbar" $ makeConnection dmaster0 slave1
-  withName "xbar" $ makeConnection imaster1 slave2
-  withName "xbar" $ makeConnection dmaster1 slave3
 
   (clintMmio, clint) <- withName "clint" $ makeClint @TLConfig 2 0x2000000
   clintSlave <- makeTLMmio @TLConfig 1 (clintMmio ++ uartMmio ++ spiMmio)
@@ -179,28 +177,35 @@ makeCPU rx = mdo
           , hartId= 0 }
   (imaster0, dmaster0) <- withName "core0" $ makeCore coreconfig0 systemInputs0
 
-  gpuResets <- makeQueue
-  always do
-    when (delay true false) do
-      gpuResets.enq 0x80000000
-
   let gpuBaseHartid :: Bit 32 = 1
   let gpuInstSource :: Bit 8 = 5
   let gpuDataSource :: Bit 8 = 6
-  (imaster1, dmaster1) <-
-    withName "gpu" $ makeSimtCore @TLConfig
-      gpuBaseHartid
-      (toSource gpuResets)
-      gpuInstSource
-      gpuDataSource
+  when enableGpu do
+    gpuResets <- makeQueue
+    always do
+      when (delay true false) do
+        gpuResets.enq 0x80000000
+
+    (imaster1, dmaster1) <-
+      withName "gpu" $ makeSimtCore @TLConfig
+        gpuBaseHartid
+        (toSource gpuResets)
+        gpuInstSource
+        gpuDataSource
+
+    withName "xbar" $ makeConnection imaster1 slave2
+    withName "xbar" $ makeConnection dmaster1 slave3
 
   let bconfig =
         BroadcastConfig
           { sources=
               [ coreconfig0.fetchSource
-              , coreconfig0.dataSource
-              , gpuInstSource
-              , gpuDataSource ]
+              , coreconfig0.dataSource ]
+              ++ if enableGpu then
+                  [ gpuInstSource
+                  , gpuDataSource ]
+                else
+                  []
           , logSize= 6
           , baseSink= 0 }
   (slave, uncoherentMaster) <- withName "broadcast" $ makeBroadcast @TLConfig bconfig
@@ -209,9 +214,9 @@ makeCPU rx = mdo
 
 type RomLogSize = 15
 
-makeUlx3s :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, SdramFabric, VgaFabric)
-makeUlx3s rx = mdo
-  (tx, leds, spi, master, vga) <- makeCPU rx
+makeUlx3s :: Bool -> Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, SdramFabric, VgaFabric)
+makeUlx3s enableGpu rx = mdo
+  (tx, leds, spi, master, vga) <- makeCPU enableGpu rx
 
   let sdramBase :: Bit 32 = 0x80000000 + 4 * lit (2 ^ valueOf @RomLogSize)
   let stacksBase :: Bit 32 = 0x8F000000
@@ -228,10 +233,15 @@ makeUlx3s rx = mdo
         XBarConfig
           { bce= False
           , rootAddr= \ x ->
-              select
-                [ x .<. sdramBase --> 1
-                , x .>=. sdramBase .&&. x .<. stacksBase --> 0
-                , x .>=. stacksBase --> 2 ]
+              if enableGpu then
+                select
+                  [ x .<. sdramBase --> 1
+                  , x .>=. sdramBase .&&. x .<. stacksBase --> 0
+                  , x .>=. stacksBase --> 2 ]
+              else
+                select
+                  [ x .<. sdramBase --> 1
+                  , x .>=. sdramBase --> 0 ]
           , rootSink= \ x -> 0
           , rootSource= \ x -> 0
           , sizeChannelA= 2
@@ -245,54 +255,69 @@ makeUlx3s rx = mdo
   ([masterSdram, masterSram, masterStacks], [slave]) <-
     withName "xbar" $ makeTLXBar @3 @1 @TLConfig' xbarconfig
 
-  slaveStacks <- makeGpuStacks @TLConfig' 0
+  when enableGpu do
+    slaveStacks <- makeGpuStacks @TLConfig' 0
+    makeConnection masterStacks slaveStacks
 
   (fabric, slaveSdram) <- withName "sdram" $ makeTLSdram @TLConfig' 0 sdramBase
 
   slaveSram <- withName "sram" $ makeTLRAM @RomLogSize @TLConfig' sramconfig
 
-  makeConnection masterStacks slaveStacks
   makeConnection masterSdram slaveSdram
   makeConnection masterSram slaveSram
 
   return (tx, leds, spi, fabric, vga)
 
 
-makeTestCore :: Bit 1 -> Module (Bit 1, Bit 8)
-makeTestCore rx = mdo
-  (tx, leds, spi, master, vga) <- makeCPU rx
+makeTestCore :: Bool -> Bit 1 -> Module (Bit 1, Bit 8)
+makeTestCore enableGpu rx = mdo
+  (tx, leds, spi, master, vga) <- makeCPU enableGpu rx
 
-  let stacksBase :: Bit 32 = 0x8F000000
+  if enableGpu then mdo
+    let stacksBase :: Bit 32 = 0x8F000000
 
-  let xbarconfig =
-        XBarConfig
-          { bce= False
-          , rootAddr= \ x -> x .<. stacksBase ? (0, 1)
-          , rootSink= \ x -> 0
-          , rootSource= \ x -> 0
-          , sizeChannelA= 2
-          , sizeChannelB= 2
-          , sizeChannelC= 2
-          , sizeChannelD= 2
-          , sizeChannelE= 2 }
+    let xbarconfig =
+          XBarConfig
+            { bce= False
+            , rootAddr= \ x -> x .<. stacksBase ? (0, 1)
+            , rootSink= \ x -> 0
+            , rootSource= \ x -> 0
+            , sizeChannelA= 2
+            , sizeChannelB= 2
+            , sizeChannelC= 2
+            , sizeChannelD= 2
+            , sizeChannelE= 2 }
 
-  makeConnection master slave
+    makeConnection master slave
 
-  ([masterSram, masterStacks], [slave]) <-
-    withName "xbar" $ makeTLXBar @2 @1 @TLConfig' xbarconfig
+    ([masterSram, masterStacks], [slave]) <-
+      withName "xbar" $ makeTLXBar @2 @1 @TLConfig' xbarconfig
 
-  slaveStacks <- makeGpuStacks @TLConfig' 0
+    slaveStacks <- makeGpuStacks @TLConfig' 0
 
-  let sramconfig =
-        TLRAMConfig
-          { fileName= Just "Mem.hex"
-          , lowerBound= 0x80000000
-          , bypassChannelA= False
-          , bypassChannelD= False
-          , sink= 1 }
-  slaveSram <- withName "sram" $ makeTLRAM @RomLogSize @TLConfig' sramconfig
+    let sramconfig =
+          TLRAMConfig
+            { fileName= Just "Mem.hex"
+            , lowerBound= 0x80000000
+            , bypassChannelA= False
+            , bypassChannelD= False
+            , sink= 1 }
+    slaveSram <- withName "sram" $ makeTLRAM @RomLogSize @TLConfig' sramconfig
 
-  makeConnection masterStacks slaveStacks
-  makeConnection masterSram slaveSram
+    makeConnection masterStacks slaveStacks
+    makeConnection masterSram slaveSram
 
-  return (tx, leds)
+    return (tx, leds)
+  else mdo
+    let sramconfig =
+          TLRAMConfig
+            { fileName= Just "Mem.hex"
+            , lowerBound= 0x80000000
+            , bypassChannelA= False
+            , bypassChannelD= False
+            , sink= 1 }
+    slaveSram <- withName "sram" $ makeTLRAM @RomLogSize @TLConfig' sramconfig
+
+    makeConnection master slaveSram
+
+    return (tx, leds)
