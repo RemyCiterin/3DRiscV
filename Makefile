@@ -113,6 +113,11 @@ prog_ulx3s:
 .PHONY: ulx3s
 ulx3s: yosys_ulx3s nextpnr_ulx3s ecppack prog_ulx3s
 
+.PHONY: verilator_no_gpu
+verilator_no_gpu: compile_no_gpu
+	make -C simulation all
+	stdbuf -o0 -i0 ./sim
+
 .PHONY: verilator
 verilator: compile
 	make -C simulation all
