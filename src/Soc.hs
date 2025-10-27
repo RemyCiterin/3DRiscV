@@ -213,6 +213,7 @@ makeCPU enableGpu rx = mdo
   return (tx, leds, spi, uncoherentMaster, vgaFabric)
 
 type RomLogSize = 15
+type SimRomLogSize = 24
 
 makeUlx3s :: Bool -> Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, SdramFabric, VgaFabric)
 makeUlx3s enableGpu rx = mdo
@@ -302,7 +303,7 @@ makeTestCore enableGpu rx = mdo
             , bypassChannelA= False
             , bypassChannelD= False
             , sink= 1 }
-    slaveSram <- withName "sram" $ makeTLRAM @RomLogSize @TLConfig' sramconfig
+    slaveSram <- withName "sram" $ makeTLRAM @SimRomLogSize @TLConfig' sramconfig
 
     makeConnection masterStacks slaveStacks
     makeConnection masterSram slaveSram
@@ -316,7 +317,7 @@ makeTestCore enableGpu rx = mdo
             , bypassChannelA= False
             , bypassChannelD= False
             , sink= 1 }
-    slaveSram <- withName "sram" $ makeTLRAM @RomLogSize @TLConfig' sramconfig
+    slaveSram <- withName "sram" $ makeTLRAM @SimRomLogSize @TLConfig' sramconfig
 
     makeConnection master slaveSram
 

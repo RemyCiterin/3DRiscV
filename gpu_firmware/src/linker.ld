@@ -36,4 +36,6 @@ SECTIONS
     *(.bss .bss.*)
   } > sdram
   PROVIDE(__bss_end = .);
+
+  PROVIDE(__malloc_buffer = .);
 }

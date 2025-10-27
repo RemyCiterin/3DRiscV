@@ -1,5 +1,8 @@
 #pragma once
 
+void* malloc(unsigned);
+void free(void*);
+
 void printf(const char*, ...);
 //unsigned strlen(const char*);
 void* memset(void*, int, unsigned);

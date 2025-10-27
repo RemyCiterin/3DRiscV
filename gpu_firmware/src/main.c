@@ -6,17 +6,15 @@
 #include "geometry.h"
 
 #define NCPU (4 * 16)
-#define HWIDTH 64 // 320
-#define VWIDTH 40 // 240
+#define HWIDTH 320
+#define VWIDTH 240
 #define PRIMS_BOUNDS 32
 
 static int volatile counter = 0;
 
 bool volatile wait = 0;
 
-fixed volatile z_buffer[HWIDTH * VWIDTH];
-uint32_t volatile rgb_buffer[HWIDTH * VWIDTH];
-
+volatile uint32_t volatile* rgb_buffer;//[HWIDTH * VWIDTH];
 
 static triangle_t tri;
 
@@ -28,13 +26,12 @@ extern triangle_t triangles[PRIMS_BOUNDS];
 static fixed proj_body[4][4];
 static fixed* proj[4];
 
-static bool volatile hit[HWIDTH * VWIDTH];
-
 timestamp_t volatile start_timestamp;
 timestamp_t volatile finish_timestamp;
 uint32_t volatile bitmask[NCPU];
 
-//static int* FRAME_BASE = 0x70000000;
+// The frame buffer is just an array of 8 bits integers
+static uint8_t volatile* FRAME_BASE = (uint8_t volatile*)0x70000000;
 
 static char raw_texture_data[] = "          _____                   /\\    \\                 /::\\    \\               /::::\\    \\             /::::::\\    \\           /:::/\\:::\\    \\         /:::/__\\:::\\    \\       /::::\\   \\:::\\    \\     /::::::\\   \\:::\\    \\   /:::/\\:::\\   \\:::\\    \\ /:::/  \\:::\\   \\:::\\____\\\\::/    \\:::\\  /:::/    / \\/____/ \\:::\\/:::/    /           \\::::::/    /             \\::::/    /              /:::/    /              /:::/    /              /:::/    /              /:::/    /               \\::/    /                 \\/____/         ";
 
@@ -47,6 +44,15 @@ static texture_t texture = {
 };
 
 extern void cpu_main() {
+  ////////////////////////////////////////////////////////////////////////////
+  // Initialize RGB buffer
+  ////////////////////////////////////////////////////////////////////////////
+  rgb_buffer = malloc(HWIDTH * VWIDTH * sizeof(int));
+  if (!rgb_buffer) {
+    printf("PANIC: out of memory\n");
+    return;
+  }
+
   ////////////////////////////////////////////////////////////////////////////
   // Initialize textures
   ////////////////////////////////////////////////////////////////////////////
@@ -120,15 +126,16 @@ extern void cpu_main() {
   *LED = 0x55;
 
   ////////////////////////////////////////////////////////////////////////////
-  // Show statistics
+  // Show GPU statistics
   ////////////////////////////////////////////////////////////////////////////
-  print_stats(0, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
+  print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
 
   ////////////////////////////////////////////////////////////////////////////
   // Display screen buffer content
   ////////////////////////////////////////////////////////////////////////////
+  init_timestamp((timestamp_t*)&start_timestamp);
+  char* line = malloc(HWIDTH+1);
   for (int i=0; i < VWIDTH; i++) {
-    char* line = alloca(HWIDTH+1);
 
     for (int j=0; j < HWIDTH; j++)
       line[j] = rgb_buffer[i*HWIDTH+j];
@@ -140,7 +147,20 @@ extern void cpu_main() {
     }
 
     printf("%s\n", line);
+
+    for (int j=0; j < HWIDTH; j++) {
+      FRAME_BASE[i*HWIDTH+j] = (uint8_t)rgb_buffer[i*HWIDTH+j];
+    }
   }
+  free(line);
+  init_timestamp((timestamp_t*)&finish_timestamp);
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Show CPU statistics
+  ////////////////////////////////////////////////////////////////////////////
+  print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
+
+
 
   while (true) {
     printf("Hello world!\n");

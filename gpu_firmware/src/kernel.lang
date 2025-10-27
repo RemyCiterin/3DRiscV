@@ -14,10 +14,10 @@
 #define INT(x) (x >> FIXED_LOG_SCALE)
 
 // Number of lines in the frame buffer
-#define VWIDTH 40
+#define VWIDTH 240
 
 // Length of a line in the frame buffer
-#define HWIDTH 64
+#define HWIDTH 320
 
 // Number of parallel threads
 #define NCPU 64
