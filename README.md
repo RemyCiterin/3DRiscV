@@ -1,12 +1,19 @@
-# blarney-experiments
-Some experimentations with the blarney DSL for hardware synthesis
+# 3DRiscV
+
+`3DRiscV` is a system on chip containing a Unix capable rv32-ima cpu and a RISC-V based GPGPU,
+both connected using the TileLink cache coherency protocol. This SOC can run on an ULX3S board,
+and can be simulated using Verilator.
+
+
+The GPGPU is programmed using a custom compiler, this allow to automatically insert the
+custom instructions to handle thread reconvergence.
 
 # Unix demo
 
 ## Clone the repository
 
 ```bash
-git clone --recursive https://github.com/RemyCiterin/blarney-experiments.git
+git clone --recursive https://github.com/RemyCiterin/3DRiscV.git
 cd blarney-experiments
 ```
 
@@ -92,3 +99,7 @@ start scheduler!
 init: starting sh
 $
 ```
+
+# GPGPU demo
+
+TODO
