@@ -24,6 +24,8 @@ pkgs.mkShell {
     pkgsCross.buildPackages.gcc
     pkgs.qemu
 
+    pkgs.SDL2
+
     pkgs.yosys
     pkgs.nextpnr
     pkgs.trellis

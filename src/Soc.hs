@@ -270,7 +270,7 @@ makeUlx3s enableGpu rx = mdo
   return (tx, leds, spi, fabric, vga)
 
 
-makeTestCore :: Bool -> Bit 1 -> Module (Bit 1, Bit 8)
+makeTestCore :: Bool -> Bit 1 -> Module (Bit 1, Bit 8, VgaFabric)
 makeTestCore enableGpu rx = mdo
   (tx, leds, spi, master, vga) <- makeCPU enableGpu rx
 
@@ -308,7 +308,7 @@ makeTestCore enableGpu rx = mdo
     makeConnection masterStacks slaveStacks
     makeConnection masterSram slaveSram
 
-    return (tx, leds)
+    return (tx, leds, vga)
   else mdo
     let sramconfig =
           TLRAMConfig
@@ -321,4 +321,4 @@ makeTestCore enableGpu rx = mdo
 
     makeConnection master slaveSram
 
-    return (tx, leds)
+    return (tx, leds, vga)

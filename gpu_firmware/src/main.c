@@ -137,20 +137,21 @@ extern void cpu_main() {
   char* line = malloc(HWIDTH+1);
   for (int i=0; i < VWIDTH; i++) {
 
-    for (int j=0; j < HWIDTH; j++)
-      line[j] = rgb_buffer[i*HWIDTH+j];
-    line[HWIDTH] = 0;
+    //for (int j=0; j < HWIDTH; j++)
+    //  line[j] = rgb_buffer[i*HWIDTH+j];
+    //line[HWIDTH] = 0;
 
-    for (int j=HWIDTH-1; j >= 0; j--) {
-      if (line[j] != ' ') break;
-      line[j+1] = 0;
-    }
+    //for (int j=HWIDTH-1; j >= 0; j--) {
+    //  if (line[j] != ' ') break;
+    //  line[j+1] = 0;
+    //}
 
-    printf("%s\n", line);
+    //printf("%s\n", line);
 
     for (int j=0; j < HWIDTH; j++) {
       FRAME_BASE[i*HWIDTH+j] = (uint8_t)rgb_buffer[i*HWIDTH+j];
     }
+
   }
   free(line);
   init_timestamp((timestamp_t*)&finish_timestamp);

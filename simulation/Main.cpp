@@ -5,8 +5,60 @@
 #include <iostream>
 #include "VTestCore.h"
 
+#include <SDL2/SDL.h>
+#define screenWidth 320
+#define screenHeight 240
+static SDL_Window *window = NULL;
+static SDL_Renderer *renderer = NULL;
+
 #define BAUD 115200
 #define FREQ 25000000
+
+void vga_init() {
+  SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+  window = SDL_CreateWindow(
+    "ulx3s simulation",
+    SDL_WINDOWPOS_CENTERED,
+    SDL_WINDOWPOS_CENTERED,
+    screenWidth,
+    screenHeight,
+    0
+  );
+  if (!window) exit(1);
+
+  renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+  if (!renderer) exit(1);
+}
+
+static int xpos = 0;
+static int ypos = 0;
+static int blank_num = 0;
+static void vga_draw(bool blank, uint8_t r, uint8_t g, uint8_t b) {
+
+  // Update coordinates
+  xpos += 1;
+
+  if (blank) {
+    xpos = 0;
+
+    // first blank signal
+    if (blank_num == 0) ypos += 1;
+
+  } else {
+    // New frame
+    if (blank_num >= screenWidth) {
+      SDL_RenderPresent(renderer);
+      ypos = 0;
+    }
+
+    SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+    SDL_RenderDrawPoint(renderer, xpos, ypos);
+  }
+
+  // Update the number of blank pixels
+  blank_num = blank ? blank_num+1 : 0;
+
+}
 
 
 char input = 0;
@@ -67,11 +119,14 @@ void run_core(int argc, char **argv, std::atomic_char &current_input) {
   Verilated::commandArgs(argc, argv);
   VTestCore *top = new VTestCore;
 
+  vga_init();
+
   bool rx = true;
   int counter = 0;
 
   while (!Verilated::gotFinish()) {
     if (top->clock) {
+      vga_draw(top->out_2_blank, top->out_2_red, top->out_2_green, top->out_2_blue);
       receive_tx(top->out_0);
 
       counter++;
