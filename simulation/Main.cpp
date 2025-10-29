@@ -6,8 +6,8 @@
 #include "VTestCore.h"
 
 #include <SDL2/SDL.h>
-#define screenWidth 320
-#define screenHeight 240
+#define screenWidth 640
+#define screenHeight 480
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
 
@@ -57,7 +57,6 @@ static void vga_draw(bool blank, uint8_t r, uint8_t g, uint8_t b) {
 
   // Update the number of blank pixels
   blank_num = blank ? blank_num+1 : 0;
-
 }
 
 

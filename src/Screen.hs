@@ -96,11 +96,11 @@ makeVga lowerBound sink = do
   let ymax = vwidth
 
   palette :: RAM (Bit 8) (Bit 24) <- makeRAMInit "Palette.hex"
-  bram :: RAMBE 13 4 <- makeDualRAMBE
+  bram :: RAMBE 15 4 <- makeDualRAMBE
 
-  fabric_addr :: Reg (Bit 26) <- makeReg 0
-  hpos :: Reg (Bit 13) <- makeReg 0
-  vpos :: Reg (Bit 13) <- makeReg 0
+  fabric_addr :: Reg (Bit 30) <- makeReg 0
+  hpos :: Reg (Bit 15) <- makeReg 0
+  vpos :: Reg (Bit 15) <- makeReg 0
 
   always do
     when queue.canDeq do
@@ -110,12 +110,12 @@ makeVga lowerBound sink = do
 
       when (msb === 0) do
         bram.storeBE lsb mask lane
+        --display "write at addr: " addr
 
-  let next_fabric_addr :: Bit 26 =
-        let h :: Bit 26 = zeroExtend (hpos.val .>>. (1::Bit 2)) in
-        let v :: Bit 26 = zeroExtend (vpos.val .>>. (1::Bit 2)) in
-        let r = h + v * lit (div xmax 2) in
-        r .>=. lit (div (xmax * ymax) 4) ? (0,r)
+  let next_fabric_addr :: Bit 30 =
+        let h :: Bit 30 = zeroExtend (hpos.val .>>. (1::Bit 2)) in
+        let v :: Bit 30 = zeroExtend (vpos.val .>>. (1::Bit 2)) in
+        h + v * lit (div xmax 2)
 
   let fabric_response :: Bit 8 =
         select
@@ -132,6 +132,8 @@ makeVga lowerBound sink = do
     let next_vpos =
           (hpos.val+1 .>=. lit hframe) ?
             ((vpos.val+1 .>=. lit vframe) ? (0, vpos.val+1), vpos.val)
+
+    --display "hpos: " hpos.val " vpos: " vpos.val " addr: " next_fabric_addr
 
     fabric_addr <== next_fabric_addr
     hpos <== next_hpos

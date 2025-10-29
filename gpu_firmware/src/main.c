@@ -81,7 +81,7 @@ extern void cpu_main() {
   tri.u[0] = 0;
   tri.v[0] = 0;
 
-  tri.u[1] = 23;
+  tri.u[1] = 20;
   tri.v[1] = 0;
 
   tri.u[2] = 0;
@@ -134,7 +134,7 @@ extern void cpu_main() {
   // Display screen buffer content
   ////////////////////////////////////////////////////////////////////////////
   init_timestamp((timestamp_t*)&start_timestamp);
-  char* line = malloc(HWIDTH+1);
+  //char* line = malloc(HWIDTH+1);
   for (int i=0; i < VWIDTH; i++) {
 
     //for (int j=0; j < HWIDTH; j++)
@@ -153,7 +153,7 @@ extern void cpu_main() {
     }
 
   }
-  free(line);
+  //free(line);
   init_timestamp((timestamp_t*)&finish_timestamp);
 
   ////////////////////////////////////////////////////////////////////////////
