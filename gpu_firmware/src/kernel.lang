@@ -90,7 +90,7 @@ kernel(threadid, frame_buffer, triangles, num_triangles) {
       BBx = triangle[12];
       BBy = triangle[13];
 
-      if ((x > AAx) && (x < BBx) && (y > AAy) && (y < BBy)) {
+      if ((x >= AAx) && (x <= BBx) && (y >= AAy) && (y <= BBy)) {
         //////////////////////////////////////////////////////
         // Test for an intersection with the triangle, and
         // compute barycentric coordinates
@@ -147,7 +147,8 @@ kernel(threadid, frame_buffer, triangles, num_triangles) {
             let height = texture[0];
             let width = texture[1];
 
-            frame_buffer[idx] = texture[2][width * (U >> FIXED_LOG_SCALE) + (V >> FIXED_LOG_SCALE)];
+            frame_buffer[idx] = triangle_idx+54;
+            //texture[2][width * (U >> FIXED_LOG_SCALE) + (V >> FIXED_LOG_SCALE)];
 
             z_max = z;
           }
@@ -176,4 +177,104 @@ kernel(threadid, frame_buffer, triangles, num_triangles) {
   //////////////////////////////////////////////////////
   let locks = &bitmask;
   locks[threadid] = 1;
+}
+
+dump_triangle(threadid, z_buffer, frame_buffer, triangle) {
+  let idx=threadid;
+
+  // Frame coordinates
+  let xpos, ypos;
+  xpos=threadid;
+  ypos=0;
+
+  let xstep = (2*FIXED_SCALE) / HWIDTH;
+  let ystep = (2*FIXED_SCALE) / VWIDTH;
+
+  //////////////////////////////////////////////////////
+  // Load the bounding box of the triangle
+  //////////////////////////////////////////////////////
+  let inv_det, Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz, AAx, AAy, BBx, BBy, Au, Bu, Cu, Av, Bv, Cv;
+  AAx = triangle[10];
+  AAy = triangle[11];
+  BBx = triangle[12];
+  BBy = triangle[13];
+
+  while (idx < HWIDTH*VWIDTH) {
+    //////////////////////////////////////////////////////
+    // Initialize pixel
+    //////////////////////////////////////////////////////
+    frame_buffer[idx] = ' ';
+    let z_max=MAX_INT;
+
+    let x = xpos * xstep - FIXED_SCALE;
+    let y = ypos * ystep - FIXED_SCALE;
+
+    //////////////////////////////////////////////////////
+    // Test for an intersection with the triangle, and
+    // compute barycentric coordinates
+    //////////////////////////////////////////////////////
+    inv_det = triangle[0];
+    Ax = triangle[1];
+    Ay = triangle[2];
+    Bx = triangle[3];
+    By = triangle[4];
+    Cx = triangle[5];
+    Cy = triangle[6];
+
+    let u, v, w;
+    {
+      let a = Bx - Ax;
+      let b = Cx - Ax;
+      let c = By - Ay;
+      let d = Cy - Ay;
+
+      let X = x - Ax;
+      let Y = y - Ay;
+
+      v = @fmul(inv_det, @fmul(d,X) - @fmul(b,Y));
+      w = @fmul(inv_det, @fmul(a,Y) - @fmul(c,X));
+      u = (FIXED_SCALE - w) - v;
+    }
+
+    if ((v >= 0) && (u >= 0) && (w >= 0)) {
+      //////////////////////////////////////////////////////
+      // Compare the value of Z with the one in the Z-buffer
+      //////////////////////////////////////////////////////
+      Az = triangle[7];
+      Bz = triangle[8];
+      Cz = triangle[9];
+
+      let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
+
+      if ((z >= FIXED_SCALE) && (z < z_max)) {
+        //////////////////////////////////////////////////////
+        // Compute texture coordinates
+        //////////////////////////////////////////////////////
+        let texture = triangle[20];
+        Au = triangle[14];
+        Bu = triangle[15];
+        Cu = triangle[16];
+        Av = triangle[17];
+        Bv = triangle[18];
+        Cv = triangle[19];
+
+        let U, V;
+        U = (Au * u) + (Bu * v) + (Cu * w);
+        V = (Av * u) + (Bv * v) + (Cv * w);
+
+        let height = texture[0];
+        let width = texture[1];
+
+        frame_buffer[idx] = texture[2][width * (U >> FIXED_LOG_SCALE) + (V >> FIXED_LOG_SCALE)];
+
+        z_max = z;
+      }
+    }
+
+    //////////////////////////////////////////////////////
+    // Update index and frame coordinates
+    //////////////////////////////////////////////////////
+    INCR_FRAME_COORDINATES(xpos, ypos)
+    idx = idx + NCPU;
+  }
 }
