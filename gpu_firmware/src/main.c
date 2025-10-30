@@ -80,28 +80,36 @@ static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed 
         axis == 1 ? mk_fixed3(unit, plane, -unit) :
         mk_fixed3(unit, -unit, plane);
 
-      triangles[tri_count].texture = texture;
+      int* data = (int*)malloc(sizeof(int) * 9);
+      for (int i=0; i < 9; i++) data[i] = 5 + axis * 2 + dir;
+
+      texture_t* tex = (texture_t*)malloc(sizeof(texture_t));
+      tex->width = 3;
+      tex->height = 3;
+      tex->data = data;
+
+      triangles[tri_count].texture = tex;
       triangles[tri_count].vertex[0] = a;
       triangles[tri_count].vertex[1] = b;
       triangles[tri_count].vertex[2] = c;
-      triangles[tri_count].u[0] = 12;
-      triangles[tri_count].u[1] = 12;
-      triangles[tri_count].u[2] = 12;
-      triangles[tri_count].v[0] = 12;
-      triangles[tri_count].v[1] = 12;
-      triangles[tri_count].v[2] = 12;
+      triangles[tri_count].u[0] = 1;
+      triangles[tri_count].u[1] = 1;
+      triangles[tri_count].u[2] = 1;
+      triangles[tri_count].v[0] = 1;
+      triangles[tri_count].v[1] = 1;
+      triangles[tri_count].v[2] = 1;
       tri_count++;
 
-      triangles[tri_count].texture = texture;
+      triangles[tri_count].texture = tex;
       triangles[tri_count].vertex[0] = a;
       triangles[tri_count].vertex[1] = c;
       triangles[tri_count].vertex[2] = d;
-      triangles[tri_count].u[0] = 12;
-      triangles[tri_count].u[1] = 12;
-      triangles[tri_count].u[2] = 12;
-      triangles[tri_count].v[0] = 12;
-      triangles[tri_count].v[1] = 12;
-      triangles[tri_count].v[2] = 12;
+      triangles[tri_count].u[0] = 1;
+      triangles[tri_count].u[1] = 1;
+      triangles[tri_count].u[2] = 1;
+      triangles[tri_count].v[0] = 1;
+      triangles[tri_count].v[1] = 1;
+      triangles[tri_count].v[2] = 1;
       tri_count++;
     }
   }
@@ -109,10 +117,18 @@ static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed 
   ////////////////////////////////////////////////////////////////////////////
   // Translation following the Z axis
   ////////////////////////////////////////////////////////////////////////////
+  fixed one = FIXED_SCALE;
+  fixed sin = fixed_sin(angle);
+  fixed cos = fixed_cos(angle);
   for (int i=0; i < 12; i++) {
-    triangles[i].vertex[0].z += FIXED_SCALE * 5;
-    triangles[i].vertex[1].z += FIXED_SCALE * 5;
-    triangles[i].vertex[2].z += FIXED_SCALE * 5;
+
+    for (int j=0; j < 3; j++) {
+      triangles[i].vertex[j].x = fixed3_dot(mk_fixed3(cos, 0, sin), triangles[i].vertex[j]);
+      triangles[i].vertex[j].y = fixed3_dot(mk_fixed3(0, one, 0), triangles[i].vertex[j]);
+      triangles[i].vertex[j].z = fixed3_dot(mk_fixed3(-sin, 0, cos), triangles[i].vertex[j]);
+
+      triangles[i].vertex[j] = fixed3_add(center, triangles[i].vertex[j]);
+    }
   }
 
   ////////////////////////////////////////////////////////////////////////////
@@ -130,7 +146,6 @@ static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed 
       fixed_from_int(1),                    // near plan distance
       proj                                  // projection matrix
   );
-
 
   for (int i=0; i < 12; i++) {
     projtri_t* p = (projtri_t*)malloc(sizeof(projtri_t));
@@ -208,8 +223,12 @@ extern void cpu_main() {
   ////////////////////////////////////////////////////////////////////////////
   //ptri = alloca(sizeof(projtri_t));
   //*ptri = project_triangle(proj, tri);
+  init_timestamp((timestamp_t*)&start_timestamp);
+  fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
+  ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, 0);
+  init_timestamp((timestamp_t*)&finish_timestamp);
 
-  ptri = mk_cube(&texture, mk_fixed3(0,0,0), FIXED_SCALE, 0);
+  print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
 
   ////////////////////////////////////////////////////////////////////////////
   // Synchronize other threads
@@ -236,26 +255,12 @@ extern void cpu_main() {
   // Display screen buffer content
   ////////////////////////////////////////////////////////////////////////////
   init_timestamp((timestamp_t*)&start_timestamp);
-  //char* line = malloc(HWIDTH+1);
   for (int i=0; i < VWIDTH; i++) {
-
-    //for (int j=0; j < HWIDTH; j++)
-    //  line[j] = rgb_buffer[i*HWIDTH+j];
-    //line[HWIDTH] = 0;
-
-    //for (int j=HWIDTH-1; j >= 0; j--) {
-    //  if (line[j] != ' ') break;
-    //  line[j+1] = 0;
-    //}
-
-    //printf("%s\n", line);
-
     for (int j=0; j < HWIDTH; j++) {
       FRAME_BASE[i*HWIDTH+j] = (uint8_t)rgb_buffer[i*HWIDTH+j];
     }
 
   }
-  //free(line);
   init_timestamp((timestamp_t*)&finish_timestamp);
 
   ////////////////////////////////////////////////////////////////////////////
