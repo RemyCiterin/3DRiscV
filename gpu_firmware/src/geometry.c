@@ -2,6 +2,29 @@
 #include <stdint.h>
 #include "stdlib.h"
 
+static fixed fixed_floor(fixed x) {
+  return (x / FIXED_SCALE) * FIXED_SCALE;
+}
+
+static fixed fixed_abs(fixed x) {
+  return x > 0 ? x : -x;
+}
+
+fixed fixed_sin(fixed x) {
+  fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
+
+  // Rescale x in [-1,1]
+  x = fixed_div(x, pi) + FIXED_SCALE;
+  x = 2 * (x/2 - fixed_floor(x / 2)) - FIXED_SCALE;
+
+  return 4 * fixed_mul(x, FIXED_SCALE - fixed_abs(x));
+}
+
+fixed fixed_cos(fixed x) {
+  fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
+  return fixed_sin(pi / 2 - x);
+}
+
 fixed fixed_tan(fixed x) {
   // see https://andrewkay.name/blog/post/efficiently-approximating-tan-x/
   fixed pisqby4 = (fixed)(2.4674011002723397f * FIXED_SCALE);

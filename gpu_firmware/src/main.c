@@ -18,8 +18,7 @@ volatile uint32_t volatile* rgb_buffer;//[HWIDTH * VWIDTH];
 
 static triangle_t tri;
 
-static projtri_t ptri0;
-static projtri_t* ptri[1];
+static projtri_t** ptri;
 
 extern triangle_t triangles[PRIMS_BOUNDS];
 
@@ -42,6 +41,107 @@ static texture_t texture = {
   .height = 30,
   .data = NULL
 };
+
+// Return a cube using a given texture file and the cube coordinates
+static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed angle) {
+  projtri_t **ret = (projtri_t**)malloc(12 * sizeof(projtri_t*));
+  if (!ret) {printf("panic: out of memory\n");}
+
+  triangle_t *triangles = (triangle_t*)malloc(12 * sizeof(triangle_t));
+  if (!triangles) {printf("panic: out of memory\n");}
+
+  fixed unit = size / 2;
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Initialization of the centered triangles
+  ////////////////////////////////////////////////////////////////////////////
+  int tri_count = 0;
+  for (int axis=0; axis < 3; axis++) {
+    for (int dir=0; dir < 2; dir++) {
+      fixed plane = dir == 0 ? unit : -unit;
+
+      fixed3 a =
+        axis == 0 ? mk_fixed3(plane, unit, unit) :
+        axis == 1 ? mk_fixed3(unit, plane, unit) :
+        mk_fixed3(unit, unit, plane);
+
+      fixed3 b =
+        axis == 0 ? mk_fixed3(plane, -unit, unit) :
+        axis == 1 ? mk_fixed3(-unit, plane, unit) :
+        mk_fixed3(-unit, unit, plane);
+
+      fixed3 c =
+        axis == 0 ? mk_fixed3(plane, -unit, -unit) :
+        axis == 1 ? mk_fixed3(-unit, plane, -unit) :
+        mk_fixed3(-unit, -unit, plane);
+
+      fixed3 d =
+        axis == 0 ? mk_fixed3(plane, unit, -unit) :
+        axis == 1 ? mk_fixed3(unit, plane, -unit) :
+        mk_fixed3(unit, -unit, plane);
+
+      triangles[tri_count].texture = texture;
+      triangles[tri_count].vertex[0] = a;
+      triangles[tri_count].vertex[1] = b;
+      triangles[tri_count].vertex[2] = c;
+      triangles[tri_count].u[0] = 12;
+      triangles[tri_count].u[1] = 12;
+      triangles[tri_count].u[2] = 12;
+      triangles[tri_count].v[0] = 12;
+      triangles[tri_count].v[1] = 12;
+      triangles[tri_count].v[2] = 12;
+      tri_count++;
+
+      triangles[tri_count].texture = texture;
+      triangles[tri_count].vertex[0] = a;
+      triangles[tri_count].vertex[1] = c;
+      triangles[tri_count].vertex[2] = d;
+      triangles[tri_count].u[0] = 12;
+      triangles[tri_count].u[1] = 12;
+      triangles[tri_count].u[2] = 12;
+      triangles[tri_count].v[0] = 12;
+      triangles[tri_count].v[1] = 12;
+      triangles[tri_count].v[2] = 12;
+      tri_count++;
+    }
+  }
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Translation following the Z axis
+  ////////////////////////////////////////////////////////////////////////////
+  for (int i=0; i < 12; i++) {
+    triangles[i].vertex[0].z += FIXED_SCALE * 5;
+    triangles[i].vertex[1].z += FIXED_SCALE * 5;
+    triangles[i].vertex[2].z += FIXED_SCALE * 5;
+  }
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Initialize projection matrix
+  ////////////////////////////////////////////////////////////////////////////
+  proj[0] = &proj_body[0][0];
+  proj[1] = &proj_body[1][0];
+  proj[2] = &proj_body[2][0];
+  proj[3] = &proj_body[3][0];
+
+  set_projection_matrix(
+      (fixed)(FIXED_SCALE * (3.14159 / 4)), // field of view
+      (fixed)(FIXED_SCALE * (240.f/320.f)), // aspect ratio
+      fixed_from_int(2),                    // far plan distance
+      fixed_from_int(1),                    // near plan distance
+      proj                                  // projection matrix
+  );
+
+
+  for (int i=0; i < 12; i++) {
+    projtri_t* p = (projtri_t*)malloc(sizeof(projtri_t));
+    *p = project_triangle(proj, triangles[i]);
+    ret[i] = p;
+  }
+
+  free(triangles);
+
+  return ret;
+}
 
 extern void cpu_main() {
   ////////////////////////////////////////////////////////////////////////////
@@ -106,8 +206,10 @@ extern void cpu_main() {
   ////////////////////////////////////////////////////////////////////////////
   // Apply the projection matrix to the current triangles
   ////////////////////////////////////////////////////////////////////////////
-  ptri[0] = alloca(sizeof(projtri_t));
-  *ptri[0] = project_triangle(proj, tri);
+  //ptri = alloca(sizeof(projtri_t));
+  //*ptri = project_triangle(proj, tri);
+
+  ptri = mk_cube(&texture, mk_fixed3(0,0,0), FIXED_SCALE, 0);
 
   ////////////////////////////////////////////////////////////////////////////
   // Synchronize other threads
@@ -174,5 +276,5 @@ extern int set_texture(int*);
 
 extern void gpu_main(int threadid) {
   while (!wait) {}
-  kernel(threadid, (int*)rgb_buffer, ptri, 1);
+  kernel(threadid, (int*)rgb_buffer, ptri, 12);
 }

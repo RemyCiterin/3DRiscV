@@ -88,6 +88,14 @@ inline fixed fixed_div(fixed n, fixed d) {
   return ret;
 }
 
+inline fixed3 mk_fixed3(fixed x, fixed y, fixed z) {
+  fixed3 ret;
+  ret.x = x;
+  ret.y = y;
+  ret.z = z;
+  return ret;
+}
+
 void print_fixed(fixed);
 
 void print_fixed2(fixed2);
@@ -95,6 +103,9 @@ void print_fixed2(fixed2);
 void print_fixed3(fixed3);
 
 fixed fixed_tan(fixed);
+
+fixed fixed_sin(fixed);
+fixed fixed_cos(fixed);
 
 fixed3 fixed3_add(fixed3, fixed3);
 
