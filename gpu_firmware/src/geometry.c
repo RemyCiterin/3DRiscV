@@ -208,11 +208,16 @@ projtri_t project_triangle(fixed** m, triangle_t tri) {
   fixed c = ret.vertex[1].y - ret.vertex[0].y;
   fixed d = ret.vertex[2].y - ret.vertex[0].y;
 
-  ret.inv_det =
-    fixed_div(
-        fixed_from_int(1),
-        fixed_mul(a,d) - fixed_mul(b,c)
-    );
+  fixed det = fixed_mul(a,d) - fixed_mul(b,c);
+
+  if (det)
+    ret.inv_det =
+      fixed_div(
+          fixed_from_int(1),
+          fixed_mul(a,d) - fixed_mul(b,c)
+      );
+  else
+    ret.inv_det = 0;
 
   ret.texture = tri.texture;
   ret.u[0] = tri.u[0];

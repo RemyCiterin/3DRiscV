@@ -129,7 +129,7 @@ kernel(threadid, frame_buffer, z_buffer, triangles, num_triangles) {
   //        u = (FIXED_SCALE - w) - v;
   //      }
 
-  //      if ((v >= 0) && (u >= 0) && (w >= 0)) {
+  //      if ((inv_det != 0) && (v >= 0) && (u >= 0) && (w >= 0)) {
   //        //////////////////////////////////////////////////////
   //        // Compare the value of Z with the one in the Z-buffer
   //        //////////////////////////////////////////////////////
@@ -221,10 +221,10 @@ dump_triangle(threadid, z_buffer, frame_buffer, triangle, tri_id) {
   BBx = triangle[12];
   BBy = triangle[13];
 
-  AAx = into_x_coord(AAx-1);
-  AAy = into_y_coord(AAy-1);
-  BBx = into_x_coord(BBx+1);
-  BBy = into_y_coord(BBy+1);
+  AAx = into_x_coord(AAx-10);
+  AAy = into_y_coord(AAy-10);
+  BBx = into_x_coord(BBx+10);
+  BBy = into_y_coord(BBy+10);
 
   xpos = AAx + (threadid % 8);
   ypos = AAy + (threadid / 8);
@@ -253,8 +253,8 @@ dump_triangle(threadid, z_buffer, frame_buffer, triangle, tri_id) {
         let c = By - Ay;
         let d = Cy - Ay;
 
-        let x = xpos * xstep - FIXED_SCALE;
-        let y = ypos * ystep - FIXED_SCALE;
+        let x = (xpos * xstep) - FIXED_SCALE;
+        let y = (ypos * ystep) - FIXED_SCALE;
         let X = x - Ax;
         let Y = y - Ay;
 
@@ -263,7 +263,7 @@ dump_triangle(threadid, z_buffer, frame_buffer, triangle, tri_id) {
         u = (FIXED_SCALE - w) - v;
       }
 
-      if ((v >= 0) && (u >= 0) && (w >= 0)) {
+      if ((inv_det != 0) && (v >= 0) && (u >= 0) && (w >= 0)) {
         //////////////////////////////////////////////////////
         // Compare the value of Z with the one in the Z-buffer
         //////////////////////////////////////////////////////

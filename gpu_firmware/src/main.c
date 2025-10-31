@@ -116,7 +116,7 @@ static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed 
   }
 
   ////////////////////////////////////////////////////////////////////////////
-  // Translation following the Z axis
+  // Translate and rotate the triangles
   ////////////////////////////////////////////////////////////////////////////
   fixed one = FIXED_SCALE;
   fixed sin = fixed_sin(angle);
@@ -246,7 +246,7 @@ extern void cpu_main() {
   //*ptri = project_triangle(proj, tri);
   init_timestamp((timestamp_t*)&start_timestamp);
   fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
-  ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, pi/2);
+  ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, pi/8);
   init_timestamp((timestamp_t*)&finish_timestamp);
 
   print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
