@@ -14,7 +14,8 @@ static int volatile counter = 0;
 
 bool volatile wait = 0;
 
-volatile uint32_t volatile* rgb_buffer;//[HWIDTH * VWIDTH];
+volatile uint32_t volatile* rgb_buffer;
+volatile uint32_t volatile* z_buffer;
 
 static triangle_t tri;
 
@@ -141,7 +142,7 @@ static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed 
 
   set_projection_matrix(
       (fixed)(FIXED_SCALE * (3.14159 / 4)), // field of view
-      (fixed)(FIXED_SCALE * (240.f/320.f)), // aspect ratio
+      (fixed)(FIXED_SCALE * (320.f/240.f)), // aspect ratio
       fixed_from_int(2),                    // far plan distance
       fixed_from_int(1),                    // near plan distance
       proj                                  // projection matrix
@@ -153,6 +154,14 @@ static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed 
     ret[i] = p;
   }
 
+  //for (int i=0; i < 12; i++) {
+  //  printf("\ntriangle %d:\n", i);
+  //  printf("  "); print_fixed2(ret[i]->vertex[0]); printf("\n");
+  //  printf("  "); print_fixed2(ret[i]->vertex[1]); printf("\n");
+  //  printf("  "); print_fixed2(ret[i]->vertex[2]); printf("\n");
+  //  printf("  "); print_fixed3(ret[i]->z); printf("\n");
+  //}
+
   free(triangles);
 
   return ret;
@@ -160,12 +169,24 @@ static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed 
 
 extern void cpu_main() {
   ////////////////////////////////////////////////////////////////////////////
-  // Initialize RGB buffer
+  // Initialize RGB and Z buffers
   ////////////////////////////////////////////////////////////////////////////
   rgb_buffer = malloc(HWIDTH * VWIDTH * sizeof(int));
   if (!rgb_buffer) {
     printf("PANIC: out of memory\n");
     return;
+  }
+
+  z_buffer = malloc(HWIDTH * VWIDTH * sizeof(int));
+  if (!z_buffer) {
+    printf("PANIC: out of memory\n");
+    return;
+  }
+
+  for (int i=0; i < VWIDTH; i++) {
+    for (int j=0; j < HWIDTH; j++) {
+      z_buffer[i*HWIDTH+j] = (1 << 30) - 1;
+    }
   }
 
   ////////////////////////////////////////////////////////////////////////////
@@ -225,7 +246,7 @@ extern void cpu_main() {
   //*ptri = project_triangle(proj, tri);
   init_timestamp((timestamp_t*)&start_timestamp);
   fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
-  ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, 0);
+  ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, pi/2);
   init_timestamp((timestamp_t*)&finish_timestamp);
 
   print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
@@ -275,11 +296,11 @@ extern void cpu_main() {
   }
 }
 
-extern int kernel(int, int*, projtri_t**, int);
+extern int kernel(int, int*, int*, projtri_t**, int);
 
 extern int set_texture(int*);
 
 extern void gpu_main(int threadid) {
   while (!wait) {}
-  kernel(threadid, (int*)rgb_buffer, ptri, 12);
+  kernel(threadid, (int*)rgb_buffer, (int*)z_buffer, ptri, 12);
 }

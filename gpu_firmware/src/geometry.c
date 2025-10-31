@@ -135,6 +135,7 @@ inline fixed3 fixed3_cross(fixed3 a, fixed3 b) {
 //  - `far` is the distance to the far plan
 //  - `near` is the distance to the near plan
 void set_projection_matrix(fixed angle, fixed ratio, fixed far, fixed near, fixed** m) {
+  // see https://en.wikipedia.org/wiki/Graphics_pipeline
   fixed h = fixed_div(
     fixed_from_int(1),
     fixed_tan(
@@ -153,19 +154,19 @@ void set_projection_matrix(fixed angle, fixed ratio, fixed far, fixed near, fixe
   m[0][0] = w;
   m[1][1] = h;
   m[2][2] = -fixed_div(far, far - near);
-  m[3][2] = -fixed_div(fixed_mul(far, near), far - near);
-  m[2][3] = -fixed_from_int(1);
+  m[2][3] = fixed_div(fixed_mul(far, near), far - near);
+  m[3][2] = -fixed_from_int(1);
 }
 
 fixed3 project_point(fixed** m, fixed3 p) {
     fixed3 ret = {
-      .x = fixed_mul(m[0][0], p.x) + fixed_mul(m[1][0], p.y) + fixed_mul(m[2][0], p.z) + m[3][0],
-      .y = fixed_mul(m[0][1], p.x) + fixed_mul(m[1][1], p.y) + fixed_mul(m[2][1], p.z) + m[3][1],
-      .z = fixed_mul(m[0][2], p.x) + fixed_mul(m[1][2], p.y) + fixed_mul(m[2][2], p.z) + m[3][2],
+      .x = fixed_mul(m[0][0], p.x) + fixed_mul(m[0][1], p.y) + fixed_mul(m[0][2], p.z) + m[0][3],
+      .y = fixed_mul(m[1][0], p.x) + fixed_mul(m[1][1], p.y) + fixed_mul(m[1][2], p.z) + m[1][3],
+      .z = fixed_mul(m[2][0], p.x) + fixed_mul(m[2][1], p.y) + fixed_mul(m[2][2], p.z) + m[2][3],
     };
 
     fixed w =
-      fixed_mul(m[0][3], p.x) + fixed_mul(m[1][3], p.y) + fixed_mul(m[2][3], p.z) + m[3][3];
+      fixed_mul(m[3][0], p.x) + fixed_mul(m[3][1], p.y) + fixed_mul(m[3][2], p.z) + m[3][3];
 
     if (w != 1) {
       ret.x = fixed_div(ret.x, w);

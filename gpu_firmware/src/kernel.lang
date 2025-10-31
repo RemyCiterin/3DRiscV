@@ -19,8 +19,14 @@
 // Length of a line in the frame buffer
 #define HWIDTH 320
 
+// Number of warps
+#define NWARP 16
+
+// Size of a warp
+#define WARP_SIZE 4
+
 // Number of parallel threads
-#define NCPU 64
+#define NCPU (NWARP * WARP_SIZE)
 
 // Maximum value for a signed integer
 #define MAX_INT ((1 << 31) - 1)
@@ -43,7 +49,7 @@ extern finish_timestamp;
 //////////////////////////////////////////////////////
 extern bitmask;
 
-kernel(threadid, frame_buffer, triangles, num_triangles) {
+kernel(threadid, frame_buffer, z_buffer, triangles, num_triangles) {
   if (threadid == 0) {
     //////////////////////////////////////////////////////
     // Read performance counters
@@ -65,105 +71,111 @@ kernel(threadid, frame_buffer, triangles, num_triangles) {
   let xstep = (2*FIXED_SCALE) / HWIDTH;
   let ystep = (2*FIXED_SCALE) / VWIDTH;
 
-  while (idx < HWIDTH*VWIDTH) {
-    //////////////////////////////////////////////////////
-    // Initialize pixel
-    //////////////////////////////////////////////////////
-    frame_buffer[idx] = ' ';
-    let z_max=MAX_INT;
-
-    let x = xpos * xstep - FIXED_SCALE;
-    let y = ypos * ystep - FIXED_SCALE;
-
-    let triangle_idx = 0;
-
-    while (triangle_idx < num_triangles) {
-      let triangle = triangles[triangle_idx];
-
-      //////////////////////////////////////////////////////
-      // Test for an intersection with the bounding box
-      // of the triangle
-      //////////////////////////////////////////////////////
-      let inv_det, Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz, AAx, AAy, BBx, BBy, Au, Bu, Cu, Av, Bv, Cv;
-      AAx = triangle[10];
-      AAy = triangle[11];
-      BBx = triangle[12];
-      BBy = triangle[13];
-
-      if ((x >= AAx) && (x <= BBx) && (y >= AAy) && (y <= BBy)) {
-        //////////////////////////////////////////////////////
-        // Test for an intersection with the triangle, and
-        // compute barycentric coordinates
-        //////////////////////////////////////////////////////
-        inv_det = triangle[0];
-        Ax = triangle[1];
-        Ay = triangle[2];
-        Bx = triangle[3];
-        By = triangle[4];
-        Cx = triangle[5];
-        Cy = triangle[6];
-
-        let u, v, w;
-        {
-          let a = Bx - Ax;
-          let b = Cx - Ax;
-          let c = By - Ay;
-          let d = Cy - Ay;
-
-          let X = x - Ax;
-          let Y = y - Ay;
-
-          v = @fmul(inv_det, @fmul(d,X) - @fmul(b,Y));
-          w = @fmul(inv_det, @fmul(a,Y) - @fmul(c,X));
-          u = (FIXED_SCALE - w) - v;
-        }
-
-        if ((v >= 0) && (u >= 0) && (w >= 0)) {
-          //////////////////////////////////////////////////////
-          // Compare the value of Z with the one in the Z-buffer
-          //////////////////////////////////////////////////////
-          Az = triangle[7];
-          Bz = triangle[8];
-          Cz = triangle[9];
-
-          let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
-
-          if ((z >= FIXED_SCALE) && (z < z_max)) {
-            //////////////////////////////////////////////////////
-            // Compute texture coordinates
-            //////////////////////////////////////////////////////
-            let texture = triangle[20];
-            Au = triangle[14];
-            Bu = triangle[15];
-            Cu = triangle[16];
-            Av = triangle[17];
-            Bv = triangle[18];
-            Cv = triangle[19];
-
-            let U, V;
-            U = (Au * u) + (Bu * v) + (Cu * w);
-            V = (Av * u) + (Bv * v) + (Cv * w);
-
-            let height = texture[0];
-            let width = texture[1];
-
-            frame_buffer[idx] = triangle_idx+54;
-            //texture[2][width * (U >> FIXED_LOG_SCALE) + (V >> FIXED_LOG_SCALE)];
-
-            z_max = z;
-          }
-        }
-      }
-
-      triangle_idx = triangle_idx + 1;
-    }
-
-    //////////////////////////////////////////////////////
-    // Update index and frame coordinates
-    //////////////////////////////////////////////////////
-    INCR_FRAME_COORDINATES(xpos, ypos)
-    idx = idx + NCPU;
+  let tri = 0;
+  while (tri < num_triangles) {
+    dump_triangle(threadid, z_buffer, frame_buffer, triangles[tri], tri);
+    tri = tri + 1;
   }
+
+  //while (idx < HWIDTH*VWIDTH) {
+  //  //////////////////////////////////////////////////////
+  //  // Initialize pixel
+  //  //////////////////////////////////////////////////////
+  //  let z_max=MAX_INT;
+
+  //  let x = xpos * xstep - FIXED_SCALE;
+  //  let y = ypos * ystep - FIXED_SCALE;
+
+  //  let triangle_idx = 0;
+
+  //  while (triangle_idx < num_triangles) {
+  //    let triangle = triangles[triangle_idx];
+
+  //    //////////////////////////////////////////////////////
+  //    // Test for an intersection with the bounding box
+  //    // of the triangle
+  //    //////////////////////////////////////////////////////
+  //    let inv_det, Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz, AAx, AAy, BBx, BBy, Au, Bu, Cu, Av, Bv, Cv;
+  //    AAx = triangle[10];
+  //    AAy = triangle[11];
+  //    BBx = triangle[12];
+  //    BBy = triangle[13];
+
+  //    if ((x >= AAx) && (x <= BBx) && (y >= AAy) && (y <= BBy)) {
+  //      //////////////////////////////////////////////////////
+  //      // Test for an intersection with the triangle, and
+  //      // compute barycentric coordinates
+  //      //////////////////////////////////////////////////////
+  //      inv_det = triangle[0];
+  //      Ax = triangle[1];
+  //      Ay = triangle[2];
+  //      Bx = triangle[3];
+  //      By = triangle[4];
+  //      Cx = triangle[5];
+  //      Cy = triangle[6];
+
+  //      let u, v, w;
+  //      {
+  //        let a = Bx - Ax;
+  //        let b = Cx - Ax;
+  //        let c = By - Ay;
+  //        let d = Cy - Ay;
+
+  //        let X = x - Ax;
+  //        let Y = y - Ay;
+
+  //        v = @fmul(inv_det, @fmul(d,X) - @fmul(b,Y));
+  //        w = @fmul(inv_det, @fmul(a,Y) - @fmul(c,X));
+  //        u = (FIXED_SCALE - w) - v;
+  //      }
+
+  //      if ((v >= 0) && (u >= 0) && (w >= 0)) {
+  //        //////////////////////////////////////////////////////
+  //        // Compare the value of Z with the one in the Z-buffer
+  //        //////////////////////////////////////////////////////
+  //        Az = triangle[7];
+  //        Bz = triangle[8];
+  //        Cz = triangle[9];
+
+  //        let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
+
+  //        if ((z >= FIXED_SCALE) && (z < z_max)) {
+  //          //////////////////////////////////////////////////////
+  //          // Compute texture coordinates
+  //          //////////////////////////////////////////////////////
+  //          let texture = triangle[20];
+  //          Au = triangle[14];
+  //          Bu = triangle[15];
+  //          Cu = triangle[16];
+  //          Av = triangle[17];
+  //          Bv = triangle[18];
+  //          Cv = triangle[19];
+
+  //          let U, V;
+  //          U = (Au * u) + (Bu * v) + (Cu * w);
+  //          V = (Av * u) + (Bv * v) + (Cv * w);
+
+  //          let height = texture[0];
+  //          let width = texture[1];
+
+  //          frame_buffer[idx] = triangle_idx*16+23;
+  //          //texture[2][width * (U >> FIXED_LOG_SCALE) + (V >> FIXED_LOG_SCALE)];
+
+  //          z_max = z;
+  //        }
+  //      }
+  //    }
+
+  //    triangle_idx = triangle_idx + 1;
+  //  }
+
+  //  //////////////////////////////////////////////////////
+  //  // Update index and frame coordinates
+  //  //////////////////////////////////////////////////////
+  //  INCR_FRAME_COORDINATES(xpos, ypos)
+  //  idx = idx + NCPU;
+  //}
+
 
   if (threadid == 0) {
     //////////////////////////////////////////////////////
@@ -179,13 +191,23 @@ kernel(threadid, frame_buffer, triangles, num_triangles) {
   locks[threadid] = 1;
 }
 
-dump_triangle(threadid, z_buffer, frame_buffer, triangle) {
-  let idx=threadid;
+into_x_coord(x) {
+  let ret = ((x+FIXED_SCALE) * HWIDTH) / (2 * FIXED_SCALE);
+  if (ret >= HWIDTH) { ret = HWIDTH - 1; }
+  if (ret < 0) { ret = 0; }
+  return ret;
+}
 
+into_y_coord(y) {
+  let ret = ((y+FIXED_SCALE) * VWIDTH) / (2 * FIXED_SCALE);
+  if (ret >= VWIDTH) { ret = VWIDTH - 1; }
+  if (ret < 0) { ret = 0; }
+  return ret;
+}
+
+dump_triangle(threadid, z_buffer, frame_buffer, triangle, tri_id) {
   // Frame coordinates
   let xpos, ypos;
-  xpos=threadid;
-  ypos=0;
 
   let xstep = (2*FIXED_SCALE) / HWIDTH;
   let ystep = (2*FIXED_SCALE) / VWIDTH;
@@ -199,82 +221,94 @@ dump_triangle(threadid, z_buffer, frame_buffer, triangle) {
   BBx = triangle[12];
   BBy = triangle[13];
 
-  while (idx < HWIDTH*VWIDTH) {
-    //////////////////////////////////////////////////////
-    // Initialize pixel
-    //////////////////////////////////////////////////////
-    frame_buffer[idx] = ' ';
-    let z_max=MAX_INT;
+  AAx = into_x_coord(AAx-1);
+  AAy = into_y_coord(AAy-1);
+  BBx = into_x_coord(BBx+1);
+  BBy = into_y_coord(BBy+1);
 
-    let x = xpos * xstep - FIXED_SCALE;
-    let y = ypos * ystep - FIXED_SCALE;
+  xpos = AAx + (threadid % 8);
+  ypos = AAy + (threadid / 8);
+
+  inv_det = triangle[0];
+  Ax = triangle[1];
+  Ay = triangle[2];
+  Bx = triangle[3];
+  By = triangle[4];
+  Cx = triangle[5];
+  Cy = triangle[6];
+
+  while (ypos < BBy) {
 
     //////////////////////////////////////////////////////
     // Test for an intersection with the triangle, and
     // compute barycentric coordinates
     //////////////////////////////////////////////////////
-    inv_det = triangle[0];
-    Ax = triangle[1];
-    Ay = triangle[2];
-    Bx = triangle[3];
-    By = triangle[4];
-    Cx = triangle[5];
-    Cy = triangle[6];
+    if (xpos <= BBx) {
+      let idx = xpos + ypos * HWIDTH;
 
-    let u, v, w;
-    {
-      let a = Bx - Ax;
-      let b = Cx - Ax;
-      let c = By - Ay;
-      let d = Cy - Ay;
+      let u, v, w;
+      {
+        let a = Bx - Ax;
+        let b = Cx - Ax;
+        let c = By - Ay;
+        let d = Cy - Ay;
 
-      let X = x - Ax;
-      let Y = y - Ay;
+        let x = xpos * xstep - FIXED_SCALE;
+        let y = ypos * ystep - FIXED_SCALE;
+        let X = x - Ax;
+        let Y = y - Ay;
 
-      v = @fmul(inv_det, @fmul(d,X) - @fmul(b,Y));
-      w = @fmul(inv_det, @fmul(a,Y) - @fmul(c,X));
-      u = (FIXED_SCALE - w) - v;
-    }
+        v = @fmul(inv_det, @fmul(d,X) - @fmul(b,Y));
+        w = @fmul(inv_det, @fmul(a,Y) - @fmul(c,X));
+        u = (FIXED_SCALE - w) - v;
+      }
 
-    if ((v >= 0) && (u >= 0) && (w >= 0)) {
-      //////////////////////////////////////////////////////
-      // Compare the value of Z with the one in the Z-buffer
-      //////////////////////////////////////////////////////
-      Az = triangle[7];
-      Bz = triangle[8];
-      Cz = triangle[9];
-
-      let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
-
-      if ((z >= FIXED_SCALE) && (z < z_max)) {
+      if ((v >= 0) && (u >= 0) && (w >= 0)) {
         //////////////////////////////////////////////////////
-        // Compute texture coordinates
+        // Compare the value of Z with the one in the Z-buffer
         //////////////////////////////////////////////////////
-        let texture = triangle[20];
-        Au = triangle[14];
-        Bu = triangle[15];
-        Cu = triangle[16];
-        Av = triangle[17];
-        Bv = triangle[18];
-        Cv = triangle[19];
+        Az = triangle[7];
+        Bz = triangle[8];
+        Cz = triangle[9];
 
-        let U, V;
-        U = (Au * u) + (Bu * v) + (Cu * w);
-        V = (Av * u) + (Bv * v) + (Cv * w);
+        let z = @fmul(Az,u) + @fmul(Bz,v) + @fmul(Cz,w);
 
-        let height = texture[0];
-        let width = texture[1];
+        if ((z >= FIXED_SCALE) && (z < z_buffer[idx])) {
+          z_buffer[idx] = z;
 
-        frame_buffer[idx] = texture[2][width * (U >> FIXED_LOG_SCALE) + (V >> FIXED_LOG_SCALE)];
+          //////////////////////////////////////////////////////
+          // Compute texture coordinates
+          //////////////////////////////////////////////////////
+          //let texture = triangle[20];
+          //Au = triangle[14];
+          //Bu = triangle[15];
+          //Cu = triangle[16];
+          //Av = triangle[17];
+          //Bv = triangle[18];
+          //Cv = triangle[19];
 
-        z_max = z;
+          //let U, V;
+          //U = (Au * u) + (Bu * v) + (Cu * w);
+          //V = (Av * u) + (Bv * v) + (Cv * w);
+
+          //let height = texture[0];
+          //let width = texture[1];
+
+          frame_buffer[idx] = tri_id * 16 + 23;
+          //texture[2][width * (U >> FIXED_LOG_SCALE) + (V >> FIXED_LOG_SCALE)];
+
+        }
       }
     }
 
     //////////////////////////////////////////////////////
     // Update index and frame coordinates
     //////////////////////////////////////////////////////
-    INCR_FRAME_COORDINATES(xpos, ypos)
-    idx = idx + NCPU;
+    if (xpos + 8 > BBx) {
+      xpos = AAx + (threadid % 8);
+      ypos = ypos + 8;
+    } else {
+      xpos = xpos + 8;
+    }
   }
 }

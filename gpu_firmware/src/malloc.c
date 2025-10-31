@@ -14,7 +14,7 @@ union header {
 
 typedef union header Header;
 
-static int malloc_size = 0x10000;
+static int malloc_size = 0x20000;
 
 static Header __malloc_buffer;
 
