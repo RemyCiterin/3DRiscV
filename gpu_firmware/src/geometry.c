@@ -10,19 +10,46 @@ static fixed fixed_abs(fixed x) {
   return x > 0 ? x : -x;
 }
 
+fixed fixed_fmod(fixed x, fixed y) {
+  x = fixed_div(x,y);
+  return fixed_mul(y, x - fixed_floor(x));
+}
+
 fixed fixed_sin(fixed x) {
   fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
+  return fixed_cos(pi / 2 - x);
+  //fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
 
-  // Rescale x in [-1,1]
-  x = fixed_div(x, pi) + FIXED_SCALE;
-  x = 2 * (x/2 - fixed_floor(x / 2)) - FIXED_SCALE;
+  //// Rescale x in [-1,1]
+  //x = fixed_div(x, pi) + FIXED_SCALE;
+  //x = fixed_fmod(x, 2*FIXED_SCALE) - FIXED_SCALE;
 
-  return 4 * fixed_mul(x, FIXED_SCALE - fixed_abs(x));
+  //return 4 * fixed_mul(x, FIXED_SCALE - fixed_abs(x));
 }
 
 fixed fixed_cos(fixed x) {
+  printf("cos("); print_fixed(x); printf(") := ");
   fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
-  return fixed_sin(pi / 2 - x);
+  x = fixed_fmod(x, 2 * pi);
+  x = fixed_mul(x,x);
+  fixed eps = 10;
+
+  fixed n = fixed_from_int(0);
+  fixed s = fixed_from_int(1);
+  fixed t = fixed_from_int(1);
+
+  while (fixed_abs(fixed_div(t,s)) > eps) {
+    n = n + fixed_from_int(2);
+
+    t = -fixed_div(fixed_mul(t,x), fixed_mul(n, n-FIXED_SCALE));
+    s = s + t;
+  }
+  print_fixed(s);
+  printf("\n");
+
+  return s;
+  //fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
+  //return fixed_sin(pi / 2 - x);
 }
 
 fixed fixed_tan(fixed x) {

@@ -124,9 +124,10 @@ static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed 
   for (int i=0; i < 12; i++) {
 
     for (int j=0; j < 3; j++) {
-      triangles[i].vertex[j].x = fixed3_dot(mk_fixed3(cos, 0, sin), triangles[i].vertex[j]);
-      triangles[i].vertex[j].y = fixed3_dot(mk_fixed3(0, one, 0), triangles[i].vertex[j]);
-      triangles[i].vertex[j].z = fixed3_dot(mk_fixed3(-sin, 0, cos), triangles[i].vertex[j]);
+      fixed3 point = triangles[i].vertex[j];
+      triangles[i].vertex[j].x = fixed3_dot(mk_fixed3(cos, 0, sin), point);
+      triangles[i].vertex[j].y = fixed3_dot(mk_fixed3(0, one, 0), point);
+      triangles[i].vertex[j].z = fixed3_dot(mk_fixed3(-sin, 0, cos), point);
 
       triangles[i].vertex[j] = fixed3_add(center, triangles[i].vertex[j]);
     }
@@ -246,7 +247,7 @@ extern void cpu_main() {
   //*ptri = project_triangle(proj, tri);
   init_timestamp((timestamp_t*)&start_timestamp);
   fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
-  ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, pi/8);
+  ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, pi/2);
   init_timestamp((timestamp_t*)&finish_timestamp);
 
   print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
@@ -289,11 +290,8 @@ extern void cpu_main() {
   ////////////////////////////////////////////////////////////////////////////
   print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
 
-
-
-  while (true) {
-    printf("Hello world!\n");
-  }
+  printf("End of demo!\n");
+  while (true) {}
 }
 
 extern int kernel(int, int*, int*, projtri_t**, int);
