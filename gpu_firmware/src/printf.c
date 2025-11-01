@@ -1,19 +1,34 @@
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdlib.h>
 
 static char digits[] = "0123456789ABCDEF";
 
-#define UART0 0x10000000
+static int print_mode = 0;
+
+#define UART0 (print_mode == DEVICE_CPU ? 0x10000000 : 0x90000000)
 #define Reg(reg) ((volatile unsigned char *)(UART0 + reg))
 
 #define ReadReg(reg) (*(Reg(reg)))
 #define WriteReg(reg, v) (*(Reg(reg)) = (v))
 
-static void
+void set_print_device(int mode) {
+  print_mode = mode;
+}
+
+void
 putc(char c)
 {
-  while (0x01 & ~ReadReg(1)) {}
-  WriteReg(0,c);
+  switch (print_mode) {
+    case DEVICE_CPU:
+      while (0x01 & ~ReadReg(1)) {}
+      WriteReg(0,c);
+      break;
+    case DEVICE_GPU:
+      WriteReg(0,c);
+      break;
+    default:
+  }
 }
 
 static void
@@ -105,4 +120,8 @@ printf(const char *fmt, ...)
 
   va_start(ap, fmt);
   vprintf(fmt, ap);
+}
+
+void print_int(int x) {
+  printf("%d", x);
 }

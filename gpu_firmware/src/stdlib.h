@@ -3,7 +3,16 @@
 void* malloc(unsigned);
 void free(void*);
 
+typedef enum {DEVICE_CPU=0, DEVICE_GPU=1} DEVICE;
+
+// Set the print device as CPU (0) or GPU (1, only availible in verilator)
+void set_print_device(int);
+
 void printf(const char*, ...);
+void putc(char c);
+void print_int(int x);
+
+
 //unsigned strlen(const char*);
 void* memset(void*, int, unsigned);
 void *memmove(void*, const void*, int);

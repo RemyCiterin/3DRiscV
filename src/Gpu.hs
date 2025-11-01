@@ -563,7 +563,7 @@ makeMemoryUnit cacheSource inputs0 = do
       let (msb, index) = split msb_index
       key <== msb
 
-      when (addr === 0x10000000 .&&. inputs.peek.isStore .&&. at @0 inputs.peek.strb) do
+      when (addr === 0x90000000 .&&. inputs.peek.isStore .&&. at @0 inputs.peek.strb) do
         when debug (display_ "print char: ")
         displayAscii (slice @7 @0 (inputs.peek.lane))
         when debug (display "")

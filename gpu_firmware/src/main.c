@@ -12,7 +12,7 @@
 
 static int volatile counter = 0;
 
-bool volatile wait = 0;
+int volatile kernel_lock = 0;
 
 volatile uint32_t volatile* rgb_buffer;
 volatile uint32_t volatile* z_buffer;
@@ -42,6 +42,14 @@ static texture_t texture = {
   .height = 30,
   .data = NULL
 };
+
+static void free_cube(projtri_t** cube) {
+  for (int i=0; i < 12; i++) {
+    free(cube[i]);
+  }
+
+  free(cube);
+}
 
 // Return a cube using a given texture file and the cube coordinates
 static projtri_t** mk_cube(texture_t* texture, fixed3 center, fixed size, fixed angle) {
@@ -200,95 +208,63 @@ extern void cpu_main() {
   texture.data = texture_data;
   tri.texture = &texture;
 
-  ////////////////////////////////////////////////////////////////////////////
-  // Initialize triangles
-  ////////////////////////////////////////////////////////////////////////////
-  tri.vertex[0].x = (fixed)(FIXED_SCALE * -0.8f);
-  tri.vertex[0].y = (fixed)(FIXED_SCALE * -0.7f);
-  tri.vertex[0].z = (fixed)(FIXED_SCALE * -3.0f);
+  while (true) {
+    ////////////////////////////////////////////////////////////////////////////
+    // Initialize primitive array
+    ////////////////////////////////////////////////////////////////////////////
+    init_timestamp((timestamp_t*)&start_timestamp);
+    fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
+    ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, (pi * kernel_lock) / 10);
+    init_timestamp((timestamp_t*)&finish_timestamp);
 
-  tri.vertex[1].x = (fixed)(FIXED_SCALE * -0.8f);
-  tri.vertex[1].y = (fixed)(FIXED_SCALE * 0.75f);
-  tri.vertex[1].z = (fixed)(FIXED_SCALE * -3.0f);
+    print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
 
-  tri.vertex[2].x = (fixed)(FIXED_SCALE * -0.08f);
-  tri.vertex[2].y = (fixed)(FIXED_SCALE * -0.7f);
-  tri.vertex[2].z = (fixed)(FIXED_SCALE * -3.0f);
+    ////////////////////////////////////////////////////////////////////////////
+    // Synchronize GPU threads
+    ////////////////////////////////////////////////////////////////////////////
+    set_print_device(DEVICE_GPU);
+    for (int i=0; i < NCPU; i++) bitmask[i] = 0;
+    kernel_lock++;
 
-  tri.u[0] = 0;
-  tri.v[0] = 0;
+    ////////////////////////////////////////////////////////////////////////////
+    // Wait for the kernel computation to finish
+    ////////////////////////////////////////////////////////////////////////////
+    for (int i=0; i < NCPU; i++) while (!bitmask[i]) {}
+    set_print_device(DEVICE_CPU);
 
-  tri.u[1] = 20;
-  tri.v[1] = 0;
+    ////////////////////////////////////////////////////////////////////////////
+    // Blink LED
+    ////////////////////////////////////////////////////////////////////////////
+    volatile uint8_t* LED = (volatile uint8_t*)0x10000004;
+    *LED = 0x55;
 
-  tri.u[2] = 0;
-  tri.v[2] = 23;
+    ////////////////////////////////////////////////////////////////////////////
+    // Show GPU statistics
+    ////////////////////////////////////////////////////////////////////////////
+    print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
 
-  ////////////////////////////////////////////////////////////////////////////
-  // Initialize projection matrix
-  ////////////////////////////////////////////////////////////////////////////
-  proj[0] = &proj_body[0][0];
-  proj[1] = &proj_body[1][0];
-  proj[2] = &proj_body[2][0];
-  proj[3] = &proj_body[3][0];
+    ////////////////////////////////////////////////////////////////////////////
+    // Display screen buffer content
+    ////////////////////////////////////////////////////////////////////////////
+    init_timestamp((timestamp_t*)&start_timestamp);
+    for (int i=0; i < VWIDTH; i++) {
+      for (int j=0; j < HWIDTH; j++) {
+        FRAME_BASE[i*HWIDTH+j] = (uint8_t)rgb_buffer[i*HWIDTH+j];
+      }
 
-  set_projection_matrix(
-      (fixed)(FIXED_SCALE * (3.14159 / 4)), // field of view
-      (fixed)(FIXED_SCALE * (240.f/320.f)), // aspect ratio
-      fixed_from_int(2),                    // far plan distance
-      fixed_from_int(1),                    // near plan distance
-      proj                                  // projection matrix
-  );
-
-  ////////////////////////////////////////////////////////////////////////////
-  // Apply the projection matrix to the current triangles
-  ////////////////////////////////////////////////////////////////////////////
-  //ptri = alloca(sizeof(projtri_t));
-  //*ptri = project_triangle(proj, tri);
-  init_timestamp((timestamp_t*)&start_timestamp);
-  fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
-  ptri = mk_cube(&texture, mk_fixed3(0,0,FIXED_SCALE*5), FIXED_SCALE, pi/2);
-  init_timestamp((timestamp_t*)&finish_timestamp);
-
-  print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
-
-  ////////////////////////////////////////////////////////////////////////////
-  // Synchronize other threads
-  ////////////////////////////////////////////////////////////////////////////
-  wait = 1;
-
-  ////////////////////////////////////////////////////////////////////////////
-  // Wait for the kernel computation to finish
-  ////////////////////////////////////////////////////////////////////////////
-  for (int i=0; i < NCPU; i++) while (!bitmask[i]) {}
-
-  ////////////////////////////////////////////////////////////////////////////
-  // Blink LED
-  ////////////////////////////////////////////////////////////////////////////
-  volatile uint8_t* LED = (volatile uint8_t*)0x10000004;
-  *LED = 0x55;
-
-  ////////////////////////////////////////////////////////////////////////////
-  // Show GPU statistics
-  ////////////////////////////////////////////////////////////////////////////
-  print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
-
-  ////////////////////////////////////////////////////////////////////////////
-  // Display screen buffer content
-  ////////////////////////////////////////////////////////////////////////////
-  init_timestamp((timestamp_t*)&start_timestamp);
-  for (int i=0; i < VWIDTH; i++) {
-    for (int j=0; j < HWIDTH; j++) {
-      FRAME_BASE[i*HWIDTH+j] = (uint8_t)rgb_buffer[i*HWIDTH+j];
     }
+    init_timestamp((timestamp_t*)&finish_timestamp);
 
+    ////////////////////////////////////////////////////////////////////////////
+    // Show CPU statistics
+    ////////////////////////////////////////////////////////////////////////////
+    print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Free all the data structure used for the cube generation
+    ////////////////////////////////////////////////////////////////////////////
+    free_cube(ptri);
   }
-  init_timestamp((timestamp_t*)&finish_timestamp);
-
-  ////////////////////////////////////////////////////////////////////////////
-  // Show CPU statistics
-  ////////////////////////////////////////////////////////////////////////////
-  print_stats(1, (timestamp_t*)&start_timestamp, (timestamp_t*)&finish_timestamp);
 
   printf("End of demo!\n");
   while (true) {}
@@ -299,6 +275,11 @@ extern int kernel(int, int*, int*, projtri_t**, int);
 extern int set_texture(int*);
 
 extern void gpu_main(int threadid) {
-  while (!wait) {}
-  kernel(threadid, (int*)rgb_buffer, (int*)z_buffer, ptri, 12);
+  int expected = 1;
+
+  while (true) {
+    while (kernel_lock != expected) {}
+    kernel(threadid, (int*)rgb_buffer, (int*)z_buffer, ptri, 12);
+    expected++;
+  }
 }

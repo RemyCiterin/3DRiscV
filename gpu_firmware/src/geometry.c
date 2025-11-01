@@ -28,7 +28,6 @@ fixed fixed_sin(fixed x) {
 }
 
 fixed fixed_cos(fixed x) {
-  printf("cos("); print_fixed(x); printf(") := ");
   fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
   x = fixed_fmod(x, 2 * pi);
   x = fixed_mul(x,x);
@@ -44,8 +43,6 @@ fixed fixed_cos(fixed x) {
     t = -fixed_div(fixed_mul(t,x), fixed_mul(n, n-FIXED_SCALE));
     s = s + t;
   }
-  print_fixed(s);
-  printf("\n");
 
   return s;
   //fixed pi = (fixed)(3.141592653589793f * FIXED_SCALE);
