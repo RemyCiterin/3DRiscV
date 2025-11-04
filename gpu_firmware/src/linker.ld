@@ -3,7 +3,7 @@ ENTRY(_start)
 MEMORY
 {
     /* Embedded instruction memory */
-    imem (rx): ORIGIN = 0x80000000, LENGTH = 15K
+    imem (rx): ORIGIN = 0x80000000, LENGTH = 16K
 
     /* Embedded data memory */
     dmem (rw): ORIGIN = 0x80004000, LENGTH = 3K
