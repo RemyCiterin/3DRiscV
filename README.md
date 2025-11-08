@@ -1,5 +1,7 @@
 # 3DRiscV
 
+![CPU+GPU diagram](pipeline.png)
+
 `3DRiscV` is a system on chip containing a Unix capable rv32-ima cpu and a RISC-V based GPGPU,
 both connected using the TileLink cache coherency protocol. This SOC can run on an ULX3S board,
 and can be simulated using Verilator.
