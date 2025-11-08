@@ -98,6 +98,35 @@ makeVga lowerBound sink = do
   palette :: RAM (Bit 8) (Bit 24) <- makeRAMInit "Palette.hex"
   bram :: RAMBE 15 4 <- makeDualRAMBE
 
+  let projRed :: Bit 8 -> Bit 8 = \ color ->
+        select
+          [ slice @7 @5 color === 0b000 --> 0x00
+          , slice @7 @5 color === 0b001 --> 0x24
+          , slice @7 @5 color === 0b010 --> 0x49
+          , slice @7 @5 color === 0b011 --> 0x6d
+          , slice @7 @5 color === 0b100 --> 0x92
+          , slice @7 @5 color === 0b101 --> 0xb6
+          , slice @7 @5 color === 0b110 --> 0xdb
+          , slice @7 @5 color === 0b111 --> 0xff ]
+
+  let projGreen :: Bit 8 -> Bit 8 = \ color ->
+        select
+          [ slice @4 @2 color === 0b000 --> 0x00
+          , slice @4 @2 color === 0b001 --> 0x24
+          , slice @4 @2 color === 0b010 --> 0x49
+          , slice @4 @2 color === 0b011 --> 0x6d
+          , slice @4 @2 color === 0b100 --> 0x92
+          , slice @4 @2 color === 0b101 --> 0xb6
+          , slice @4 @2 color === 0b110 --> 0xdb
+          , slice @4 @2 color === 0b111 --> 0xff ]
+
+  let projBlue :: Bit 8 -> Bit 8 = \ color ->
+        select
+          [ slice @1 @0 color === 0b000 --> 0x00
+          , slice @1 @0 color === 0b001 --> 0x55
+          , slice @1 @0 color === 0b010 --> 0xAA
+          , slice @1 @0 color === 0b011 --> 0xff ]
+
   fabric_addr :: Reg (Bit 30) <- makeReg 0
   hpos :: Reg (Bit 15) <- makeReg 0
   vpos :: Reg (Bit 15) <- makeReg 0
@@ -150,10 +179,10 @@ makeVga lowerBound sink = do
           , blank=
             hpos.val .>=. lit hwidth .||. vpos.val .>=. lit vwidth
           , red=
-            slice @23 @16 palette.out
+            projRed fabric_response -- slice @23 @16 palette.out
           , green=
-            slice @15 @8 palette.out
+            projGreen fabric_response -- slice @15 @8 palette.out
           , blue=
-            slice @7 @0 palette.out }
+            projBlue fabric_response } -- slice @7 @0 palette.out }
 
   return (fabric, slave)
