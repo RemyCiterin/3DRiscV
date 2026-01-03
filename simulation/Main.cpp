@@ -118,14 +118,14 @@ void run_core(int argc, char **argv, std::atomic_char &current_input) {
   Verilated::commandArgs(argc, argv);
   VTestCore *top = new VTestCore;
 
-  vga_init();
+  //vga_init();
 
   bool rx = true;
   int counter = 0;
 
   while (!Verilated::gotFinish()) {
     if (top->clock) {
-      vga_draw(top->out_2_blank, top->out_2_red, top->out_2_green, top->out_2_blue);
+      //vga_draw(top->out_2_blank, top->out_2_red, top->out_2_green, top->out_2_blue);
       receive_tx(top->out_0);
 
       counter++;

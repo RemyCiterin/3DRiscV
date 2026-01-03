@@ -5,6 +5,7 @@ module mkTopULX3S (
   output ftdi_rxd,
   input ftdi_txd,
   output [7:0] led,
+  input [6:1] btn,
 
   output sd_clk,
   output sd_mosi,
@@ -64,6 +65,7 @@ module mkTopULX3S (
     .out_2_mosi(sd_mosi),
     .out_2_cs(sd_cs),
     .in0(ftdi_txd),
+    .in1({2'b0, btn}),
     .out_3_sdram_din_en(1),
     .out_3_sdram_din_0(sdram_din),
     .out_3_sdram_csn(sdram_csn),

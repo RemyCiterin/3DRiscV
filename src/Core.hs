@@ -253,6 +253,216 @@ makeDecode stream = do
 
   return (toStream outputQ)
 
+data DMmuResponse =
+  DMmuResponse
+    { success :: Bit 1
+    , cause :: CauseException
+    , tval :: Bit 32
+    , virt :: Bit 32
+    , instr :: Instr
+    , phys :: Bit 32
+    , lane :: Bit 32 }
+    deriving(Generic, Bits)
+
+makeAGU ::
+  VMInfo ->
+  Bit (SourceWidth TLConfig) ->
+  TLSlave TLConfig ->
+  Stream ExecInput ->
+  Module (Stream DMmuResponse, Action ())
+makeAGU vminfo mmuSource mmuSlave inputs = do
+  (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "DTLB" $
+    makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
+
+  input :: Reg ExecInput <- makeReg dontCare
+
+  always do
+    when (inputs.canPeek .&&. mmuIn.canPut) do
+      let instr = inputs.peek.instr
+
+      let virt = inputs.peek.rs1 + instr.imm.val
+      let width =
+            (instr.opcode `is` [STOREC,LOADR] .||. instr.isAMO) ?
+              (0b10, instr.accessWidth)
+      mmuIn.put
+        MmuRequest
+          { atomic= instr.isAMO .||. instr.opcode `is` [STOREC,LOADR]
+          , virtual= unpack (inputs.peek.rs1 + instr.imm.val)
+          , store= instr.opcode `is` [STORE]
+          , satp= vminfo.satp
+          , priv= vminfo.priv
+          , mxr= vminfo.mxr
+          , sum= vminfo.sum
+          , instr= false
+          , width }
+      input <== inputs.peek
+      inputs.consume
+
+  return
+    ( Source
+      { canPeek= mmuOut.canPeek
+      , consume= mmuOut.consume
+      , peek=
+        DMmuResponse
+          { success= mmuOut.peek.success
+          , cause= mmuOut.peek.cause
+          , tval= mmuOut.peek.tval
+          , virt= input.val.rs1 + input.val.instr.imm.val
+          , instr= input.val.instr
+          , phys= mmuOut.peek.rd
+          , lane= input.val.rs2}}
+    , tlbFlush )
+
+data DMemRequest =
+  DMemRequest
+    { addr :: Bit 32
+    , width :: Bit 2 -- width of the memory operation
+    , load :: Bit 1 -- load or load-reserve
+    , store :: Bit 1 -- store or store-conditional
+    , unique :: Bit 1 -- LR/SC operation
+    , isUnsigned :: Bit 1 -- is the load/loadr signed
+    , amo :: Option (MnemonicVec, Bit 32)
+    , lane :: Bit 32 }
+  deriving(Bits, Generic)
+
+makeDMem ::
+  Bit (SourceWidth TLConfig) ->
+  Bit (SourceWidth TLConfig) ->
+  TLSlave TLConfig ->
+  TLSlave TLConfig ->
+  Module (Sink DMemRequest, Source (Bit 32))
+makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
+  key :: Reg (Bit 32) <- makeReg dontCare
+
+  queueA :: Queue (ChannelA TLConfig) <- makeQueue
+  queueD :: Queue (ChannelD TLConfig) <- makeQueue
+  makeConnection (toSource queueA) mmioSlave.channelA
+  makeConnection mmioSlave.channelD (toSink queueD)
+
+  cache <-
+    withName "dcache" $
+      makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
+
+  always do
+    when (cache.canMatch) do
+      cache.match (upper key.val)
+
+  inflight_uncached_memop :: Reg (Bit 1) <- makeReg false
+
+  metaQ :: Queue (Bit 2, Bit 2, Bit 1) <- makeSizedQueueCore 2
+  tagQ :: Queue (Bit 8) <- makeSizedQueueCore 2
+  let cached_load_tag :: Bit 8 = 0
+  let cached_store_tag :: Bit 8 = 1
+  let uncached_load_tag :: Bit 8 = 2
+  let uncached_store_tag :: Bit 8 = 3
+  let cached_amo_tag :: Bit 8 = 4
+  let cached_loadr_tag :: Bit 8 = 5
+  let cached_storec_tag :: Bit 8 = 6
+
+  return
+    ( Sink
+      { canPut=
+          inv inflight_uncached_memop.val .&&.
+          cache.canLookup .&&.
+          metaQ.notFull .&&.
+          tagQ.notFull .&&.
+          queueA.notFull
+      , put= \ req -> do
+          key <== req.addr
+          let lookup = \ x -> cache.lookup (slice @11 @6 req.addr) (slice @5 @2 req.addr) x
+          let width = (req.load .||. req.store) ? (req.width, 0b10)
+
+          metaQ.enq
+            (slice @1 @0 req.addr, width, req.isUnsigned)
+
+          -- Atomic Memory Operation
+          when req.amo.valid do
+            lookup (tag #Atomic req.amo.val)
+            tagQ.enq cached_amo_tag
+
+          let isWord = width === 0b10
+          let isHalf = width === 0b01
+          let isByte = width === 0b00
+
+          let lane = req.lane .<<. ((slice @1 @0 req.addr) # (0b000 :: Bit 3))
+          let mask :: Bit 4 =
+                select [
+                  isByte --> 0b0001,
+                  isHalf --> 0b0011,
+                  isWord --> 0b1111
+                ] .<<. (slice @1 @0 req.addr)
+
+          if (inv (isCached req.addr)) then do
+            inflight_uncached_memop <== true
+            when (req.store .&&. req.addr === 0x10000000) $ displayAscii (slice @7 @0 lane)
+            tagQ.enq (req.store ? (uncached_store_tag, uncached_load_tag))
+            queueA.enq
+              ChannelA
+                { opcode= req.store ? (item #PutData, item #Get)
+                , size= zeroExtend width
+                , source= mmioSource
+                , address= req.addr
+                , lane
+                , mask }
+
+          else do
+            when (req.store .&&. inv req.unique) do
+              lookup (tag #Store (mask,lane))
+              tagQ.enq cached_store_tag
+            when (req.store .&&. req.unique) do
+              lookup (tag #StoreC (mask,lane))
+              tagQ.enq cached_storec_tag
+            when (req.load .&&. inv req.unique) do
+              lookup (item #Load)
+              tagQ.enq cached_load_tag
+            when (req.load .&&. req.unique) do
+              lookup (item #LoadR)
+              tagQ.enq cached_loadr_tag }
+    , Source
+      { canPeek=
+          tagQ.canDeq .&&. metaQ.canDeq .&&.
+            (
+              (inflight_uncached_memop.val .&&. queueD.canDeq) .||.
+              (tagQ.first === cached_amo_tag .&&. cache.atomicResponse.canPeek) .||.
+              (tagQ.first === cached_loadr_tag .&&. cache.loadResponse.canPeek) .||.
+              (tagQ.first === cached_load_tag .&&. cache.loadResponse.canPeek) .||.
+              (tagQ.first === cached_storec_tag .&&. cache.scResponse.canPeek) .||.
+              tagQ.first === cached_store_tag
+            )
+      , peek=
+          let (offset, width, isUnsigned) = metaQ.first in
+          let isWord = width === 0b10 in
+          let isHalf = width === 0b01 in
+          let isByte = width === 0b00 in
+          let lane =
+                select
+                  [ inflight_uncached_memop.val --> queueD.first.lane
+                  , tagQ.first === cached_amo_tag --> cache.atomicResponse.peek
+                  , tagQ.first === cached_loadr_tag --> cache.loadResponse.peek
+                  , tagQ.first === cached_load_tag --> cache.loadResponse.peek
+                  , tagQ.first === cached_storec_tag --> zeroExtend cache.scResponse.peek
+                  , tagQ.first === cached_store_tag --> dontCare
+                  ] .>>. (offset # (0 :: Bit 3)) in
+
+          select
+            [ isByte .&&. isUnsigned --> zeroExtend (slice @7 @0 lane)
+            , isHalf .&&. isUnsigned --> zeroExtend (slice @15 @0 lane)
+            , isByte .&&. inv isUnsigned --> signExtend (slice @7 @0 lane)
+            , isHalf .&&. inv isUnsigned --> zeroExtend (slice @15 @0 lane)
+            , isWord --> lane ]
+      , consume= do
+          when (tagQ.first === cached_amo_tag) cache.atomicResponse.consume
+          when (tagQ.first === cached_loadr_tag) cache.loadResponse.consume
+          when (tagQ.first === cached_load_tag) cache.loadResponse.consume
+          when (tagQ.first === cached_storec_tag) cache.scResponse.consume
+          when inflight_uncached_memop.val do
+            inflight_uncached_memop <== false
+            queueD.deq
+          metaQ.deq
+          tagQ.deq
+      })
+
+
 makeLoadStoreUnit ::
   VMInfo ->
   Bit (SourceWidth TLConfig) ->
@@ -282,17 +492,11 @@ makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
 
   outputQ :: Queue ExecOutput <- makeQueue
 
-  cache <-
-    withName "dcache" $
-      makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
+  (memIn, memOut) <- withName "dmem" $ makeDMem cacheSource mmioSource cacheSlave mmioSlave
 
   (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "DTLB" $
     makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
   let phys :: Bit 32 = mmuOut.peek.rd
-
-  always do
-    when (cache.canMatch) do
-      cache.match (upper phys)
 
   state :: Reg (Bit 4) <- makeReg 0
 
@@ -300,61 +504,6 @@ makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
   let instr = req.instr
   let opcode = instr.opcode
   let virt = req.rs1 + req.instr.imm.val
-
-  let isWord = instr.accessWidth === 0b10
-  let isHalf = instr.accessWidth === 0b01
-  let isByte = instr.accessWidth === 0b00
-
-  let beat = req.rs2 .<<. ((slice @1 @0 virt) # (0b000 :: Bit 3))
-  let mask :: Bit 4 =
-        select [
-          isByte --> 0b0001,
-          isHalf --> 0b0011,
-          isWord --> 0b1111
-        ] .<<. (slice @1 @0 virt)
-
-  -- no speculative MMIO loads, other accessses can start loads before commit
-  let canLoad = isCached phys ? (cache.canLookup, mmioSlave.channelA.canPut .&&. commit.canPeek)
-  let canStore = cache.canLookup .&&. mmioSlave.channelA.canPut
-
-  let lookup op = do
-        cache.lookup (slice @11 @6 phys) (slice @5 @2 phys) op
-
-  let mmioRequest :: ChannelA TLConfig =
-        ChannelA
-          { opcode= dontCare
-          , source= mmioSource
-          , size= zeroExtend instr.accessWidth
-          , address= phys
-          , lane= dontCare
-          , mask= mask }
-
-  let sendLoad op = do
-        if isCached phys then do
-          lookup op
-        else do
-          mmioSlave.channelA.put
-            (mmioRequest{opcode= tag #Get ()} :: ChannelA TLConfig)
-
-  let canReceiveLoad = isCached phys ? (cache.loadResponse.canPeek, mmioSlave.channelD.canPeek)
-
-  let responseLoad = isCached phys ? (cache.loadResponse.peek, mmioSlave.channelD.peek.lane)
-
-  let consumeLoad =
-        if isCached phys then do
-          cache.loadResponse.consume
-        else do
-          mmioSlave.channelD.consume
-
-  let sendStore = do
-        if isCached phys then do
-          lookup (tag #Store (mask,beat))
-        else do
-            mmioSlave.channelA.put
-              (mmioRequest{opcode= tag #PutData (), lane= beat} :: ChannelA TLConfig)
-
-  let canReceiveStore = mmioSlave.channelD.canPeek
-  let consumeStore = mmioSlave.channelD.consume
 
   let out =
         ExecOutput
@@ -381,11 +530,6 @@ makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
             , instr= false
             , width }
 
-  let translate :: Stmt () = do
-        wait mmuIn.canPut
-        action mmu
-        wait mmuOut.canPeek
-
   always do
     -- *** STORE ***
     when (input.canPeek .&&. opcode `is` [STORE]) do
@@ -399,62 +543,61 @@ makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
           outputQ.enq out
           state <== 2
 
-        when (state.val === 2 .&&. commit.canPeek .&&. canStore) do
+        when (state.val === 2 .&&. commit.canPeek .&&. memIn.canPut) do
           commit.consume
 
           if (commit.peek .&&. mmuOut.peek.success) then do
-            when (phys === 0x10000000) $ displayAscii (slice @7 @0 beat)
-
             --when (addr === 0x10000000 .&&. slice @7 @0 beat === 0) finish
-            when (isCached phys) mmuOut.consume
-            when (isCached phys) input.consume
-            state <== isCached phys ? (0, 3)
-            sendStore
+            state <== 3
+            memIn.put
+              DMemRequest
+                { width= instr.accessWidth
+                , isUnsigned= instr.isUnsigned
+                , addr= phys
+                , store= true
+                , unique= false
+                , load= false
+                , amo= none
+                , lane= req.rs2}
           else do
             mmuOut.consume
             input.consume
             state <== 0
 
-        when (state.val === 3 .&&. canReceiveStore) do
+        when (state.val === 3 .&&. memOut.canPeek) do
+          memOut.consume
           mmuOut.consume
           input.consume
-          consumeStore
           state <== 0
 
     -- *** LOAD / LOAD RESERVE ***
     when (input.canPeek .&&. opcode `is` [LOAD,LOADR]) do
-      let op = opcode `is` [LOAD] ? (tag #Load (), tag #LoadR ())
-
       when (state.val === 0 .&&. mmuIn.canPut) do
         state <== 1
         mmu
 
       when mmuOut.canPeek do
-        when (state.val === 1 .&&. canLoad .&&. commit.canPeek) do
+        when (state.val === 1 .&&. memIn.canPut .&&. commit.canPeek) do
           if mmuOut.peek.success .&&. commit.peek then do
             -- perform uncached operation when speculation is resolved
-            sendLoad op
+            memIn.put
+              DMemRequest
+                { width= instr.accessWidth
+                , isUnsigned= instr.isUnsigned
+                , addr= phys
+                , store= false
+                , unique= opcode `is` [LOADR]
+                , load= true
+                , amo= none
+                , lane= req.rs2}
             state <== 2
           else do
             outputQ.enq out
             state <== 3
 
-        when (state.val === 2 .&&. canReceiveLoad .&&. outputQ.notFull) do
-          consumeLoad
-
-          let beat :: Bit 32 = responseLoad .>>. ((slice @1 @0 virt) # (0b000 :: Bit 3))
-          let rd :: Bit 32 =
-                opcode `is` [LOAD] ?
-                  ( select [
-                      isByte .&&. req.instr.isUnsigned --> zeroExtend (slice @7 @0 beat),
-                      isHalf .&&. req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
-                      isByte .&&. inv req.instr.isUnsigned --> signExtend (slice @7 @0 beat),
-                      isHalf .&&. inv req.instr.isUnsigned --> zeroExtend (slice @15 @0 beat),
-                      isWord --> beat
-                    ]
-                  , beat)
-
-          outputQ.enq (out{rd} :: ExecOutput)
+        when (state.val === 2 .&&. memOut.canPeek .&&. outputQ.notFull) do
+          outputQ.enq (out{rd= memOut.peek} :: ExecOutput)
+          memOut.consume
           state <== 3
 
         when (state.val === 3 .&&. commit.canPeek) do
@@ -504,39 +647,30 @@ makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
           input.consume
           state <== 0
 
-        when (state.val === 2 .&&. cache.canLookup .&&. commit.canPeek .&&. commit.peek) do
+        when (state.val === 2 .&&. memIn.canPut .&&. commit.canPeek .&&. commit.peek) do
           -- start executing a cached atomic operation when branch prediction is confirmed
           commit.consume
           state <== 4
 
-          if instr.isAMO then do
-            lookup (tag #Atomic (opcode, req.rs2))
-          else do
-            lookup (tag #StoreC (ones, req.rs2))
+          memIn.put
+            DMemRequest
+              { width= instr.accessWidth
+              , isUnsigned= instr.isUnsigned
+              , addr= phys
+              , store= false
+              , unique= true
+              , load= false
+              , amo= instr.isAMO ? (some (opcode, req.rs2), none)
+              , lane= req.rs2}
 
-        when (state.val === 4 .&&. cache.scResponse.canPeek .&&. outputQ.notFull) do
-          outputQ.enq (out{rd= zeroExtend $ inv cache.scResponse.peek} :: ExecOutput)
-          cache.scResponse.consume
-          mmuOut.consume
-          input.consume
-          state <== 0
-
-        when (state.val === 4 .&&. cache.atomicResponse.canPeek .&&. outputQ.notFull) do
-          outputQ.enq (out{rd= cache.atomicResponse.peek} :: ExecOutput)
-          cache.atomicResponse.consume
+        when (state.val === 4 .&&. memOut.canPeek .&&. outputQ.notFull) do
+          outputQ.enq (out{rd= memOut.peek} :: ExecOutput)
+          memOut.consume
           mmuOut.consume
           input.consume
           state <== 0
 
   return (master, toStream outputQ, tlbFlush)
-
---makeAlu :: Stream ExecInput -> Module (Stream ExecOutput)
---makeAlu input = do
---  return Source{
---    consume= input.consume,
---    canPeek= input.canPeek,
---    peek= alu input.peek
---  }
 
 data RegisterFile =
   RegisterFile
@@ -812,8 +946,8 @@ makeSpiMmio baseAddr = do
   return (io.fabric, [spiMmio, divMmio])
 
 
-makeUartMmio :: Integer -> Bit 1 -> Module (Bit 1, Bit 1, Bit 8, [Mmio TLConfig])
-makeUartMmio cycles rx = do
+makeUartMmio :: Integer -> Bit 1 -> Bit 8 -> Module (Bit 1, Bit 1, Bit 8, [Mmio TLConfig])
+makeUartMmio cycles rx btn = do
   inputs <- makeRxUart cycles rx
 
   outputQ :: Queue (Bit 8) <- makeQueue
@@ -840,7 +974,7 @@ makeUartMmio cycles rx = do
   let ledsMmio =
         Mmio
           { address= 0x10000004
-          , read= \_ -> pure ((0 :: Bit 24) # leds.val)
+          , read= \_ -> pure ((0 :: Bit 24) # btn)
           , write= \ lane mask -> do
               when (at @0 mask) do
                 leds <== slice @7 @0 lane
@@ -852,7 +986,7 @@ makeUartMmio cycles rx = do
 
 makeTestCore :: Bit 1 -> Module (Bit 1, Bit 8, SpiFabric)
 makeTestCore rx = mdo
-  (tx, uartInterrupt, leds, uartMmio) <- makeUartMmio 217 rx
+  (tx, uartInterrupt, leds, uartMmio) <- makeUartMmio 217 rx 0
   (spi, spiMmio) <- makeSpiMmio 0x10001000
 
   let config =

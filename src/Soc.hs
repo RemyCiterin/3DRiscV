@@ -112,9 +112,9 @@ makeTLSdram sink lowerBound = do
         , channelD= toSource queueD
         , channelE= nullSink } )
 
-makeCPU :: Bool -> Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, TLMaster TLConfig', VgaFabric)
-makeCPU enableGpu rx = mdo
-  (tx, uartInterrupt, leds, uartMmio) <- makeUartMmio 217 rx
+makeCPU :: Bool -> Bit 1 -> Bit 8 -> Module (Bit 1, Bit 8, SpiFabric, TLMaster TLConfig', VgaFabric)
+makeCPU enableGpu rx btn = mdo
+  (tx, uartInterrupt, leds, uartMmio) <- makeUartMmio 217 rx btn
   (spi, spiMmio) <- makeSpiMmio 0x10001000
 
   let xbarconfig =
@@ -215,9 +215,9 @@ makeCPU enableGpu rx = mdo
 type RomLogSize = 15
 type SimRomLogSize = 24
 
-makeUlx3s :: Bool -> Bit 1 -> Module (Bit 1, Bit 8, SpiFabric, SdramFabric, VgaFabric)
-makeUlx3s enableGpu rx = mdo
-  (tx, leds, spi, master, vga) <- makeCPU enableGpu rx
+makeUlx3s :: Bool -> Bit 1 -> Bit 8 -> Module (Bit 1, Bit 8, SpiFabric, SdramFabric, VgaFabric)
+makeUlx3s enableGpu rx btn = mdo
+  (tx, leds, spi, master, vga) <- makeCPU enableGpu rx btn
 
   let sdramBase :: Bit 32 = 0x80000000 + 4 * lit (2 ^ valueOf @RomLogSize)
   let stacksBase :: Bit 32 = 0x8F000000
@@ -272,7 +272,7 @@ makeUlx3s enableGpu rx = mdo
 
 makeTestCore :: Bool -> Bit 1 -> Module (Bit 1, Bit 8, VgaFabric)
 makeTestCore enableGpu rx = mdo
-  (tx, leds, spi, master, vga) <- makeCPU enableGpu rx
+  (tx, leds, spi, master, vga) <- makeCPU enableGpu rx 0
 
   if enableGpu then mdo
     let stacksBase :: Bit 32 = 0x8F000000
