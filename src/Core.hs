@@ -261,7 +261,8 @@ data DMmuResponse =
     , virt :: Bit 32
     , instr :: Instr
     , phys :: Bit 32
-    , lane :: Bit 32 }
+    , lane :: Bit 32
+    , pc :: Bit 32 }
     deriving(Generic, Bits)
 
 makeAGU ::
@@ -274,43 +275,48 @@ makeAGU vminfo mmuSource mmuSlave inputs = do
   (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "DTLB" $
     makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
 
-  input :: Reg ExecInput <- makeReg dontCare
+  state :: Queue ExecInput <- makePipelineQueue 1
 
   always do
-    when (inputs.canPeek .&&. mmuIn.canPut) do
+    when (inputs.canPeek .&&. mmuIn.canPut .&&. state.notFull) do
       let instr = inputs.peek.instr
 
       let virt = inputs.peek.rs1 + instr.imm.val
       let width =
-            (instr.opcode `is` [STOREC,LOADR] .||. instr.isAMO) ?
-              (0b10, instr.accessWidth)
-      mmuIn.put
-        MmuRequest
-          { atomic= instr.isAMO .||. instr.opcode `is` [STOREC,LOADR]
-          , virtual= unpack (inputs.peek.rs1 + instr.imm.val)
-          , store= instr.opcode `is` [STORE]
-          , satp= vminfo.satp
-          , priv= vminfo.priv
-          , mxr= vminfo.mxr
-          , sum= vminfo.sum
-          , instr= false
-          , width }
-      input <== inputs.peek
+            (instr.opcode `is` [LOAD,STORE]) ?
+              (instr.accessWidth, 0b10)
+      when (inv (instr.opcode `is` [FENCE])) do
+        mmuIn.put
+          MmuRequest
+            { atomic= instr.isAMO .||. instr.opcode `is` [STOREC,LOADR]
+            , store= instr.opcode `is` [STORE]
+            , virtual= unpack virt
+            , satp= vminfo.satp
+            , priv= vminfo.priv
+            , mxr= vminfo.mxr
+            , sum= vminfo.sum
+            , instr= false
+            , width }
+      state.enq inputs.peek
       inputs.consume
 
+  let isFence = state.first.instr.opcode `is` [FENCE]
   return
     ( Source
-      { canPeek= mmuOut.canPeek
-      , consume= mmuOut.consume
+      { canPeek= (mmuOut.canPeek .||. isFence) .&&. state.canDeq
+      , consume= do
+          when (inv isFence) mmuOut.consume
+          state.deq
       , peek=
         DMmuResponse
-          { success= mmuOut.peek.success
+          { success= mmuOut.peek.success .||. isFence
           , cause= mmuOut.peek.cause
           , tval= mmuOut.peek.tval
-          , virt= input.val.rs1 + input.val.instr.imm.val
-          , instr= input.val.instr
+          , virt= state.first.rs1 + state.first.instr.imm.val
+          , instr= state.first.instr
           , phys= mmuOut.peek.rd
-          , lane= input.val.rs2}}
+          , lane= state.first.rs2
+          , pc= state.first.pc }}
     , tlbFlush )
 
 data DMemRequest =
@@ -463,6 +469,29 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
       })
 
 
+data PipelineCounter n =
+  PipelineCounter
+    { incr :: Action ()
+    , decr :: Action ()
+    , val :: Bit n
+    , zero :: Bit 1 }
+
+makePipelineCounter :: forall n. KnownNat n => String -> Module (PipelineCounter n)
+makePipelineCounter name = do
+  counter :: Ehr (Bit n) <- makeEhr 2 0
+
+  always do
+    when (delay false (counter.read 0 === ones)) do
+      display "counter overflow: " name
+      finish
+
+  return
+    PipelineCounter
+      { incr= counter.write 1 (1 + counter.read 1)
+      , decr= counter.write 0 (counter.read 0 - 1)
+      , zero= counter.read 0 === 0
+      , val= counter.read 0 }
+
 makeLoadStoreUnit ::
   VMInfo ->
   Bit (SourceWidth TLConfig) ->
@@ -471,7 +500,7 @@ makeLoadStoreUnit ::
   Stream ExecInput ->
   Stream (Bit 1) ->
   Module (TLMaster TLConfig, Stream ExecOutput, Action ())
-makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
+makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource mmuIn commit = do
   let xbarconfig =
         XBarConfig
           { bce= True
@@ -492,183 +521,204 @@ makeLoadStoreUnit vminfo cacheSource mmioSource mmuSource input commit = do
 
   outputQ :: Queue ExecOutput <- makeQueue
 
+  cycle :: Reg (Bit 32) <- makeReg 0
+  always (cycle <== cycle.val + 1)
+
   (memIn, memOut) <- withName "dmem" $ makeDMem cacheSource mmioSource cacheSlave mmioSlave
 
-  (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "DTLB" $
-    makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
-  let phys :: Bit 32 = mmuOut.peek.rd
+  (mmuOut, tlbFlush) <- withName "AGU" $ makeAGU vminfo mmuSource mmuSlave mmuIn
+  let phys :: Bit 32 = mmuOut.peek.phys
 
-  state :: Reg (Bit 4) <- makeReg 0
+  inflight_late_memop <- makePipelineCounter @4 "inflight late memop"
+  inflight_early_loads <- makePipelineCounter @4 "inflight early loads"
+  inflight_stores <- makePipelineCounter @4 "inflight stores"
 
-  let req = input.peek
-  let instr = req.instr
-  let opcode = instr.opcode
-  let virt = req.rs1 + req.instr.imm.val
+  -- used to known if the stage 2 of the store/load/memop pipelines are empty
+  inflight_stage2 <- makePipelineCounter @4 "inflight at stage 2"
 
-  let out =
-        ExecOutput
-          { exception= inv mmuOut.peek.success
-          , cause= mmuOut.peek.cause
-          , pc= req.pc + 4
-          , flush= false
-          , rd= dontCare
-          , tval= virt }
-
-  let mmu :: Action () = do
-        let width =
-              (opcode `is` [STOREC,LOADR] .||. instr.isAMO) ?
-                (0b10, instr.accessWidth)
-        mmuIn.put
-          MmuRequest
-            { atomic= instr.isAMO .||. opcode `is` [STOREC,LOADR]
-            , store= opcode `is` [STORE]
-            , virtual= unpack virt
-            , satp= vminfo.satp
-            , priv= vminfo.priv
-            , mxr= vminfo.mxr
-            , sum= vminfo.sum
-            , instr= false
-            , width }
+  loadQueue :: Queue DMmuResponse <- makePipelineQueue 2
+  storeQueue :: Queue DMmuResponse <- makePipelineQueue 1
+  memopQueue :: Queue DMmuResponse <- makePipelineQueue 1
+  pcQueue :: Queue (Bit 32) <- makePipelineQueue 1
 
   always do
-    -- *** STORE ***
-    when (input.canPeek .&&. opcode `is` [STORE]) do
+    -- stage 1
+    when (mmuOut.canPeek) do
+      let req = mmuOut.peek
+      let instr = req.instr
+      let opcode = instr.opcode
+      let virt = req.virt
+      let phys = req.phys
 
-      when (state.val === 0 .&&. mmuIn.canPut .&&. commit.canPeek) do
-        state <== 1
-        mmu
+      let cachedLoad = opcode `is` [LOAD] .&&. isCached phys .&&. req.success
+      let store = opcode `is` [STORE]
 
-      when mmuOut.canPeek do
-        when (state.val === 1 .&&. outputQ.notFull) do
-          outputQ.enq out
-          state <== 2
+      -- cached load scheduling
+      let canScheduleCachedLoad =
+            loadQueue.notFull .&&. memIn.canPut
+            .&&. inflight_late_memop.zero
+            .&&. inflight_stores.zero
+      when (cachedLoad .&&. canScheduleCachedLoad) do
+        --display "load stage 0"
+        memIn.put
+          DMemRequest
+            { width= instr.accessWidth
+            , isUnsigned= instr.isUnsigned
+            , lane= req.lane
+            , unique= false
+            , store= false
+            , addr= phys
+            , load= true
+            , amo= none }
+        inflight_early_loads.incr
+        loadQueue.enq req
+        mmuOut.consume
 
-        when (state.val === 2 .&&. commit.canPeek .&&. memIn.canPut) do
-          commit.consume
+      let canScheduleStore =
+            outputQ.notFull .&&. storeQueue.notFull
+            .&&. inflight_early_loads.zero
+            .&&. inflight_late_memop.zero
+      when (store .&&. canScheduleStore) do
+        inflight_stores.incr
+        storeQueue.enq req
+        mmuOut.consume
+        outputQ.enq
+          ExecOutput
+            { exception= inv req.success
+            , cause= req.cause
+            , rd= memOut.peek
+            , tval= req.tval
+            , pc= req.pc + 4
+            , flush= false }
 
-          if (commit.peek .&&. mmuOut.peek.success) then do
-            --when (addr === 0x10000000 .&&. slice @7 @0 beat === 0) finish
-            state <== 3
-            memIn.put
-              DMemRequest
-                { width= instr.accessWidth
-                , isUnsigned= instr.isUnsigned
-                , addr= phys
-                , store= true
-                , unique= false
-                , load= false
-                , amo= none
-                , lane= req.rs2}
-          else do
-            mmuOut.consume
-            input.consume
-            state <== 0
+      let canScheduleMemop =
+            inv cachedLoad .&&. inv store
+            .&&. inflight_early_loads.zero
+            .&&. inflight_stores.zero
+            .&&. memopQueue.notFull
+      when (canScheduleMemop) do
+        inflight_late_memop.incr
+        memopQueue.enq req
+        mmuOut.consume
 
-        when (state.val === 3 .&&. memOut.canPeek) do
-          memOut.consume
-          mmuOut.consume
-          input.consume
-          state <== 0
+    when (storeQueue.canDeq .&&. memIn.canPut .&&. commit.canPeek) do
+      let req = storeQueue.first
+      let instr = req.instr
+      let virt = req.virt
+      let phys = req.phys
 
-    -- *** LOAD / LOAD RESERVE ***
-    when (input.canPeek .&&. opcode `is` [LOAD,LOADR]) do
-      when (state.val === 0 .&&. mmuIn.canPut) do
-        state <== 1
-        mmu
+      let success = commit.peek .&&. req.success
 
-      when mmuOut.canPeek do
-        when (state.val === 1 .&&. memIn.canPut .&&. commit.canPeek) do
-          if mmuOut.peek.success .&&. commit.peek then do
-            -- perform uncached operation when speculation is resolved
-            memIn.put
-              DMemRequest
-                { width= instr.accessWidth
-                , isUnsigned= instr.isUnsigned
-                , addr= phys
-                , store= false
-                , unique= opcode `is` [LOADR]
-                , load= true
-                , amo= none
-                , lane= req.rs2}
-            state <== 2
-          else do
-            outputQ.enq out
-            state <== 3
+      when (success) do
+        inflight_stage2.incr
+        memIn.put
+          DMemRequest
+            { amo= none
+            , unique= false
+            , store= true
+            , load= false
+            , isUnsigned= false
+            , width= instr.accessWidth
+            , lane= req.lane
+            , addr= phys }
+        storeQueue.deq
+        commit.consume
 
-        when (state.val === 2 .&&. memOut.canPeek .&&. outputQ.notFull) do
-          outputQ.enq (out{rd= memOut.peek} :: ExecOutput)
-          memOut.consume
-          state <== 3
+      when (inv success .&&. inflight_stage2.zero) do
+        inflight_stores.decr
+        storeQueue.deq
+        commit.consume
 
-        when (state.val === 3 .&&. commit.canPeek) do
-          commit.consume
-          mmuOut.consume
-          input.consume
-          state <== 0
+    when (memOut.canPeek .&&. inv inflight_stores.zero) do
+      inflight_stores.decr
+      inflight_stage2.decr
+      memOut.consume
 
-    -- *** FENCE ***
-    when (input.canPeek .&&. opcode `is` [FENCE]) do
-      when (state.val === 0 .&&. outputQ.notFull) do
-        outputQ.enq out
-        state <== 1
+    -- output early load result
+    when (loadQueue.canDeq .&&. memOut.canPeek .&&. outputQ.notFull) do
+      --display "load stage 1"
+      let req = loadQueue.first
+      inflight_stage2.incr
+      memOut.consume
+      loadQueue.deq
 
-      when (state.val === 1 .&&. commit.canPeek) do
-          commit.consume
-          input.consume
-          state <== 0
+      outputQ.enq
+        ExecOutput
+          { exception= false
+          , cause= dontCare
+          , rd= memOut.peek
+          , tval= dontCare
+          , pc= req.pc + 4
+          , flush= false }
 
-    -- *** AMO / STORE CONDITIONAL ***
-    let amoOrSc = instr.isAMO .||. opcode `is` [STOREC]
-    when (input.canPeek .&&. amoOrSc) do
-      when (state.val === 0 .&&. mmuIn.canPut) do
-        state <== 1
-        mmu
+    -- complete early load
+    when (commit.canPeek .&&. inv inflight_early_loads.zero .&&. inv inflight_stage2.zero) do
+      --display "load stage 2"
+      inflight_early_loads.decr
+      inflight_stage2.decr
+      commit.consume
 
-      when mmuOut.canPeek do
-        when (state.val === 1 .&&. outputQ.notFull) do
-          if mmuOut.peek.success then do
-            state <== 2
-          else do
-            state <== 3
-            outputQ.enq out
+    when (memopQueue.canDeq .&&. commit.canPeek .&&. memIn.canPut .&&. pcQueue.notFull) do
+      let req = memopQueue.first
+      let instr = req.instr
+      let opcode = instr.opcode
+      let virt = req.virt
+      let phys = req.phys
 
-        when (state.val === 3 .&&. commit.canPeek) do
-          -- abort an unaligned atomic operation
-          commit.consume
-          mmuOut.consume
-          input.consume
-          state <== 0
+      let success = commit.peek .&&. req.success
 
-        when (state.val === 2 .&&. commit.canPeek .&&. inv commit.peek .&&. outputQ.notFull) do
-          -- abort atomic operation because of a misspeculation
-          outputQ.enq out
-          commit.consume
-          mmuOut.consume
-          input.consume
-          state <== 0
-
-        when (state.val === 2 .&&. memIn.canPut .&&. commit.canPeek .&&. commit.peek) do
-          -- start executing a cached atomic operation when branch prediction is confirmed
-          commit.consume
-          state <== 4
-
-          memIn.put
+      let memReq =
             DMemRequest
-              { width= instr.accessWidth
+              { amo= instr.isAMO ? (some (opcode, req.lane), none)
+              , unique= opcode `is` [STOREC,LOADR]
+              , store= opcode `is` [STORE,STOREC]
+              , load= opcode `is` [LOAD,LOADR]
               , isUnsigned= instr.isUnsigned
-              , addr= phys
-              , store= false
-              , unique= true
-              , load= false
-              , amo= instr.isAMO ? (some (opcode, req.rs2), none)
-              , lane= req.rs2}
+              , width= instr.accessWidth
+              , lane= req.lane
+              , addr= phys }
 
-        when (state.val === 4 .&&. memOut.canPeek .&&. outputQ.notFull) do
-          outputQ.enq (out{rd= memOut.peek} :: ExecOutput)
-          memOut.consume
-          mmuOut.consume
-          input.consume
-          state <== 0
+      let out =
+            ExecOutput
+              { exception= inv success
+              , cause= req.cause
+              , rd= memOut.peek
+              , tval= req.tval
+              , pc= req.pc + 4
+              , flush= false }
+
+      when (inv success .&&. inflight_stage2.zero) do
+        inflight_late_memop.decr
+        outputQ.enq out
+        commit.consume
+        memopQueue.deq
+
+      when (success .&&. inflight_stage2.zero .&&. opcode `is` [FENCE] .&&. outputQ.notFull) do
+        inflight_late_memop.decr
+        outputQ.enq out
+        commit.consume
+        memopQueue.deq
+
+      when (success .&&. inv (opcode `is` [FENCE])) do
+        inflight_stage2.incr
+        pcQueue.enq req.pc
+        memIn.put memReq
+        commit.consume
+        memopQueue.deq
+
+    when (pcQueue.canDeq .&&. memOut.canPeek .&&. outputQ.notFull) do
+      inflight_late_memop.decr
+      inflight_stage2.decr
+      memOut.consume
+      pcQueue.deq
+      outputQ.enq
+        ExecOutput
+          { pc= pcQueue.first + 4
+          , exception= false
+          , cause= dontCare
+          , rd= memOut.peek
+          , tval= dontCare
+          , flush= false }
 
   return (master, toStream outputQ, tlbFlush)
 
@@ -736,6 +786,13 @@ makeCore
   redirectQ :: Queue Redirection <- withName "fetch" makeQueue
 
   window :: Queue DecodeOutput <- withName "pipeline" $ makeSizedQueueCore 5
+
+  inactivityCounter :: Ehr (Bit 12) <- makeEhr 2 0
+
+  always do
+    inactivityCounter.write 0 (inactivityCounter.read 0 + 1)
+    when (inactivityCounter.read 0 === ones) do
+      finish
 
   (imaster, fetch, trainHit, trainMis, itlbFlush) <- withName "fetch" $
     makeFetch systemUnit.vmInfo fetchSource itlbSource (toStream redirectQ)
@@ -875,6 +932,8 @@ makeCore
           let resp = instr.isMemAccess ? (lsu.peek, instr.isSystem ? (systemBuf.val, alu.peek))
 
           systemUnit.instret
+
+          inactivityCounter.write 1 0
 
           let exception :: Bit 1 =
                 resp.exception .||. req.exception

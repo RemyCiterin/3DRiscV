@@ -317,12 +317,15 @@ makeMmuFSM canRead canWrite canAtomic canExec source slave = do
   match :: Reg TlbEntry <- makeReg dontCare
 
   let align_fail :: Action () = do
+        --display "mmu: alignment fault " (formatHex 0 (pack inputs.first.virtual))
         outputs.enq align_output{success=false}
         deqInput <== true
   let af_fail :: Action () = do
+        --display "mmu: access fault " (formatHex 0 (pack inputs.first.virtual))
         outputs.enq af_output{success=false}
         deqInput <== true
   let pf_fail :: Action () = do
+        --display "mmu: page fault " (formatHex 0 (pack inputs.first.virtual))
         outputs.enq pf_output{success=false}
         deqInput <== true
 
@@ -331,11 +334,13 @@ makeMmuFSM canRead canWrite canAtomic canExec source slave = do
   --     otherwise we may double write because of a new request
   let succede :: Bit 32 -> Action () = \ rd -> do
         --when (priv === user_priv) do
-        --  display "mmu: 0x" (formatHex 0 rd)
+        --  --display "mmu: 0x" (formatHex 0 rd)
+        --display "mmu: success " (formatHex 0 (pack inputs.first.virtual))
         outputs.enq (pf_output{rd} :: MmuResponse)
         inputs.deq
 
-  let get address =
+  let get address = do
+        --display "mmu: send load " (formatHex 0 (pack inputs.first.virtual))
         slave.channelA.put
           ChannelA
             { opcode= item #Get
@@ -345,7 +350,8 @@ makeMmuFSM canRead canWrite canAtomic canExec source slave = do
             , size= 2
             , source }
 
-  let put address lane =
+  let put address lane = do
+        --display "mmu: send store " (formatHex 0 (pack inputs.first.virtual))
         slave.channelA.put
           ChannelA
             { opcode= item #PutData
@@ -391,6 +397,7 @@ makeMmuFSM canRead canWrite canAtomic canExec source slave = do
               wait (slave.channelD.canPeek .&&. inv doFlush.val)
               let pte = unpack slave.channelD.peek.lane
               action do
+                --display "mmu: receive load " (formatHex 0 (pack inputs.first.virtual))
                 slave.channelD.consume
                 if isLeafPTE pte then do
                   let out =
@@ -433,7 +440,9 @@ makeMmuFSM canRead canWrite canAtomic canExec source slave = do
               wait (inv doFlush.val)
               action (tlb!way.val <== some entry{pte=newPte})
               wait slave.channelD.canPeek
-              action slave.channelD.consume
+              action do
+                --display "mmu: receive store " (formatHex 0 (pack inputs.first.virtual))
+                slave.channelD.consume
 
             action (succede (lower addr))
 
