@@ -230,6 +230,8 @@ pub export fn machine_main() align(16) callconv(.C) noreturn {
 
     while (tp != 0) {}
 
+    Bench.run();
+
     riscv.mscratch.write(@intFromPtr(&state));
     riscv.mtvec.write(@intFromPtr(&MachineState.machine_handler));
     riscv.mstatus.modify(.{ .MPP = 1, .MPIE = 0, .MIE = 0, .SIE = 0 });

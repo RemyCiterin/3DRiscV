@@ -346,7 +346,7 @@ pub const BandwidthFPU = struct {
     }
 };
 
-pub const BandwidthLSU = struct {
+pub const BandwidthLoad = struct {
     N: usize,
 
     const Self = @This();
@@ -361,14 +361,48 @@ pub const BandwidthLSU = struct {
     pub noinline fn call(self: Self) void {
         @setRuntimeSafety(false);
 
+        var value: usize = undefined;
+
         // 100 add instructions
         for (0..self.N) |_| {
-            asm volatile ("lw zero, (zero);" ** 100);
+            asm volatile ("lw zero, (%[ptr]);" ** 100
+                :
+                : [ptr] "r" (&value),
+                : "memory"
+            );
         }
     }
 };
 
-pub const LatencyLSU = struct {
+pub const BandwidthStore = struct {
+    N: usize,
+
+    const Self = @This();
+
+    pub fn init(N: usize) Self {
+        return .{ .N = N };
+    }
+
+    // The time of execution is expected to be
+    // around 100 * self.N * Latency
+    // with Latency the latency of the ALU
+    pub noinline fn call(self: Self) void {
+        @setRuntimeSafety(false);
+
+        var value: usize = undefined;
+
+        // 100 add instructions
+        for (0..self.N) |_| {
+            asm volatile ("sw zero, (%[ptr]);" ** 100
+                :
+                : [ptr] "r" (&value),
+                : "memory"
+            );
+        }
+    }
+};
+
+pub const LatencyLoad = struct {
     N: usize,
 
     const Self = @This();
@@ -484,3 +518,20 @@ pub const Sort = struct {
         self.mergeSort(0, self.array.len - 1);
     }
 };
+
+pub fn run() void {
+    const test1 = BandwidthALU.init(1000);
+    _ = measure(0, test1);
+
+    const test2 = LatencyALU.init(1000);
+    _ = measure(0, test2);
+
+    const test3 = BandwidthLoad.init(1000);
+    _ = measure(0, test3);
+
+    const test4 = LatencyLoad.init(1000);
+    _ = measure(0, test4);
+
+    const test5 = BandwidthStore.init(1000);
+    _ = measure(0, test5);
+}

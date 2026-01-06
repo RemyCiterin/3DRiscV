@@ -12,6 +12,8 @@ import Instr
 import MulDiv
 import CSR
 
+singleCycleMultiplier = True
+
 -- Return a valid execution with pc+4 as output if the instruction
 -- is not managedby the ALU (used for multiplier/divider)
 alu :: ExecInput -> ExecOutput
@@ -68,37 +70,50 @@ makeAlu inputs = do
   Server{reqs=mulIn, resps=mulOut} <- makeMultiplier @64 2
   Server{reqs=divIn, resps=divOut} <- makeDivider @34
 
+  let mulResult = if singleCycleMultiplier then mulLhs * mulRhs else mulOut.peek
+
   idle :: Reg (Bit 1) <- makeReg true
   always do
     when (idle.val .&&. inputs.canPeek) do
-      when (mulIn.canPut .&&. isMul) do
-        mulIn.put (mulLhs, mulRhs)
-        idle <== false
+      when (not singleCycleMultiplier) do
+        when (mulIn.canPut .&&. isMul) do
+          mulIn.put (mulLhs, mulRhs)
+          idle <== false
 
       when (divIn.canPut .&&. isDivRem) do
-        divIn.put (divNum, divDen)
+        divIn.put (divNegNum ? (-divNum, divNum), divNegDen ? (-divDen, divDen))
         idle <== false
 
   return
     Source
       { canPeek=
+        if singleCycleMultiplier then
           inputs.canPeek
-          .&&. ((mulOut.canPeek .&&. inv idle.val) .||. inv isMul)
           .&&. ((divOut.canPeek .&&. inv idle.val) .||. inv isDivRem)
+        else
+          inputs.canPeek
+          .&&. ((divOut.canPeek .&&. inv idle.val) .||. inv isDivRem)
+          .&&. ((mulOut.canPeek .&&. inv idle.val) .||. inv isMul)
       , peek=
           let rd = selectDefault output.rd
                 [ divOverflow --> isRem ? (0, rs1)
                 , divZero --> isRem ? (0, -1)
                 , isDivRem .&&. inv divOverflow .&&. inv divZero -->
-                    isRem ? (lower divOut.peek.snd, lower divOut.peek.fst)
-                , isMul --> mulUpper ? (upper mulOut.peek, lower mulOut.peek) ] in
+                    let (div, rem) = divOut.peek in
+                    lower ( isRem ?
+                      ( divNegNum ? (-rem, rem)
+                      , (divNegNum =!= divNegDen) ? (-div, div) ) )
+                , isMul --> mulUpper ? (upper mulResult, lower mulResult) ] in
           (output{rd} :: ExecOutput)
       , consume= do
           inputs.consume
-          when isMul mulOut.consume
-          when isDivRem divOut.consume
-          when (isMul .||. isDivRem) do
-            idle <== true }
+          when isDivRem do
+            divOut.consume
+            idle <== true
+          when (not singleCycleMultiplier) do
+            when isMul do
+              mulOut.consume
+              idle <== true }
   where
     instr = inputs.peek.instr
     output = alu inputs.peek
@@ -120,6 +135,9 @@ makeAlu inputs = do
 
     divOverflow = opcode `is` [DIV,REM] .&&. signedDivOverflow (rs1, rs2)
     divZero = opcode `is` [DIV,DIVU,REM,REMU] .&&. rs2 === 0
+
+    divNegNum = opcode `is` [DIV,REM] .&&. toSigned divNum .<. toSigned 0
+    divNegDen = opcode `is` [DIV,REM] .&&. toSigned divDen .<. toSigned 0
 
 execCSR :: Priv -> CSRUnit -> ExecInput -> Action ExecOutput
 execCSR currentPriv unit ExecInput{instr, pc, rs1} = do

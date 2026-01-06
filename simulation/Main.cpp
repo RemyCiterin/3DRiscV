@@ -11,6 +11,8 @@
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
 
+#define RENDER false
+
 #define BAUD 115200
 #define FREQ 25000000
 
@@ -118,14 +120,14 @@ void run_core(int argc, char **argv, std::atomic_char &current_input) {
   Verilated::commandArgs(argc, argv);
   VTestCore *top = new VTestCore;
 
-  //vga_init();
+  if (RENDER) vga_init();
 
   bool rx = true;
   int counter = 0;
 
   while (!Verilated::gotFinish()) {
     if (top->clock) {
-      //vga_draw(top->out_2_blank, top->out_2_red, top->out_2_green, top->out_2_blue);
+      if (RENDER) vga_draw(top->out_2_blank, top->out_2_red, top->out_2_green, top->out_2_blue);
       receive_tx(top->out_0);
 
       counter++;

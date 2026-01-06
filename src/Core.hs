@@ -102,7 +102,7 @@ makeICache vminfo cacheSlave mmuSlave cacheSource mmuSource = do
   (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "ITLB" $
     makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave
 
-  tagQ :: Queue MmuResponse <- makeQueue
+  tagQ :: Queue MmuResponse <- makePipelineQueue 2
 
   key :: Reg (Bit 20) <- makeReg dontCare
 
@@ -255,7 +255,7 @@ makeDecode stream = do
 
 data DMmuResponse =
   DMmuResponse
-    { success :: Bit 1
+    { exception :: Bit 1
     , cause :: CauseException
     , tval :: Bit 32
     , virt :: Bit 32
@@ -309,7 +309,7 @@ makeAGU vminfo mmuSource mmuSlave inputs = do
           state.deq
       , peek=
         DMmuResponse
-          { success= mmuOut.peek.success .||. isFence
+          { exception= inv (mmuOut.peek.success .||. isFence)
           , cause= mmuOut.peek.cause
           , tval= mmuOut.peek.tval
           , virt= state.first.rs1 + state.first.instr.imm.val
@@ -358,8 +358,8 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
   cycle :: Reg (Bit 32) <- makeReg 0
   always (cycle <== cycle.val + 1)
 
-  metaQ :: Queue (Bit 2, Bit 2, Bit 1) <- makeSizedQueueCore 2
-  tagQ :: Queue (Bit 8) <- makeSizedQueueCore 2
+  metaQ :: Queue (Bit 2, Bit 2, Bit 1) <- makePipelineQueue 2
+  tagQ :: Queue (Bit 8) <- makePipelineQueue 2
   let cached_load_tag :: Bit 8 = 0
   let cached_store_tag :: Bit 8 = 1
   let uncached_memop_tag :: Bit 8 = 2
@@ -456,7 +456,7 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
             [ isByte .&&. isUnsigned --> zeroExtend (slice @7 @0 lane)
             , isHalf .&&. isUnsigned --> zeroExtend (slice @15 @0 lane)
             , isByte .&&. inv isUnsigned --> signExtend (slice @7 @0 lane)
-            , isHalf .&&. inv isUnsigned --> zeroExtend (slice @15 @0 lane)
+            , isHalf .&&. inv isUnsigned --> signExtend (slice @15 @0 lane)
             , isWord --> lane ]
       , consume= do
           when (tagQ.first === cached_amo_tag) cache.atomicResponse.consume
@@ -475,9 +475,8 @@ makeLoadStoreUnit ::
   Bit (SourceWidth TLConfig) ->
   Bit (SourceWidth TLConfig) ->
   Bit (SourceWidth TLConfig) ->
-  Stream DMmuResponse ->
-  Module (TLSlave TLConfig, TLMaster TLConfig, Stream (RegId, Bit 32))
-makeLoadStoreUnit vminfo cacheSource mmuSource mmioSource mmuOut = do
+  Module (TLSlave TLConfig, TLMaster TLConfig, Server DMmuResponse (RegId, Bit 32))
+makeLoadStoreUnit vminfo cacheSource mmuSource mmioSource = do
   let xbarconfig =
         XBarConfig
           { bce= True
@@ -505,33 +504,32 @@ makeLoadStoreUnit vminfo cacheSource mmuSource mmioSource mmuOut = do
 
   regQ :: Queue (Bit 1, RegId) <- makePipelineQueue 2
 
+  let sink =
+        Sink
+          { canPut= memIn.canPut .&&. regQ.notFull
+          , put= \ req -> do
+              let instr = req.instr
+              let opcode = instr.opcode
+              let virt = req.virt
+              let phys = req.phys
+
+              let isFence = opcode `is` [FENCE]
+
+              let request =
+                    DMemRequest
+                      { width= instr.accessWidth
+                      , isUnsigned= instr.isUnsigned
+                      , amo= instr.isAMO ? (some (opcode, req.lane), none)
+                      , unique= opcode `is` [STOREC,LOADR]
+                      , store= opcode `is` [STORE,STOREC]
+                      , load= opcode `is` [LOAD,LOADR]
+                      , lane= req.lane
+                      , addr= phys }
+
+              regQ.enq (isFence, instr.rd.valid ? (instr.rd.val, 0))
+              when (inv isFence) $ memIn.put request }
+
   always do
-    -- stage 1
-    when mmuOut.canPeek do
-      let req = mmuOut.peek
-      let instr = req.instr
-      let opcode = instr.opcode
-      let virt = req.virt
-      let phys = req.phys
-
-      let isFence = opcode `is` [FENCE]
-
-      let request =
-            DMemRequest
-              { width= instr.accessWidth
-              , isUnsigned= instr.isUnsigned
-              , amo= instr.isAMO ? (some (opcode, req.lane), none)
-              , unique= opcode `is` [STOREC,LOADR]
-              , store= opcode `is` [STORE,STOREC]
-              , load= opcode `is` [LOAD,LOADR]
-              , lane= req.lane
-              , addr= phys }
-
-      when (memIn.canPut .&&. regQ.notFull) do
-        regQ.enq (isFence, instr.rd.valid ? (instr.rd.val, 0))
-        when (inv isFence) $ memIn.put request
-        mmuOut.consume
-
     when (regQ.canDeq .&&. outputQ.notFull) do
       let (isFence, rd) = regQ.first
 
@@ -540,7 +538,7 @@ makeLoadStoreUnit vminfo cacheSource mmuSource mmioSource mmuOut = do
         outputQ.enq (rd, memOut.peek)
         regQ.deq
 
-  return (mmuSlave, master, toStream outputQ)
+  return (mmuSlave, master, Server{reqs= sink, resps= toSource outputQ})
 
 data RegisterFile =
   RegisterFile
@@ -596,13 +594,13 @@ makeCore ::
 makeCore
   CoreConfig{hartId,fetchSource,dataSource,mmioSource,itlbSource,dtlbSource}
   systemInputs = mdo
-  aluQ :: Queue ExecInput <- withName "alu" makeQueue
-  lsuQ :: Queue ExecInput <- withName "lsu_inputs" makeQueue
-  systemQ :: Queue ExecInput <- withName "system" makeQueue
+  aluQ :: Queue ExecInput <- withName "alu" $ makePipelineQueue 1
+  lsuQ :: Queue ExecInput <- withName "lsu_inputs" $ makePipelineQueue 1
+  systemQ :: Queue ExecInput <- withName "system" $ makePipelineQueue 1
 
   redirectQ :: Queue Redirection <- withName "fetch" makeQueue
 
-  window :: Queue DecodeOutput <- withName "pipeline" $ makeQueue
+  window :: Queue DecodeOutput <- withName "pipeline" $ makeSizedQueueCore 4
 
   inactivityCounter :: Ehr (Bit 16) <- makeEhr 2 0
 
@@ -617,16 +615,14 @@ makeCore
   decode <- withName "decode" $ makeDecode fetch
 
   alu <- withName "alu" $ makeAlu (toStream aluQ)
-  (mmuSlave, dmaster, lsu) <-
+  (mmuSlave, dmaster, Server{reqs= lsuIn, resps= lsuOut}) <-
     withName "lsu" $
       makeLoadStoreUnit
         systemUnit.vmInfo
         dataSource
         dtlbSource
         mmioSource
-        (toSource lsuIn)
 
-  lsuIn :: Queue DMmuResponse <- makeBypassQueue
   (mmuOut, dtlbFlush) <- makeAGU systemUnit.vmInfo dtlbSource mmuSlave (toSource lsuQ)
 
   registers <- withName "registers" makeRegisterFile
@@ -675,15 +671,15 @@ makeCore
   withName "pipeline" $ always do
     cycle <== cycle.val + 1
 
-    when (lsu.canPeek) do
-      let (rd, val) = lsu.peek
+    when (lsuOut.canPeek) do
+      let (rd, val) = lsuOut.peek
       when (rd =!= 0) do
         when (hartId == 0 && debug) do
           display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 val)
         registers.write rd val
       registers.setReady rd
       writeFromLSU <== true
-      lsu.consume
+      lsuOut.consume
 
     when (decode.canPeek .&&. window.notFull) do
       let instr :: Instr = decode.peek.instr
@@ -726,7 +722,7 @@ makeCore
 
     let canRedirect = redirectQ.notFull .&&. exceptionQ.notFull .&&. interruptQ.notFull
 
-    when (window.canDeq .&&. canRedirect .&&. lsuIn.notFull .&&. inv writeFromLSU.val) do
+    when (window.canDeq .&&. canRedirect .&&. lsuIn.canPut .&&. inv writeFromLSU.val) do
       let req :: DecodeOutput = window.first
       let instr :: Instr = req.instr
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
@@ -738,7 +734,7 @@ makeCore
 
       when rdy do
         window.deq
-        when (inv instr.isMemAccess .||. req.epoch =!= epoch.read 0 .||. inv mmuOut.success) do
+        when (inv instr.isMemAccess .||. req.epoch =!= epoch.read 0 .||. mmuOut.peek.exception) do
           registers.setReady rd
 
         if instr.isMemAccess then do
@@ -759,7 +755,7 @@ makeCore
             else if instr.isMemAccess then do
               return
                 ExecOutput
-                  { exception= inv mmuOut.peek.success
+                  { exception= mmuOut.peek.exception
                   , cause= mmuOut.peek.cause
                   , tval= mmuOut.peek.tval
                   , pc= mmuOut.peek.pc + 4
@@ -796,7 +792,7 @@ makeCore
                 (formatHex 8 req.pc) " instr: " (fshow instr)
 
             when (instr.isMemAccess) do
-              lsuIn.enq mmuOut.peek
+              lsuIn.put mmuOut.peek
 
             when (rd =!= 0 .&&. inv instr.isMemAccess) do
               when (hartId == 0 && debug) do

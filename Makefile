@@ -34,7 +34,7 @@ formal:
 test:
 	riscv32-none-elf-objcopy --strip-debug -O ihex zig/zig-out/bin/kernel.elf Mem.ihex
 	riscv32-none-elf-objcopy --strip-debug -O binary zig/zig-out/bin/user.elf zig/src/user.bin
-	./ihex-to-img.py Mem.ihex hex 2147483648 4 1000000 1 > Mem.hex
+	./ihex-to-img.py Mem.ihex hex 2147483648 4 10000000 1 > Mem.hex
 	riscv32-none-elf-objdump zig/zig-out/bin/kernel.elf -S > zig/kernel.asm
 	riscv32-none-elf-objdump zig/zig-out/bin/user.elf -S > zig/user.asm
 
@@ -71,6 +71,15 @@ test_gpu:
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 32000 1 > GpuMem.hex
 	riscv32-none-elf-objdump gpu_firmware/build/gpu_firmware.elf -S \
 		> gpu_firmware/firmware.asm
+
+.PHONY: test_coremark
+test_coremark:
+	make -C coremark PORT_DIR=barebones compile ITERATIONS=1
+	riscv32-none-elf-objcopy --strip-debug -O ihex \
+		coremark/coremark.bare.riscv Mem.ihex
+	./ihex-to-img.py Mem.ihex hex 2147483648 4 10000000 1 > Mem.hex
+	riscv32-none-elf-objdump coremark/coremark.bare.riscv -D \
+		> coremark/firmware.asm
 
 .PHONY: qemu
 qemu:
