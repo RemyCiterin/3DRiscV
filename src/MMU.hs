@@ -333,8 +333,6 @@ makeMmuFSM canRead canWrite canAtomic canExec source slave = do
   --     do not write in any register during a call to succede,
   --     otherwise we may double write because of a new request
   let succede :: Bit 32 -> Action () = \ rd -> do
-        --when (priv === user_priv) do
-        --  --display "mmu: 0x" (formatHex 0 rd)
         --display "mmu: success " (formatHex 0 (pack inputs.first.virtual))
         outputs.enq (pf_output{rd} :: MmuResponse)
         inputs.deq
