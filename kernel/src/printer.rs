@@ -1,5 +1,5 @@
 use core::fmt::{self, Write};
-use core::ptr::write_volatile;
+use core::ptr::{write_volatile, read_volatile};
 use crate::params::*;
 
 struct Writer;
@@ -8,7 +8,10 @@ const UART_TX: *mut u8 = UART_BASE as *mut u8;
 const UART_LSR: *mut u8 = (UART_BASE+0x05) as *mut u8;
 const UART_LSR_EMPTY_MASK: u8 = 0x40;
 
+const UART_READY: *mut u8 = (UART_BASE + 1) as *mut u8;
+
 pub fn putc(c: u8) {
+    while unsafe{0x01 & !read_volatile(UART_READY)} != 0 {}
     //while unsafe{*UART_LSR & UART_LSR_EMPTY_MASK} == 0 {}
     unsafe {write_volatile(UART_TX, u8::from(c));}
 }

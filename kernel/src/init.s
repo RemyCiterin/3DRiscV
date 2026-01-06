@@ -28,6 +28,6 @@ _start:
 
 .section .bss
 .align 4
-  .skip 0x2000
+  .skip 0x4000
 stack_top:
-  .skip 0x100
+  .skip 0x4000

@@ -21,6 +21,7 @@ impl PageAlloc {
 
     pub fn init(&mut self, first: Page, last: Page) {
         println!("palloc: first {:#x} last {:#x}", usize::from(first), usize::from(last));
+
         for ppn in usize::from(first)..usize::from(last) {
             self.free(Page::from(ppn));
         }

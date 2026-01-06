@@ -50,7 +50,7 @@ test_rust:
 		kernel/src/user.bin
 	riscv32-none-elf-objcopy --strip-debug -O ihex \
 		kernel/target/riscv32ima-unknown-none-elf/release/kernel Mem.ihex
-	./ihex-to-img.py Mem.ihex hex 2147483648 4 1000000 1 > Mem.hex
+	./ihex-to-img.py Mem.ihex hex 2147483648 4 10000000 1 > Mem.hex
 	riscv32-none-elf-objdump kernel/target/riscv32ima-unknown-none-elf/release/kernel -S > kernel/kernel.asm
 	riscv32-none-elf-objdump \
 		user/target/riscv32ima-unknown-none-elf/release/user \

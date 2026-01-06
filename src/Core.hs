@@ -383,11 +383,6 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
           metaQ.enq
             (slice @1 @0 req.addr, width, req.isUnsigned)
 
-          -- Atomic Memory Operation
-          when req.amo.valid do
-            lookup (tag #Atomic req.amo.val)
-            tagQ.enq cached_amo_tag
-
           let isWord = width === 0b10
           let isHalf = width === 0b01
           let isByte = width === 0b00
@@ -423,6 +418,9 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
             when (req.load .&&. inv req.unique) do
               lookup (item #Load)
               tagQ.enq cached_load_tag
+            when req.amo.valid do
+              lookup (tag #Atomic req.amo.val)
+              tagQ.enq cached_amo_tag
             when (req.load .&&. req.unique) do
               lookup (item #LoadR)
               tagQ.enq cached_loadr_tag }
@@ -448,7 +446,7 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
                   , tagQ.first === cached_amo_tag --> cache.atomicResponse.peek
                   , tagQ.first === cached_loadr_tag --> cache.loadResponse.peek
                   , tagQ.first === cached_load_tag --> cache.loadResponse.peek
-                  , tagQ.first === cached_storec_tag --> zeroExtend cache.scResponse.peek
+                  , tagQ.first === cached_storec_tag --> zeroExtend (inv cache.scResponse.peek)
                   , tagQ.first === cached_store_tag --> dontCare
                   ] .>>. (offset # (0 :: Bit 3)) in
 
