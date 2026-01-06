@@ -738,7 +738,7 @@ makeCore
 
       when rdy do
         window.deq
-        when (inv instr.isMemAccess .||. req.epoch =!= epoch.read 0) do
+        when (inv instr.isMemAccess .||. req.epoch =!= epoch.read 0 .||. inv mmuOut.success) do
           registers.setReady rd
 
         if instr.isMemAccess then do
