@@ -602,7 +602,7 @@ makeCore
 
   redirectQ :: Queue Redirection <- withName "fetch" makeQueue
 
-  window :: Queue DecodeOutput <- withName "pipeline" $ makePipelineQueue 1
+  window :: Queue DecodeOutput <- withName "pipeline" $ makeQueue
 
   inactivityCounter :: Ehr (Bit 16) <- makeEhr 2 0
 
@@ -725,9 +725,8 @@ makeCore
         --    (formatHex 8 decode.peek.pc) " instr: " (fshow instr)
 
     let canRedirect = redirectQ.notFull .&&. exceptionQ.notFull .&&. interruptQ.notFull
-    let canWriteBack = inv writeFromLSU.val
 
-    when (window.canDeq .&&. canRedirect .&&. lsuIn.notFull .&&. canWriteBack) do
+    when (window.canDeq .&&. canRedirect .&&. lsuIn.notFull .&&. inv writeFromLSU.val) do
       let req :: DecodeOutput = window.first
       let instr :: Instr = req.instr
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
@@ -739,7 +738,7 @@ makeCore
 
       when rdy do
         window.deq
-        when (inv instr.isMemAccess) do
+        when (inv instr.isMemAccess .||. req.epoch =!= epoch.read 0) do
           registers.setReady rd
 
         if instr.isMemAccess then do
