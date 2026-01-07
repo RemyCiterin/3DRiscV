@@ -720,19 +720,25 @@ makeCore
 
     let canRedirect = redirectQ.notFull .&&. exceptionQ.notFull .&&. interruptQ.notFull
 
-    when (window.canDeq .&&. canRedirect .&&. lsuIn.canPut .&&. inv writeFromLSU.val) do
+    when (window.canDeq .&&. canRedirect .&&. lsuIn.canPut) do
       let req :: DecodeOutput = window.first
       let instr :: Instr = req.instr
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
+
+      let writeBackLater =
+            andList
+              [ instr.isMemAccess
+              , req.epoch === epoch.read 0
+              , inv mmuOut.peek.exception ]
 
       let rdy =
             instr.isMemAccess ?
               ( mmuOut.canPeek
               , instr.isSystem ? (systemQ.canDeq, alu.canPeek))
 
-      when rdy do
+      when (rdy .&&. inv (writeFromLSU.val .&&. inv writeBackLater)) do
         window.deq
-        when (inv instr.isMemAccess .||. req.epoch =!= epoch.read 0 .||. mmuOut.peek.exception) do
+        when (inv writeBackLater) do
           registers.setReady rd
 
         if instr.isMemAccess then do
