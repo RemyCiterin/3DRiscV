@@ -75,7 +75,7 @@ run_user:
   lw a0, 9 * 4(a0)
   sret
 
-.align 4
+.align 16
 user_trap:
   csrrw a0, sscratch, a0
 

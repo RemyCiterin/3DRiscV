@@ -273,10 +273,10 @@ fn map(
         );
     }
 
-    println!("map [{:x}, {:x}] to [{:x}, {:x}]",
-        usize::from(phys), usize::from(phys)+size-1,
-        usize::from(virt), usize::from(virt)+size-1,
-    );
+    //println!("map [{:x}, {:x}] to [{:x}, {:x}]",
+    //    usize::from(phys), usize::from(phys)+size-1,
+    //    usize::from(virt), usize::from(virt)+size-1,
+    //);
 
     let last = virt + size - PAGE_SIZE;
 

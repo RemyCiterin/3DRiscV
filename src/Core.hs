@@ -28,16 +28,16 @@ import TileLink.Broadcast
 
 displayAscii :: Bit 8 -> Action ()
 displayAscii term =
-  pure ()
-  --display_ $ go term $ 10 : 13 : [32..126]
-  --where
-  --  ascii :: [String] = [[toEnum i] | i <- [0..255]]
+  --pure ()
+  display_ $ go term $ 10 : 13 : [32..126]
+  where
+    ascii :: [String] = [[toEnum i] | i <- [0..255]]
 
-  --  go :: Bit 8 -> [Integer] -> Format
-  --  go x [] = formatCond false (fshow "")
-  --  go x (i : is)  =
-  --    formatCond (fromInteger i === x) (fshow (ascii!i)) <>
-  --    go x is
+    go :: Bit 8 -> [Integer] -> Format
+    go x [] = formatCond false (fshow "")
+    go x (i : is)  =
+      formatCond (fromInteger i === x) (fshow (ascii!i)) <>
+      go x is
 
 debug :: Bool
 debug = False
@@ -97,7 +97,7 @@ makeICache ::
 makeICache vminfo cacheSlave mmuSlave cacheSource mmuSource = do
   cache <-
     withName "icache" $
-      makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
+      makeBCacheCoreWith @2 @20 @6 @4 @() @TLConfig cacheSource cacheSlave (\ _ _ -> dontCare)
 
   (Server{reqs= mmuIn, resps= mmuOut}, tlbFlush) <- withName "ITLB" $
     makeMmuFSM (\_ -> true) (\ _ -> true) isCached isCached mmuSource mmuSlave

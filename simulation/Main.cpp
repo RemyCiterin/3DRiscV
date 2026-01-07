@@ -99,8 +99,8 @@ void receive_tx(bool pos) {
     int value = pos ? 1 : 0;
     output = output | (value << (8 - tx_bit_counter));
 
-    if (tx_bit_counter == 1)
-      printf("%c", output);
+    //if (tx_bit_counter == 1)
+    //  printf("%c", output);
 
     tx_bit_counter -= 1;
     tx_counter = (FREQ / BAUD) + 5;

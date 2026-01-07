@@ -246,7 +246,7 @@ makeBCacheCoreWith source slave execAtomic = do
 
   always do
     when (state.read 0 === st_release .&&. releaseM.ack.canPeek .&&. acquireM.canAcquire) do
-      acquireM.acquireBlock (tag #NtoT ()) (way.val # index.val # 0) (baseAddr key.val)
+      acquireM.acquireBlock n2t (way.val # index.val # 0) (baseAddr key.val)
       numRelease <== numRelease.val + 1
       state.write 0 st_acquire
       releaseM.ack.consume

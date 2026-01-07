@@ -103,7 +103,7 @@ extern "C" fn  supervisor_main() {
 
     scheduler.push(alloc::sync::Arc::new(task));
 
-    print!("{} pages allocated and {} are still busy\n", palloc::count(), palloc::size());
+    println!("{} pages allocated and {} are still busy", palloc::count(), palloc::size());
 
     loop {
         if let Some(task) = scheduler.choose_task() {
