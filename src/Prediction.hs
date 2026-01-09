@@ -182,7 +182,9 @@ data BranchPredictor histSize rasSize epochSize =
     , request :: (Bit 32, Bit epochSize)
     , predict :: Action (Bit 32, BPredState histSize rasSize)
     , trainHit :: BPredState histSize rasSize -> Bit 32 -> Bit 32 -> Option Instr -> Action ()
-    , trainMis :: BPredState histSize rasSize -> Bit 32 -> Bit 32 -> Option Instr -> Action ()}
+    , trainMis :: BPredState histSize rasSize -> Bit 32 -> Bit 32 -> Option Instr -> Action ()
+    , num_hit :: Bit 32
+    , num_mis :: Bit 32 }
 
 makeBranchPredictor ::
   forall histSize rasSize epochSize.
@@ -199,8 +201,13 @@ makeBranchPredictor logBtbSize = do
   let update :: Bit 1 -> Bit histSize -> Bit histSize = \ taken hist ->
         (hist .<<. (1 :: Bit 1)) .|. zeroExtendCast taken
 
+  hit_counter :: Reg (Bit 32) <- makeReg 0
+  mis_counter :: Reg (Bit 32) <- makeReg 0
+
   return BranchPredictor
-    { start= \ pc epoch -> do
+    { num_hit= hit_counter.val
+    , num_mis= mis_counter.val
+    , start= \ pc epoch -> do
         currentEpoch <== epoch
         currentPc <== pc
 
@@ -235,12 +242,16 @@ makeBranchPredictor logBtbSize = do
         when (kind === enum Branch) do
           ght.train pc state.hist taken state.state
 
+        hit_counter <== hit_counter.val + 1
+
     , trainMis= \ state pc next instr -> do
         let kind = getJumpKindOption instr
         let taken = next =!= pc + 4
 
         when (kind === enum Branch) do
           ght.train pc state.hist taken state.state
+
+        mis_counter <== mis_counter.val + 1
 
         let newHist = update taken state.hist
 

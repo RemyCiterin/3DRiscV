@@ -45,14 +45,17 @@ pub fn fork() -> bool {
     return name == 0;
 }
 
-pub fn spawn() -> bool {
+pub fn spawn<F: FnOnce(usize) + Send + 'static>(f: F) {
     let mut name = 0;
     let mut code = 6;
 
-    unsafe {asm!("ecall", inout("a0") code, inout("a1") name); }
-    assert!(code == 0);
-
-    return name == 0;
+    unsafe {
+        asm!("ecall", inout("a0") code, inout("a1") name);
+        assert!(code == 0);
+        if name != 0 {
+            f(name)
+        }
+    }
 }
 
 pub fn pipe() -> (Source, Sink) {
@@ -131,6 +134,10 @@ unsafe extern "C" fn user_main() -> () {
     if fork() {
         server(source1, |x| {
             println!("receive: {:?}", core::str::from_utf8(x));
+        });
+
+        spawn(|_| {
+            println!("FOO\n");
         });
     } else {
         let (source2, sink2) = pipe();

@@ -158,6 +158,15 @@ makeFetch vminfo fetchSource mmuSource redirection = do
   bpred :: BranchPredictor HistSize RasSize EpochWidth <-
     withName "bpred" $ makeBranchPredictor 10
 
+  -- cycle :: Reg (Bit 32) <- makeReg 0
+
+  -- always do
+  --   cycle <== cycle.val + 1
+  --   when (slice @19 @0 cycle.val === ones) do
+  --     display_ "cycle: " cycle.val
+  --     display_ " hit: " bpred.num_hit
+  --     display " mis: " bpred.num_mis
+
   let xbarconfig =
         XBarConfig
           { bce= True
@@ -183,11 +192,11 @@ makeFetch vminfo fetchSource mmuSource redirection = do
   queue :: Queue () <- makePipelineQueue 1
 
   fetchQ :: Queue (Option (Bit 32, Bit 32, BPredState HistSize RasSize, Epoch)) <-
-    makeSizedQueueCore 4
+    makeSizedQueueCore 2
 
   outputQ :: Queue FetchOutput <- makeQueue
 
-  responseQ :: Queue MmuResponse <- makeSizedQueueCore 8
+  responseQ :: Queue MmuResponse <- makeSizedQueueCore 4
 
   always do
     when (cache.resps.canPeek .&&. responseQ.notFull) do
@@ -636,7 +645,7 @@ makeCore
   exceptionQ :: Queue (Bit 32, CauseException, Bit 32, Epoch) <- makeQueue
   interruptQ :: Queue (Bit 32, CauseInterrupt, Epoch) <- makeQueue
 
-  writeFromLSU :: Wire (Bit 1) <- makeWire false
+  writeBackFromLSU :: Wire (Bit 1) <- makeWire false
 
   always do
     when (exceptionQ.canDeq .&&. redirectQ.notFull) do
@@ -676,7 +685,7 @@ makeCore
           display "\t\t" hartId "@" (fshowRegId rd) " := 0x" (formatHex 8 val)
         registers.write rd val
       registers.setReady rd
-      writeFromLSU <== true
+      writeBackFromLSU <== true
       lsuOut.consume
 
     when (decode.canPeek .&&. window.notFull) do
@@ -725,6 +734,8 @@ makeCore
       let instr :: Instr = req.instr
       let rd  :: RegId = instr.rd.valid ? (instr.rd.val, 0)
 
+      -- The instruction will be write back-later (after going to the LSU) so we can complete this
+      -- instruction, even if the LSU did a write-back at the same cycle
       let writeBackLater =
             andList
               [ instr.isMemAccess
@@ -736,7 +747,7 @@ makeCore
               ( mmuOut.canPeek
               , instr.isSystem ? (systemQ.canDeq, alu.canPeek))
 
-      when (rdy .&&. inv (writeFromLSU.val .&&. inv writeBackLater)) do
+      when (rdy .&&. inv (writeBackFromLSU.val .&&. inv writeBackLater)) do
         window.deq
         when (inv writeBackLater) do
           registers.setReady rd

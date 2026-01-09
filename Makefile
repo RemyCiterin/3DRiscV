@@ -74,7 +74,7 @@ test_gpu:
 
 .PHONY: test_coremark
 test_coremark:
-	make -C coremark PORT_DIR=barebones compile ITERATIONS=1
+	make -C coremark PORT_DIR=barebones compile ITERATIONS=10
 	riscv32-none-elf-objcopy --strip-debug -O ihex \
 		coremark/coremark.bare.riscv Mem.ihex
 	./ihex-to-img.py Mem.ihex hex 2147483648 4 10000000 1 > Mem.hex
