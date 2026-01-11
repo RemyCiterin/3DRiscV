@@ -24,6 +24,7 @@ import MMU
 
 import TileLink
 import TileLink.CoherentBCache
+import TileLink.CoherentBCache2
 import TileLink.Broadcast
 
 displayAscii :: Bit 8 -> Action ()
@@ -93,7 +94,7 @@ makeICache ::
   -> TLSlave TLConfig -- mmu slave
   -> Bit (SourceWidth TLConfig) -- cache source
   -> Bit (SourceWidth TLConfig) -- mmu source
-  -> Module (Server (Bit 32) MmuResponse, Action ())
+  -> Module (Server (Bit 32) MmuResponse, Action (), BCacheStats)
 makeICache vminfo cacheSlave mmuSlave cacheSource mmuSource = do
   cache <-
     withName "icache" $
@@ -146,7 +147,7 @@ makeICache vminfo cacheSlave mmuSlave cacheSource mmuSource = do
                 cache.loadResponse.consume
               tagQ.deq }
 
-  return (Server{reqs, resps}, tlbFlush)
+  return (Server{reqs, resps}, tlbFlush, cache.stats)
 
 makeFetch ::
   VMInfo ->
@@ -157,15 +158,6 @@ makeFetch ::
 makeFetch vminfo fetchSource mmuSource redirection = do
   bpred :: BranchPredictor HistSize RasSize EpochWidth <-
     withName "bpred" $ makeBranchPredictor 10
-
-  -- cycle :: Reg (Bit 32) <- makeReg 0
-
-  -- always do
-  --   cycle <== cycle.val + 1
-  --   when (slice @19 @0 cycle.val === ones) do
-  --     display_ "cycle: " cycle.val
-  --     display_ " hit: " bpred.num_hit
-  --     display " mis: " bpred.num_mis
 
   let xbarconfig =
         XBarConfig
@@ -184,7 +176,18 @@ makeFetch vminfo fetchSource mmuSource redirection = do
 
   ([master], [cacheSlave,mmuSlave]) <- makeTLXBar @1 @2 @TLConfig xbarconfig
 
-  (cache, flush) <- makeICache vminfo cacheSlave mmuSlave fetchSource mmuSource
+  (cache, flush, stats) <- makeICache vminfo cacheSlave mmuSlave fetchSource mmuSource
+
+  --cycle :: Reg (Bit 32) <- makeReg 0
+  --always do
+  --  cycle <== cycle.val + 1
+  --  when (slice @19 @0 cycle.val === ones) do
+  --    display_ "cycle: " cycle.val
+  --    display_ " hit: " bpred.num_hit
+  --    display " mis: " bpred.num_mis
+  --    display_ "acquire: " stats.numAcquire
+  --    display_ " release: " stats.numRelease
+  --    display " request: " stats.numReq
 
   pc :: Ehr (Bit 32) <- makeEhr 2 0x80000000
   epoch :: Ehr Epoch <- makeEhr 2 0
@@ -345,7 +348,7 @@ makeDMem ::
   Bit (SourceWidth TLConfig) ->
   TLSlave TLConfig ->
   TLSlave TLConfig ->
-  Module (Sink DMemRequest, Source (Bit 32))
+  Module (Sink DMemRequest, Source (Bit 32), BCacheStats2)
 makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
   key :: Reg (Bit 32) <- makeReg dontCare
 
@@ -356,7 +359,7 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
 
   cache <-
     withName "dcache" $
-      makeBCacheCoreWith @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
+      makeBCacheCore2With @2 @20 @6 @4 @_ @TLConfig cacheSource cacheSlave execAMO
 
   always do
     when (cache.canMatch) do
@@ -438,12 +441,13 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
           tagQ.canDeq .&&. metaQ.canDeq .&&.
             (
               (tagQ.first === uncached_memop_tag .&&. queueD.canDeq) .||.
-              (tagQ.first === cached_amo_tag .&&. cache.atomicResponse.canPeek) .||.
-              (tagQ.first === cached_loadr_tag .&&. cache.loadResponse.canPeek) .||.
-              (tagQ.first === cached_load_tag .&&. cache.loadResponse.canPeek) .||.
-              (tagQ.first === cached_storec_tag .&&. cache.scResponse.canPeek) .||.
-              tagQ.first === cached_store_tag
+              (tagQ.first === cached_amo_tag .&&. cache.response.canPeek) .||.
+              (tagQ.first === cached_loadr_tag .&&. cache.response.canPeek) .||.
+              (tagQ.first === cached_load_tag .&&. cache.response.canPeek) .||.
+              (tagQ.first === cached_storec_tag .&&. cache.response.canPeek) .||.
+              (tagQ.first === cached_store_tag .&&. cache.response.canPeek)
             )
+
       , peek=
           let (offset, width, isUnsigned) = metaQ.first in
           let isWord = width === 0b10 in
@@ -452,10 +456,10 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
           let lane =
                 select
                   [ tagQ.first === uncached_memop_tag --> queueD.first.lane
-                  , tagQ.first === cached_amo_tag --> cache.atomicResponse.peek
-                  , tagQ.first === cached_loadr_tag --> cache.loadResponse.peek
-                  , tagQ.first === cached_load_tag --> cache.loadResponse.peek
-                  , tagQ.first === cached_storec_tag --> zeroExtend (inv cache.scResponse.peek)
+                  , tagQ.first === cached_amo_tag --> cache.response.peek
+                  , tagQ.first === cached_loadr_tag --> cache.response.peek
+                  , tagQ.first === cached_load_tag --> cache.response.peek
+                  , tagQ.first === cached_storec_tag --> cache.response.peek
                   , tagQ.first === cached_store_tag --> dontCare
                   ] .>>. (offset # (0 :: Bit 3)) in
 
@@ -465,17 +469,20 @@ makeDMem cacheSource mmioSource cacheSlave mmioSlave = do
             , isByte .&&. inv isUnsigned --> signExtend (slice @7 @0 lane)
             , isHalf .&&. inv isUnsigned --> signExtend (slice @15 @0 lane)
             , isWord --> lane ]
+
       , consume= do
-          when (tagQ.first === cached_amo_tag) cache.atomicResponse.consume
-          when (tagQ.first === cached_loadr_tag) cache.loadResponse.consume
-          when (tagQ.first === cached_load_tag) cache.loadResponse.consume
-          when (tagQ.first === cached_storec_tag) cache.scResponse.consume
+          when (tagQ.first === cached_amo_tag) cache.response.consume
+          when (tagQ.first === cached_loadr_tag) cache.response.consume
+          when (tagQ.first === cached_load_tag) cache.response.consume
+          when (tagQ.first === cached_storec_tag) cache.response.consume
+          when (tagQ.first === cached_store_tag) cache.response.consume
           when (tagQ.first === uncached_memop_tag) do
             inflight_uncached_memop <== false
             queueD.deq
           metaQ.deq
           tagQ.deq
-      })
+      }
+    , cache.stats)
 
 makeLoadStoreUnit ::
   VMInfo ->
@@ -502,12 +509,9 @@ makeLoadStoreUnit vminfo cacheSource mmuSource mmioSource = do
 
   ([master], [cacheSlave,mmioSlave,mmuSlave,_]) <- makeTLXBar @1 @4 @TLConfig xbarconfig
 
+  (memIn, memOut, stats) <- withName "dmem" $ makeDMem cacheSource mmioSource cacheSlave mmioSlave
+
   outputQ :: Queue (RegId, Bit 32) <- makeQueue
-
-  cycle :: Reg (Bit 32) <- makeReg 0
-  always (cycle <== cycle.val + 1)
-
-  (memIn, memOut) <- withName "dmem" $ makeDMem cacheSource mmioSource cacheSlave mmioSlave
 
   regQ :: Queue (Bit 1, RegId) <- makePipelineQueue 2
 
@@ -536,16 +540,25 @@ makeLoadStoreUnit vminfo cacheSource mmuSource mmioSource = do
               regQ.enq (isFence, instr.rd.valid ? (instr.rd.val, 0))
               when (inv isFence) $ memIn.put request }
 
-  always do
-    when (regQ.canDeq .&&. outputQ.notFull) do
-      let (isFence, rd) = regQ.first
+  --always do
+  --  when (regQ.canDeq .&&. outputQ.notFull) do
+  --    let (isFence, rd) = regQ.first
 
-      when (isFence .||. memOut.canPeek) do
-        when (inv isFence) memOut.consume
-        outputQ.enq (rd, memOut.peek)
-        regQ.deq
+  --    when (isFence .||. memOut.canPeek) do
+  --      when (inv isFence) memOut.consume
+  --      outputQ.enq (rd, memOut.peek)
+  --      regQ.deq
 
-  return (mmuSlave, master, Server{reqs= sink, resps= toSource outputQ})
+  let resps =
+        let (isFence, rd) = regQ.first in
+        Source
+          { canPeek= regQ.canDeq .&&. (isFence .||. memOut.canPeek)
+          , peek= (rd, memOut.peek)
+          , consume= do
+            when (inv isFence) memOut.consume
+            regQ.deq }
+
+  return (mmuSlave, master, Server{reqs= sink, resps}) -- = toSource outputQ})
 
 data RegisterFile =
   RegisterFile

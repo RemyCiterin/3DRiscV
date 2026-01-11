@@ -16,6 +16,7 @@ executable blarney-test
     Blarney.Ehr,
     Blarney.ADT,
     TileLink.UncoherentBCache,
+    TileLink.CoherentBCache2,
     TileLink.CoherentBCache,
     TileLink.AcquireRelease,
     TileLink.Interconnect,
